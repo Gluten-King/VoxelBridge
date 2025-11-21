@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+/build/
+/out/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Run / dev outputs
+/run/
+/run-data/
+/logs/
+/export/
+
+# OS junk
+*.DS_Store
+Thumbs.db
