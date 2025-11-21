@@ -3,7 +3,7 @@
 Client-side NeoForge mod that exports Minecraft blocks, fluids, and block entities to glTF 2.0 with biome tinting and packed/individual texture workflows.
 
 ## Features
-- Select a region in-world and export it asynchronously to glTF.
+- Select a region in-world and export it to glTF.
 - Supports blocks, fluids, and block entities with biome tinting.
 - Choose individual textures or packed atlas (UDIM-style up to 8192).
 - Centered or world-space coordinates, configurable atlas size, adjustable export threads.
@@ -11,13 +11,13 @@ Client-side NeoForge mod that exports Minecraft blocks, fluids, and block entiti
 
 ## Requirements
 - Minecraft 1.21.1
-- NeoForge 21.1.x (mods.toml: `[21.1,)`)
+- NeoForge 21.1.x 
 - Java 21
 
 ## Install
 1) Download the built jar (or build it yourself, see below).
 2) Drop it into `mods/` of your NeoForge 1.21.1 instance.
-3) Launch the game; this is a client-side tool but is safe to load on servers if desired.
+3) Launch the game; this is a client-side tool only
 
 ## Usage
 ### Default hotkeys
