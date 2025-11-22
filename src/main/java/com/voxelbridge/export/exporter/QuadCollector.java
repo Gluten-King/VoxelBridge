@@ -23,6 +23,11 @@ final class QuadCollector implements VertexConsumer {
     private final double offsetX;
     private final double offsetY;
     private final double offsetZ;
+    private final double regionMinX;
+    private final double regionMaxX;
+    private final double regionMinZ;
+    private final double regionMaxZ;
+    private final boolean hasRegionBounds;
 
     // Coordinate system detection (fluids sometimes emit local coords)
     private final float[] rawPositions = new float[12];
@@ -42,7 +47,8 @@ final class QuadCollector implements VertexConsumer {
     private int vertexIndex = 0;
 
     QuadCollector(SceneSink sink, ExportContext ctx, BlockPos pos, TextureAtlasSprite[] sprites,
-                  double offsetX, double offsetY, double offsetZ) {
+                  double offsetX, double offsetY, double offsetZ,
+                  BlockPos regionMin, BlockPos regionMax) {
         this.sink = sink;
         this.ctx = ctx;
         this.pos = pos;
@@ -50,6 +56,16 @@ final class QuadCollector implements VertexConsumer {
         this.offsetX = offsetX;
         this.offsetY = offsetY;
         this.offsetZ = offsetZ;
+        if (regionMin != null && regionMax != null) {
+            this.regionMinX = regionMin.getX() + offsetX;
+            this.regionMaxX = regionMax.getX() + offsetX + 1; // max edge is inclusive of block, add 1
+            this.regionMinZ = regionMin.getZ() + offsetZ;
+            this.regionMaxZ = regionMax.getZ() + offsetZ + 1;
+            this.hasRegionBounds = true;
+        } else {
+            this.regionMinX = this.regionMaxX = this.regionMinZ = this.regionMaxZ = 0;
+            this.hasRegionBounds = false;
+        }
     }
 
     @Override
@@ -144,6 +160,12 @@ final class QuadCollector implements VertexConsumer {
             return;
         }
 
+        // Drop fluid side faces that sit exactly on the region boundary to avoid "water walls".
+        if (hasRegionBounds && isBoundarySideQuad()) {
+            resetQuadState();
+            return;
+        }
+
         String spriteKey = SpriteKeyResolver.resolve(sprite);
 
         // Normalize UVs to sprite coordinates
@@ -202,6 +224,38 @@ final class QuadCollector implements VertexConsumer {
         useChunkOffset = false;
         quadColorCaptured = false;
         quadArgb = 0xFFFFFFFF;
+    }
+
+    private void resetQuadState() {
+        rawCount = 0;
+        decided = false;
+        needsOffset = false;
+        useChunkOffset = false;
+        quadColorCaptured = false;
+        quadArgb = 0xFFFFFFFF;
+    }
+
+    private boolean isBoundarySideQuad() {
+        // Compute bounds of the emitted quad in world space (with offsets already applied)
+        double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
+        double minZ = Double.POSITIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+        for (int i = 0; i < 4; i++) {
+            double x = positions[i * 3];
+            double z = positions[i * 3 + 2];
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        }
+        double eps = 1e-3;
+        boolean onMinX = Math.abs(minX - regionMinX) < eps && Math.abs(maxX - regionMinX) < eps;
+        boolean onMaxX = Math.abs(minX - regionMaxX) < eps && Math.abs(maxX - regionMaxX) < eps;
+        boolean onMinZ = Math.abs(minZ - regionMinZ) < eps && Math.abs(maxZ - regionMinZ) < eps;
+        boolean onMaxZ = Math.abs(minZ - regionMaxZ) < eps && Math.abs(maxZ - regionMaxZ) < eps;
+
+        // Only drop vertical side faces; allow top surfaces to remain.
+        // The fluid renderer emits vertical faces aligned to X or Z when flowing against "air".
+        return onMinX || onMaxX || onMinZ || onMaxZ;
     }
 
     private float[] computeFaceNormal(float[] pos) {

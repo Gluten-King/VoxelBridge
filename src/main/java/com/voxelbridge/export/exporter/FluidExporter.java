@@ -39,7 +39,9 @@ public final class FluidExporter {
                               FluidState fluidState,
                               double offsetX,
                               double offsetY,
-                              double offsetZ) {
+                              double offsetZ,
+                              BlockPos regionMin,
+                              BlockPos regionMax) {
         FluidState fs = fluidState != null ? fluidState : level.getFluidState(pos);
         if (fs == null || fs.isEmpty()) {
             return;
@@ -53,7 +55,11 @@ public final class FluidExporter {
         BlockRenderDispatcher dispatcher = ctx.getMc().getBlockRenderer();
 
         // Create a vertex consumer that forwards quads to the scene sink with coordinate offset
-        QuadCollector collector = new QuadCollector(sceneSink, ctx, pos, sprites, offsetX, offsetY, offsetZ);
+        QuadCollector collector = new QuadCollector(
+            sceneSink, ctx, pos, sprites,
+            offsetX, offsetY, offsetZ,
+            regionMin, regionMax
+        );
 
         // Try to invoke renderLiquid via reflection (API varies between versions)
         try {

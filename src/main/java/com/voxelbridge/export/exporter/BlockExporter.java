@@ -13,6 +13,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
+import net.minecraft.client.multiplayer.ClientChunkCache;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.RenderShape;
@@ -43,6 +45,7 @@ public final class BlockExporter {
     private final ExportContext ctx;
     private final SceneSink sceneSink;
     private final Level level;
+    private final ClientChunkCache chunkCache; // null when not client-level
     private BlockPos regionMin;
     private BlockPos regionMax;
     private double offsetX = 0;
@@ -54,6 +57,8 @@ public final class BlockExporter {
     private final java.util.Map<Long, OverlayQuadData> overlayCache = new java.util.HashMap<>();
     // Backup cache: maps BlockPos to overlay data (for cases where position hash fails)
     private final java.util.Map<BlockPos, OverlayQuadData> overlayBlockPosCache = new java.util.HashMap<>();
+    // Flag to signal missing neighbor chunk during sampling (for retry).
+    private volatile boolean missingNeighborDetected = false;
 
     private static class OverlayQuadData {
         final float[] uv;           // overlay texture UV
@@ -72,6 +77,7 @@ public final class BlockExporter {
         this.ctx = ctx;
         this.sceneSink = sceneSink;
         this.level = level;
+        this.chunkCache = (level instanceof ClientLevel cl) ? cl.getChunkSource() : null;
     }
 
     /**
@@ -100,6 +106,11 @@ public final class BlockExporter {
      * Samples a single block and sends its geometry to the scene sink.
      */
     public void sampleBlock(BlockState state, BlockPos pos) {
+        if (!isNeighborChunksLoadedForBlock(pos)) {
+            missingNeighborDetected = true;
+            return;
+        }
+
         // Overlay pairing cache is only valid for the current block, so clear it before sampling a new one.
         overlayCache.clear();
 
@@ -108,7 +119,8 @@ public final class BlockExporter {
         // Handle fluids
         FluidState fluidState = state.getFluidState();
         if (fluidState != null && !fluidState.isEmpty()) {
-            FluidExporter.sample(ctx, sceneSink, level, state, pos, fluidState, offsetX, offsetY, offsetZ);
+            FluidExporter.sample(ctx, sceneSink, level, state, pos, fluidState, offsetX, offsetY, offsetZ,
+                regionMin, regionMax);
         }
 
         // Handle BlockEntities first
@@ -513,8 +525,7 @@ public final class BlockExporter {
 
         for (Direction dir : Direction.values()) {
             BlockPos neighbor = pos.relative(dir);
-            BlockState neighborState = level.getBlockState(neighbor);
-            if (!neighborState.isSolidRender(level, neighbor)) {
+            if (!isNeighborSolid(neighbor)) {
                 return false;
             }
         }
@@ -528,8 +539,7 @@ public final class BlockExporter {
         }
 
         BlockPos neighbor = pos.relative(face);
-        BlockState neighborState = level.getBlockState(neighbor);
-        return neighborState.isSolidRender(level, neighbor);
+        return isNeighborSolid(neighbor);
     }
 
     /**
@@ -542,6 +552,66 @@ public final class BlockExporter {
         return pos.getX() == regionMin.getX() || pos.getX() == regionMax.getX()
             || pos.getY() == regionMin.getY() || pos.getY() == regionMax.getY()
             || pos.getZ() == regionMin.getZ() || pos.getZ() == regionMax.getZ();
+    }
+
+    /**
+     * Treat unknown/unloaded neighbors as solid to avoid emitting boundary faces
+     * against chunks that are not yet visible. This reduces green walls/boundary quads
+     * when adjacent chunks are still loading.
+     */
+    private boolean isNeighborSolid(BlockPos neighbor) {
+        // Prefer chunk cache to avoid forcing loads.
+        if (chunkCache != null) {
+            int cx = neighbor.getX() >> 4;
+            int cz = neighbor.getZ() >> 4;
+            var chunk = chunkCache.getChunk(cx, cz, false);
+            if (chunk == null || chunk.isEmpty()) {
+                return true; // Unknown -> treat as solid (block face culled)
+            }
+            BlockState state = chunk.getBlockState(neighbor);
+            return state.isSolidRender(level, neighbor);
+        }
+
+        // Fallback: use level (may force load)
+        BlockState neighborState = level.getBlockState(neighbor);
+        return neighborState.isSolidRender(level, neighbor);
+    }
+
+    /**
+     * Checks neighbor chunks when this block sits on a chunk edge. If the required neighboring
+     * chunk is missing/empty, signal retry to avoid exporting faces against an "unknown" neighbor.
+     */
+    private boolean isNeighborChunksLoadedForBlock(BlockPos pos) {
+        if (chunkCache == null) {
+            return true; // Non-client levels: cannot check, assume ok
+        }
+
+        int localX = pos.getX() & 15;
+        int localZ = pos.getZ() & 15;
+        int cx = pos.getX() >> 4;
+        int cz = pos.getZ() >> 4;
+
+        if (localX == 0) {
+            var chunk = chunkCache.getChunk(cx - 1, cz, false);
+            if (chunk == null || chunk.isEmpty()) return false;
+        } else if (localX == 15) {
+            var chunk = chunkCache.getChunk(cx + 1, cz, false);
+            if (chunk == null || chunk.isEmpty()) return false;
+        }
+        if (localZ == 0) {
+            var chunk = chunkCache.getChunk(cx, cz - 1, false);
+            if (chunk == null || chunk.isEmpty()) return false;
+        } else if (localZ == 15) {
+            var chunk = chunkCache.getChunk(cx, cz + 1, false);
+            if (chunk == null || chunk.isEmpty()) return false;
+        }
+        return true;
+    }
+
+    public boolean hadMissingNeighborAndReset() {
+        boolean result = missingNeighborDetected;
+        missingNeighborDetected = false;
+        return result;
     }
 
     private BakedModel getModel(BlockState state) {

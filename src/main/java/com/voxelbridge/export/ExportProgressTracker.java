@@ -125,6 +125,25 @@ public final class ExportProgressTracker {
         retrying.incrementAndGet();
     }
 
+    /**
+     * Explicitly reset a chunk back to PENDING (used when it is outside the active/visible window).
+     */
+    public static void markPending(int cx, int cz) {
+        long key = ChunkPos.asLong(cx, cz);
+        ChunkState prev = chunkStates.getOrDefault(key, ChunkState.PENDING);
+        if (prev == ChunkState.PENDING) {
+            return;
+        }
+        chunkStates.put(key, ChunkState.PENDING);
+        if (prev == ChunkState.DONE) {
+            completed.decrementAndGet();
+        } else if (prev == ChunkState.FAILED) {
+            failed.decrementAndGet();
+        } else if (prev == ChunkState.RETRY) {
+            retrying.decrementAndGet();
+        }
+    }
+
     public static Set<ChunkPos> getPendingChunks() {
         return chunkStates.entrySet().stream()
             .filter(e -> e.getValue() == ChunkState.PENDING)

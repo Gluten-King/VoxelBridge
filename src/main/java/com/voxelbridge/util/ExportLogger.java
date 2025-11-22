@@ -14,6 +14,9 @@ import java.time.format.DateTimeFormatter;
  */
 public final class ExportLogger {
 
+    // Disabled for release builds to avoid generating large debug logs.
+    private static final boolean ENABLED = false;
+
     private static final DateTimeFormatter TIMESTAMP =
             DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS");
 
@@ -22,34 +25,37 @@ public final class ExportLogger {
     private ExportLogger() {}
 
     public static synchronized void initialize(Path outDir) throws IOException {
-        close();
-        Path logPath = outDir.resolve("voxelbridge-debug.log");
-        writer = Files.newBufferedWriter(logPath, StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-        log("Export log initialized");
+        writer = null;
+        if (ENABLED) {
+            close();
+            Path logPath = outDir.resolve("voxelbridge-debug.log");
+            writer = Files.newBufferedWriter(logPath, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            log("Export log initialized");
+        }
     }
 
     public static synchronized void log(String message) {
-        if (writer == null) {
-            return;
-        }
-        try {
-            writer.write(String.format("[%s] %s%n", TIMESTAMP.format(LocalDateTime.now()), message));
-            writer.flush();
-        } catch (IOException e) {
-            System.err.printf("[ExportLogger] Failed to write log: %s%n", e.getMessage());
+        if (ENABLED && writer != null) {
+            try {
+                writer.write(String.format("[%s] %s%n", TIMESTAMP.format(LocalDateTime.now()), message));
+                writer.flush();
+            } catch (IOException e) {
+                System.err.printf("[ExportLogger] Failed to write log: %s%n", e.getMessage());
+            }
         }
     }
 
     public static synchronized void close() {
-        if (writer == null) {
-            return;
-        }
-        try {
-            writer.flush();
-            writer.close();
-        } catch (IOException ignored) {
-        } finally {
+        if (ENABLED && writer != null) {
+            try {
+                writer.flush();
+                writer.close();
+            } catch (IOException ignored) {
+            } finally {
+                writer = null;
+            }
+        } else {
             writer = null;
         }
     }
