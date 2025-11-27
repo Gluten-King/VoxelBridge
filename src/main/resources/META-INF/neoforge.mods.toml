@@ -1,0 +1,32 @@
+
+modLoader = "javafml"                
+loaderVersion = "[4,)"               
+license = "MIT"                      
+
+
+
+
+
+[[mods]]
+modId = "voxelbridge"               
+version = "1.0.0-alpha.1"
+displayName = "VoxelBridge"        
+authors = "Gluten King"    
+logoFile = "assets/voxelbridge/logo.png"
+description = '''Exports Minecraft blocks, fluids, and block entities into glTF files.
+'''
+
+
+[[dependencies.voxelbridge]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.voxelbridge]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "BOTH"

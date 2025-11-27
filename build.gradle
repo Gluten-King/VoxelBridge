@@ -1,0 +1,178 @@
+import org.gradle.api.file.DuplicatesStrategy
+import org.gradle.api.tasks.bundling.Jar
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.116'
+    id 'idea'
+}
+
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = mod_version
+group = mod_group_id
+
+repositories {
+    // 【修改 1】添加 Sinytra Maven 仓库，用于下载 Forgified Fabric API
+    maven {
+        url "https://maven.su5ed.dev/releases"
+    }
+}
+
+base {
+    archivesName = mod_id
+}
+
+// Mojang ships Java 21 to end users in 1.21.1, so mods should target Java 21.
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        client {
+            client()
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        gameTestServer {
+            type = "gameTestServer"
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        data {
+            data()
+            programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
+        }
+
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+    shaded
+}
+
+dependencies {
+    // 【修改 2】添加 Forgified Fabric API 依赖
+    // 注意：需要在 gradle.properties 中定义 forgified_fabric_api_version
+    // 或者直接在这里写死版本号，例如 "0.102.0+1.11.8+1.21.1"
+    implementation "org.sinytra.forgified-fabric-api:forgified-fabric-api:${forgified_fabric_api_version}"
+
+    // jgltf dependencies
+    implementation 'de.javagl:jgltf-model:2.0.0'
+    implementation 'de.javagl:jgltf-impl-v2:2.0.0'
+
+    localRuntime 'de.javagl:jgltf-model:2.0.0'
+    localRuntime 'de.javagl:jgltf-impl-v2:2.0.0'
+
+    shaded 'de.javagl:jgltf-model:2.0.0'
+    shaded 'de.javagl:jgltf-impl-v2:2.0.0'
+}
+
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            url "file://${project.projectDir}/repo"
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
+
+tasks.named('jar', Jar).configure {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from {
+        configurations.shaded.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+def shadedFiles = configurations.shaded
+tasks.matching { it.name == 'remapJar' || it.name == 'remapSourcesJar' }.configureEach { task ->
+    task.from {
+        shadedFiles.collect { file ->
+            file.isDirectory() ? file : zipTree(file)
+        }
+    }
+}
+
+def extraDevRuntimeConfigs = [configurations.localRuntime, configurations.shaded]
+['Client', 'Server', 'Data', 'GameTestServer'].each { runName ->
+    tasks.named("write${runName}LegacyClasspath").configure {
+        doLast {
+            def legacyFile = outputs.files.singleFile
+            def existing = legacyFile.exists() ? legacyFile.readLines() : []
+            def extraPaths = extraDevRuntimeConfigs
+                    .collectMany { it.files }
+                    .collect { it.absolutePath }
+                    .toSet()
+                    .findAll { !existing.contains(it) }
+            def merged = []
+            existing.each { if (!merged.contains(it)) merged << it }
+            extraPaths.each { if (!merged.contains(it)) merged << it }
+            legacyFile.text = merged.join(System.lineSeparator())
+        }
+    }
+}
