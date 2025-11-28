@@ -55,8 +55,6 @@ public final class ExportLogger {
             } finally {
                 writer = null;
             }
-        } else {
-            writer = null;
         }
     }
 }

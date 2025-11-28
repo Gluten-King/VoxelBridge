@@ -119,9 +119,6 @@ public final class UV3DebugLogger {
                 writer = null;
                 quadCount = 0;
             }
-        } else {
-            writer = null;
-            quadCount = 0;
         }
     }
 
@@ -131,4 +128,3 @@ public final class UV3DebugLogger {
         return str.substring(0, maxLen - 3) + "...";
     }
 }
-

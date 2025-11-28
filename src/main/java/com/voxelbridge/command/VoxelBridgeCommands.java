@@ -237,6 +237,3 @@ public final class VoxelBridgeCommands {
         event.getDispatcher().register(Commands.literal("vb").redirect(rootNode));
     }
 }
-
-
-

@@ -59,8 +59,6 @@ public final class BlockEntityDebugLogger {
             } finally {
                 writer = null;
             }
-        } else {
-            writer = null;
         }
     }
 }
