@@ -138,14 +138,15 @@ final class QuadCollector implements VertexConsumer {
         TextureAtlasSprite sprite = chooseSpriteForQuad();
         if (sprite == null) return;
 
-        if (hasRegionBounds && isBoundarySideQuad()) {
+        float[] normal = computeFaceNormal(positions);
+
+        if (hasRegionBounds && isBoundarySideQuad(normal)) {
             resetQuadState();
             return;
         }
 
         String spriteKey = SpriteKeyResolver.resolve(sprite);
         float[] normalizedUVs = normalizeUVs(uvs, sprite);
-        float[] normal = computeFaceNormal(positions);
         
         // 计算 Colormap UV (Biome Tint)
         float[] lut = ColorMapManager.remapColorUV(ctx, quadArgb); 
@@ -223,26 +224,40 @@ final class QuadCollector implements VertexConsumer {
 
     private void decideCoordinateSystem() {
         float minX = Float.POSITIVE_INFINITY, maxX = Float.NEGATIVE_INFINITY;
+        float minY = Float.POSITIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+        float minZ = Float.POSITIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
         for(int i=0; i<Math.min(rawCount, 4); i++) {
             float vx = rawPositions[i*3];
+            float vy = rawPositions[i*3+1];
+            float vz = rawPositions[i*3+2];
             minX = Math.min(minX, vx); maxX = Math.max(maxX, vx);
+            minY = Math.min(minY, vy); maxY = Math.max(maxY, vy);
+            minZ = Math.min(minZ, vz); maxZ = Math.max(maxZ, vz);
         }
         
-        // 简化的判定逻辑
-        boolean inUnit = minX >= -0.001f && maxX <= 1.001f;
-        if (inUnit) {
-            needsOffset = true; useChunkOffset = false;
-        } else if (minX >= -0.1f && maxX <= 16.1f) {
-             // 假设是 Chunk 坐标
+        // 优先认定为 Chunk 局部坐标（0-16），避免把局部 y/z 重复叠加到世界坐标
+        boolean inChunkRange =
+            minX >= -0.1f && maxX <= 16.1f &&
+            minY >= -0.1f && maxY <= 16.1f &&
+            minZ >= -0.1f && maxZ <= 16.1f;
+
+        // 其次才认定为单方块局部坐标（0-1）
+        boolean inUnit =
+            minX >= -0.001f && maxX <= 1.001f &&
+            minY >= -0.001f && maxY <= 1.001f &&
+            minZ >= -0.001f && maxZ <= 1.001f;
+
+        if (inChunkRange) {
             needsOffset = true; useChunkOffset = true;
             chunkOffsetX = Math.floorDiv(pos.getX(), 16) * 16;
             chunkOffsetY = Math.floorDiv(pos.getY(), 16) * 16;
             chunkOffsetZ = Math.floorDiv(pos.getZ(), 16) * 16;
+        } else if (inUnit) {
+            needsOffset = true; useChunkOffset = false;
         } else {
             needsOffset = false; useChunkOffset = false;
         }
     }
-
     private float[] applyOffsets(float x, float y, float z) {
         float wx, wy, wz;
         if (!needsOffset) { wx=x; wy=y; wz=z; }
@@ -259,11 +274,17 @@ final class QuadCollector implements VertexConsumer {
         }
     }
 
-    private boolean isBoundarySideQuad() {
+    private boolean isBoundarySideQuad(float[] normal) {
+        // 不裁剪边界上的流体面，除非顶点真的超出所选区域（理论上不会发生）
         double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
-        for(int i=0; i<4; i++) { minX = Math.min(minX, positions[i*3]); maxX = Math.max(maxX, positions[i*3]); }
-        return Math.abs(minX - regionMinX) < 0.001 || Math.abs(maxX - regionMaxX) < 0.001 || 
-               Math.abs(minX - regionMaxX) < 0.001 || Math.abs(maxX - regionMinX) < 0.001; // Z轴同理，此处简化
+        double minZ = Double.POSITIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+        for(int i=0; i<4; i++) {
+            minX = Math.min(minX, positions[i*3]);     maxX = Math.max(maxX, positions[i*3]);
+            minZ = Math.min(minZ, positions[i*3+2]);   maxZ = Math.max(maxZ, positions[i*3+2]);
+        }
+        double eps = 1e-3;
+        return minX < regionMinX - eps || maxX > regionMaxX + eps ||
+               minZ < regionMinZ - eps || maxZ > regionMaxZ + eps;
     }
 
     private float[] computeFaceNormal(float[] p) {

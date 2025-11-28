@@ -33,8 +33,11 @@ public final class BlockEntityAtlasPacker {
         Map<String, Placement> placements = new LinkedHashMap<>();
         List<AtlasPage> pages = new ArrayList<>();
 
-        // Sort textures by a chosen heuristic, e.g., largest dimension
-        textures.sort(Comparator.comparingInt((TextureEntry t) -> Math.max(t.image.getWidth(), t.image.getHeight())).reversed());
+        // Sort：先按最大边长降序，再按资源名字母/数字升序保证确定性
+        textures.sort(
+            Comparator.<TextureEntry>comparingInt(t -> Math.max(t.image.getWidth(), t.image.getHeight())).reversed()
+                .thenComparing(t -> t.spriteKey)
+        );
 
         for (TextureEntry entry : textures) {
             boolean placed = false;
@@ -199,26 +202,42 @@ public final class BlockEntityAtlasPacker {
                 return;
             }
 
-            if (usedNode.x < freeNode.x + freeNode.width && usedNode.x + usedNode.width > freeNode.x) {
-                if (usedNode.y > freeNode.y && usedNode.y < freeNode.y + freeNode.height) {
-                    Rect newNode = new Rect(freeNode.x, freeNode.y, freeNode.width, usedNode.y - freeNode.y);
-                    freeRects.add(newNode);
-                }
-                if (usedNode.y + usedNode.height < freeNode.y + freeNode.height) {
-                    Rect newNode = new Rect(freeNode.x, usedNode.y + usedNode.height, freeNode.width, freeNode.y + freeNode.height - (usedNode.y + usedNode.height));
-                    freeRects.add(newNode);
-                }
+            // 以“十字”方式切分，确保新生成的 free rect 之间不重叠
+            // 上条带（完整宽度，位于 used 之上）
+            if (usedNode.y > freeNode.y) {
+                freeRects.add(new Rect(
+                    freeNode.x,
+                    freeNode.y,
+                    freeNode.width,
+                    usedNode.y - freeNode.y));
             }
-
-            if (usedNode.y < freeNode.y + freeNode.height && usedNode.y + usedNode.height > freeNode.y) {
-                if (usedNode.x > freeNode.x && usedNode.x < freeNode.x + freeNode.width) {
-                    Rect newNode = new Rect(freeNode.x, freeNode.y, usedNode.x - freeNode.x, freeNode.height);
-                    freeRects.add(newNode);
-                }
-                if (usedNode.x + usedNode.width < freeNode.x + freeNode.width) {
-                    Rect newNode = new Rect(usedNode.x + usedNode.width, freeNode.y, freeNode.x + freeNode.width - (usedNode.x + usedNode.width), freeNode.height);
-                    freeRects.add(newNode);
-                }
+            // 下条带（完整宽度，位于 used 之下）
+            int usedBottom = usedNode.y + usedNode.height;
+            int freeBottom = freeNode.y + freeNode.height;
+            if (usedBottom < freeBottom) {
+                freeRects.add(new Rect(
+                    freeNode.x,
+                    usedBottom,
+                    freeNode.width,
+                    freeBottom - usedBottom));
+            }
+            // 左条带（仅覆盖与 used 同高的中段）
+            if (usedNode.x > freeNode.x) {
+                freeRects.add(new Rect(
+                    freeNode.x,
+                    usedNode.y,
+                    usedNode.x - freeNode.x,
+                    usedNode.height));
+            }
+            // 右条带（仅覆盖与 used 同高的中段）
+            int usedRight = usedNode.x + usedNode.width;
+            int freeRight = freeNode.x + freeNode.width;
+            if (usedRight < freeRight) {
+                freeRects.add(new Rect(
+                    usedRight,
+                    usedNode.y,
+                    freeRight - usedRight,
+                    usedNode.height));
             }
         }
 
