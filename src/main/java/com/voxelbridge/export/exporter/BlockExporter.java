@@ -80,17 +80,21 @@ public final class BlockExporter {
     private static final float SIZE_EPS = 1e-4f;
     private static final float UNIT_SIZE = 1.0f;
     private static final float UNIT_EPS = 1e-3f;
-    private static final float OVERLAY_ZFIGHT_OFFSET = 1.5e-4f;  // Increased by 1.5x for better multi-layer separation
+    private static final float OVERLAY_ZFIGHT_OFFSET = 3e-4f;  // Increased by 2x for better multi-layer separation and float precision
     private static PrintWriter ctmDebugLog = null;
     private static int sampledBlockCount = 0;
     private static class OverlayQuadData {
+        final float[] positions;  // World coordinates with offset applied
+        final float[] normal;
         final float[] uv;
         final float[] colorUv;
         final String spriteKey;
         final int color;
         final boolean ctmOverlay;
         final int overlayIndex; // 0-based index for this overlay (for z-offset calculation)
-        OverlayQuadData(float[] uv, float[] colorUv, String spriteKey, int color, boolean ctmOverlay, int overlayIndex) {
+        OverlayQuadData(float[] positions, float[] normal, float[] uv, float[] colorUv, String spriteKey, int color, boolean ctmOverlay, int overlayIndex) {
+            this.positions = positions;
+            this.normal = normal;
             this.uv = uv;
             this.colorUv = colorUv;
             this.spriteKey = spriteKey;
@@ -391,70 +395,32 @@ public final class BlockExporter {
         float[] normal = computeFaceNormal(positions);
         long quadKey = computeQuadKey(spriteKey, positions, normal, doubleSided, uv0);
         if (!quadKeys.add(quadKey)) return;
-        // Check if this quad is an overlay (already identified and cached in PASS 1)
+
+        // Check if this quad is an overlay (already cached in PASS 1)
         long posHash = computePositionHash(positions);
-        // Check if this quad was cached as overlay
-        OverlayQuadData cachedOverlay = findOverlayForSprite(posHash, pos, spriteKey);
+        if (isQuadCachedAsOverlay(posHash, spriteKey)) {
+            // Skip this quad - it's an overlay that will be output after its base quad
+            return;
+        }
+
+        // This is a base quad - output it
         int argb = computeTintColor(state, pos, quad);
         float[] uv1 = getColormapUV(argb);
         float[] colors = whiteColor();
-        float[] uv2 = null;
-        float[] uv3 = null;
-        // Determine target Material Group Key and overlay sprite key
-        String targetGroupKey = blockKey;
-        String overlaySpriteKey = null;
-        if (cachedOverlay != null) {
-            // This quad is an overlay - render it separately with offset
-            targetGroupKey = blockKey + "_overlay";
-            overlaySpriteKey = "voxelbridge:transparent"; // Overlay quad doesn't need overlay texture, use transparent
-            // Overlay quads don't have their own overlay, so use transparent
-            uv2 = getTransparentUV();
-            uv3 = getColormapUV(0xFFFFFFFF); // Pure white
-            com.voxelbridge.export.texture.TextureAtlasManager.registerTransparentTexture(ctx, overlaySpriteKey);
-            // Apply offset using the overlay's index from cache
-            applyOverlayOffsetWithIndex(pos, positions, normal, cachedOverlay.overlayIndex);
-            if (CTM_LOG_ENABLED && ctmDebugLog != null && sampledBlockCount <= 100) {
-                try {
-                    if (currentBlockIsCTM) {
-                        List<QuadInfo> quadsAtPos = ctmPositionQuads.get(posHash);
-                        int count = quadsAtPos != null ? quadsAtPos.size() : 0;
-                        ctmDebugLog.println(String.format(
-                            "  [OVERLAY DETECTED - CTM GEO] sprite=%s count=%d", spriteKey, count));
-                    } else {
-                        ctmDebugLog.println(String.format(
-                            "  [OVERLAY DETECTED - VANILLA] sprite=%s", spriteKey));
-                    }
-                    ctmDebugLog.flush();
-                } catch (Exception ignored) {}
-            }
-        } else {
-            // Base quads: attach overlay UVs if available
-            // Support multiple overlays by outputting the base quad multiple times (once per overlay)
-            List<OverlayQuadData> overlays = findOverlaysForBase(posHash, pos);
-            if (!overlays.isEmpty()) {
-                // Has overlays: output base quad once for each overlay
-                // IMPORTANT: Base quad stays at original position - only overlay quads are offset
-                for (OverlayQuadData overlayData : overlays) {
-                    uv2 = overlayData.uv;
-                    uv3 = overlayData.colorUv;
-                    overlaySpriteKey = overlayData.spriteKey;
-                    com.voxelbridge.export.texture.TextureAtlasManager.registerTint(ctx, overlayData.spriteKey, 0xFFFFFF);
-                    // Base quad remains at original position (no offset)
-                    // Overlay texture is applied via uv2/uv3
-                    sceneSink.addQuad(targetGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, uv2, uv3, normal, colors, doubleSided);
-                }
-            } else {
-                // No overlay: use transparent texture for uv2, white color for uv3
-                uv2 = getTransparentUV();
-                uv3 = getColormapUV(0xFFFFFFFF); // Pure white
-                overlaySpriteKey = "voxelbridge:transparent";
-                // Register transparent sprite
-                com.voxelbridge.export.texture.TextureAtlasManager.registerTransparentTexture(ctx, overlaySpriteKey);
-                sceneSink.addQuad(targetGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, uv2, uv3, normal, colors, doubleSided);
-            }
-            return; // Early return for base quads
+        sceneSink.addQuad(blockKey, spriteKey, null, positions, uv0, uv1, normal, colors, doubleSided);
+
+        // Check if we've already processed overlays for this position
+        if (!processedPositions.add(posHash)) {
+            return; // Already output overlays for this position
         }
-        sceneSink.addQuad(targetGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, uv2, uv3, normal, colors, doubleSided);
+
+        // Output all cached overlay quads for this position
+        List<OverlayQuadData> overlays = overlayCacheCombined.get(posHash);
+        if (overlays != null && !overlays.isEmpty()) {
+            for (OverlayQuadData overlay : overlays) {
+                sceneSink.addQuad(blockKey, overlay.spriteKey, "overlay", overlay.positions, overlay.uv, overlay.colorUv, overlay.normal, colors, doubleSided);
+            }
+        }
     }
     private void extractVertices(BakedQuad quad, BlockPos pos, float[] positions, float[] uv0, TextureAtlasSprite sprite) {
         int[] verts = quad.getVertices();
@@ -482,9 +448,13 @@ public final class BlockExporter {
             float vz = Float.intBitsToFloat(verts[base+2]);
             float uu = Float.intBitsToFloat(verts[base+4]);
             float vv = Float.intBitsToFloat(verts[base+5]);
-            positions[i*3] = (float)(pos.getX() + vx + offsetX);
-            positions[i*3+1] = (float)(pos.getY() + vy + offsetY);
-            positions[i*3+2] = (float)(pos.getZ() + vz + offsetZ);
+            // Use double precision to avoid precision loss in large scenes
+            double worldX = pos.getX() + vx + offsetX;
+            double worldY = pos.getY() + vy + offsetY;
+            double worldZ = pos.getZ() + vz + offsetZ;
+            positions[i*3] = (float)worldX;
+            positions[i*3+1] = (float)worldY;
+            positions[i*3+2] = (float)worldZ;
             uv0[i*2] = (uu - u0) / du;
             uv0[i*2+1] = (vv - v0) / dv;
         }
@@ -492,10 +462,6 @@ public final class BlockExporter {
     private float[] getColormapUV(int argb) {
         var p = com.voxelbridge.export.texture.ColorMapManager.registerColor(ctx, argb);
         return new float[] { p.u0(), p.v0(), p.u1(), p.v0(), p.u1(), p.v1(), p.u0(), p.v1() };
-    }
-    private float[] getTransparentUV() {
-        // Return normalized UV for a 1x1 transparent pixel (will be remapped to atlas later)
-        return new float[] { 0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f };
     }
     private QuadInfo buildQuadInfo(String spriteKey, float[] positions, float[] normal, int originalIndex) {
         int axis = dominantAxis(normal);
@@ -580,6 +546,71 @@ public final class BlockExporter {
         if (Math.abs(sizeU - UNIT_SIZE) > UNIT_EPS) return false;
         return true;
     }
+    /**
+     * Apply overlay offset in LOCAL coordinate system (0-1 range).
+     * This avoids float precision loss in large scenes by operating on small values.
+     *
+     * @param localPositions Local coordinates (0-1 range) of the quad vertices
+     * @param overlayIndex Index of this overlay layer (0-based)
+     */
+    private void applyLocalOverlayOffset(float[] localPositions, int overlayIndex) {
+        if (localPositions == null || localPositions.length < 12) return;
+
+        // Calculate quad center in local coordinate system (0-1 range)
+        float cx = 0f, cy = 0f, cz = 0f;
+        for (int i = 0; i < 4; i++) {
+            cx += localPositions[i * 3];
+            cy += localPositions[i * 3 + 1];
+            cz += localPositions[i * 3 + 2];
+        }
+        cx *= 0.25f; cy *= 0.25f; cz *= 0.25f;
+
+        // Block center in local coordinates is at (0.5, 0.5, 0.5)
+        final float localCenter = 0.5f;
+        float dx = cx - localCenter;
+        float dy = cy - localCenter;
+        float dz = cz - localCenter;
+
+        // Find dominant axis to determine which face the quad is on
+        float adx = Math.abs(dx);
+        float ady = Math.abs(dy);
+        float adz = Math.abs(dz);
+        float nx, ny, nz;
+        if (adx >= ady && adx >= adz) {
+            // X-axis face (East/West)
+            nx = dx > 0 ? 1f : -1f;
+            ny = 0f;
+            nz = 0f;
+        } else if (ady >= adx && ady >= adz) {
+            // Y-axis face (Top/Bottom)
+            nx = 0f;
+            ny = dy > 0 ? 1f : -1f;
+            nz = 0f;
+        } else {
+            // Z-axis face (North/South)
+            nx = 0f;
+            ny = 0f;
+            nz = dz > 0 ? 1f : -1f;
+        }
+
+        // Apply progressive offset based on overlay index
+        // overlayIndex=0 -> 1x offset, overlayIndex=1 -> 2x offset, etc.
+        float offsetMultiplier = (overlayIndex + 1);
+        float offset = OVERLAY_ZFIGHT_OFFSET * offsetMultiplier;
+
+        // Apply offset in local coordinate system - much better precision since values are small (0-1)
+        for (int i = 0; i < 4; i++) {
+            localPositions[i * 3]     += nx * offset;
+            localPositions[i * 3 + 1] += ny * offset;
+            localPositions[i * 3 + 2] += nz * offset;
+        }
+    }
+
+    /**
+     * @deprecated Use applyLocalOverlayOffset instead for better precision.
+     * This method operates on world coordinates and suffers from float precision loss in large scenes.
+     */
+    @Deprecated
     private void applyOverlayOffsetWithIndex(BlockPos pos, float[] positions, float[] normal, int overlayIndex) {
         if (positions == null || positions.length < 12 || normal == null || normal.length < 3) return;
         // Determine offset direction based on quad position on block face (not normal direction)
@@ -633,6 +664,28 @@ public final class BlockExporter {
         }
         normal[0] = nx; normal[1] = ny; normal[2] = nz;
     }
+    /**
+     * Check if a quad with given position hash and sprite key is cached as an overlay.
+     * Used to skip rendering overlay quads in PASS 2 (they'll be output after their base quad).
+     */
+    private boolean isQuadCachedAsOverlay(long posHash, String spriteKey) {
+        // Check vanilla overlays
+        List<OverlayQuadData> vanillaList = overlayCacheVanilla.get(posHash);
+        if (vanillaList != null) {
+            for (OverlayQuadData data : vanillaList) {
+                if (data.spriteKey.equals(spriteKey)) return true;
+            }
+        }
+        // Check CTM overlays
+        List<OverlayQuadData> ctmList = overlayCacheCTM.get(posHash);
+        if (ctmList != null) {
+            for (OverlayQuadData data : ctmList) {
+                if (data.spriteKey.equals(spriteKey)) return true;
+            }
+        }
+        return false;
+    }
+
     private OverlayQuadData findOverlayForSprite(long posHash, BlockPos pos, String spriteKey) {
         // Search in vanilla overlays first
         List<OverlayQuadData> vanillaList = overlayCacheVanilla.get(posHash);
@@ -726,6 +779,8 @@ public final class BlockExporter {
         if (verts.length < 32) return;
         final int stride = 8;
         int[] vertexColors = new int[4];
+        // First pass: extract local coordinates and UV/colors
+        float[] localPos = new float[12];
         for (int i = 0; i < 4; i++) {
             int base = i * stride;
             float vx = Float.intBitsToFloat(verts[base]);
@@ -735,13 +790,26 @@ public final class BlockExporter {
             float uu = Float.intBitsToFloat(verts[base + 4]);
             float vv = Float.intBitsToFloat(verts[base + 5]);
             vertexColors[i] = abgr;
-            positions[i * 3] = (float) (pos.getX() + vx + offsetX);
-            positions[i * 3 + 1] = (float) (pos.getY() + vy + offsetY);
-            positions[i * 3 + 2] = (float) (pos.getZ() + vz + offsetZ);
+            localPos[i * 3] = vx;
+            localPos[i * 3 + 1] = vy;
+            localPos[i * 3 + 2] = vz;
             float su = (uu - u0) / du;
             float sv = (vv - v0) / dv;
             uv0[i * 2] = su;
             uv0[i * 2 + 1] = sv;
+        }
+
+        // Apply overlay offset in local coordinate system (0-1 range) for precision
+        applyLocalOverlayOffset(localPos, overlayIndex);
+
+        // Convert to world coordinates with double precision to avoid precision loss
+        for (int i = 0; i < 4; i++) {
+            double worldX = pos.getX() + localPos[i * 3] + offsetX;
+            double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY;
+            double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ;
+            positions[i * 3] = (float)worldX;
+            positions[i * 3 + 1] = (float)worldY;
+            positions[i * 3 + 2] = (float)worldZ;
         }
         int overlayColor = extractOverlayColor(state, pos, quad, vertexColors);
         float[] overlayColorUv = new float[8];
@@ -750,11 +818,15 @@ public final class BlockExporter {
         overlayColorUv[2] = placement.u1(); overlayColorUv[3] = placement.v0();
         overlayColorUv[4] = placement.u1(); overlayColorUv[5] = placement.v1();
         overlayColorUv[6] = placement.u0(); overlayColorUv[7] = placement.v1();
+
+        // Calculate normal for the overlay quad
+        float[] normal = computeFaceNormal(positions);
+
         long posHash = computePositionHash(positions);
         Map<Long, List<OverlayQuadData>> cache = isCtmOverlay ? overlayCacheCTM : overlayCacheVanilla;
         List<OverlayQuadData> overlayList = cache.computeIfAbsent(posHash, k -> new ArrayList<>());
         // Use the provided overlayIndex from caller (for progressive offset assignment)
-        OverlayQuadData data = new OverlayQuadData(uv0.clone(), overlayColorUv, spriteKey, overlayColor, isCtmOverlay, overlayIndex);
+        OverlayQuadData data = new OverlayQuadData(positions.clone(), normal, uv0.clone(), overlayColorUv, spriteKey, overlayColor, isCtmOverlay, overlayIndex);
         overlayList.add(data);
     }
     private int extractOverlayColor(BlockState state, BlockPos pos, BakedQuad quad, int[] vertexColors) {

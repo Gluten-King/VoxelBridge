@@ -17,24 +17,7 @@ public final class SpriteKeyResolver {
      * Maps a {@link TextureAtlasSprite} to a deterministic key (e.g. minecraft:block/grass_block_top).
      */
     public static String resolve(TextureAtlasSprite sprite) {
-        try {
-            // 1.21+: sprite.contents().name() -> ResourceLocation
-            Object contents = sprite.contents();
-            ResourceLocation name = (ResourceLocation) contents.getClass()
-                    .getMethod("name")
-                    .invoke(contents);
-            return name.toString();
-        } catch (Throwable ignore) {
-            try {
-                // Compatibility: legacy getName() fallback.
-                ResourceLocation name = (ResourceLocation) sprite.getClass()
-                        .getMethod("getName")
-                        .invoke(sprite);
-                return name.toString();
-            } catch (Throwable t) {
-                // Final fallback
-                return "minecraft:block/unknown";
-            }
-        }
+        ResourceLocation name = sprite.contents().name();
+        return name != null ? name.toString() : "minecraft:block/unknown";
     }
 }

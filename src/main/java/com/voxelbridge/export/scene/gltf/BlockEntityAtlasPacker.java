@@ -202,8 +202,7 @@ public final class BlockEntityAtlasPacker {
                 return;
             }
 
-            // 以“十字”方式切分，确保新生成的 free rect 之间不重叠
-            // 上条带（完整宽度，位于 used 之上）
+            
             if (usedNode.y > freeNode.y) {
                 freeRects.add(new Rect(
                     freeNode.x,
@@ -211,7 +210,7 @@ public final class BlockEntityAtlasPacker {
                     freeNode.width,
                     usedNode.y - freeNode.y));
             }
-            // 下条带（完整宽度，位于 used 之下）
+            
             int usedBottom = usedNode.y + usedNode.height;
             int freeBottom = freeNode.y + freeNode.height;
             if (usedBottom < freeBottom) {
@@ -221,7 +220,7 @@ public final class BlockEntityAtlasPacker {
                     freeNode.width,
                     freeBottom - usedBottom));
             }
-            // 左条带（仅覆盖与 used 同高的中段）
+            
             if (usedNode.x > freeNode.x) {
                 freeRects.add(new Rect(
                     freeNode.x,
@@ -229,7 +228,7 @@ public final class BlockEntityAtlasPacker {
                     usedNode.x - freeNode.x,
                     usedNode.height));
             }
-            // 右条带（仅覆盖与 used 同高的中段）
+            
             int usedRight = usedNode.x + usedNode.width;
             int freeRight = freeNode.x + freeNode.width;
             if (usedRight < freeRight) {

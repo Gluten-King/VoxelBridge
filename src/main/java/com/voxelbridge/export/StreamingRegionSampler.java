@@ -13,11 +13,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -264,39 +263,15 @@ public final class StreamingRegionSampler {
 
     private static boolean isChunkRenderable(Level level, ChunkPos chunkPos) {
         if (!(level instanceof ClientLevel)) return true;
-        try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player != null && mc.options != null) {
-                ChunkPos p = mc.player.chunkPosition();
-                if (Math.max(Math.abs(chunkPos.x - p.x), Math.abs(chunkPos.z - p.z)) > mc.options.getEffectiveRenderDistance()) return true;
-            }
-            var renderer = mc.levelRenderer;
-            Field viewAreaField = renderer.getClass().getDeclaredField("viewArea");
-            viewAreaField.setAccessible(true);
-            Object viewArea = viewAreaField.get(renderer);
-            if (viewArea == null) return true;
-
-            Method m = null;
-            Object renderSection = null;
-            try { m = viewArea.getClass().getMethod("getRenderChunkAt", BlockPos.class); } catch (NoSuchMethodException e) {}
-            if (m == null) try { m = viewArea.getClass().getMethod("getRenderChunk", int.class, int.class, int.class); } catch (NoSuchMethodException e) {}
-            
-            if (m != null) {
-                if (m.getParameterCount() == 1) renderSection = m.invoke(viewArea, new BlockPos(chunkPos.x << 4, 0, chunkPos.z << 4));
-                else renderSection = m.invoke(viewArea, chunkPos.x << 4, 0, chunkPos.z << 4);
-            }
-            if (renderSection == null) return true;
-
-            Method getCompiled = null;
-            try { getCompiled = renderSection.getClass().getMethod("getCompiledChunk"); } catch (NoSuchMethodException e) {}
-            if (getCompiled == null) try { getCompiled = renderSection.getClass().getMethod("getCompiled"); } catch (NoSuchMethodException e) {}
-            
-            if (getCompiled != null) {
-                return getCompiled.invoke(renderSection) != null;
-            }
-            return true;
-        } catch (Throwable t) {
-            return true;
+        ClientLevel clientLevel = (ClientLevel) level;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null && mc.options != null) {
+            ChunkPos p = mc.player.chunkPosition();
+            if (Math.max(Math.abs(chunkPos.x - p.x), Math.abs(chunkPos.z - p.z)) > mc.options.getEffectiveRenderDistance()) return true;
         }
+
+        ClientChunkCache cache = clientLevel.getChunkSource();
+        LevelChunk chunk = cache.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
+        return chunk != null && !chunk.isEmpty();
     }
 }

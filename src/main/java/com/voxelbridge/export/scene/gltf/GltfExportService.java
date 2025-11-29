@@ -9,7 +9,6 @@ import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.BlockEntityDebugLogger;
 import com.voxelbridge.util.ExportLogger;
-import com.voxelbridge.util.UV3DebugLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -86,7 +85,6 @@ public final class GltfExportService {
         ExportLogger.initialize(outDir);
         ExportLogger.log("[GLTF] Starting glTF export with format-agnostic sampler");
         BlockEntityDebugLogger.initialize(outDir);
-        com.voxelbridge.util.UV3DebugLogger.initialize(outDir);
 
         // 修复: 初始化 CTM 调试日志
         BlockExporter.initializeCTMDebugLog(outDir);
@@ -122,7 +120,6 @@ public final class GltfExportService {
             System.out.println(banner);
             return output;
         } finally {
-            com.voxelbridge.util.UV3DebugLogger.close();
             BlockEntityDebugLogger.close();
             ExportLogger.close();
             BlockExporter.closeCTMDebugLog();

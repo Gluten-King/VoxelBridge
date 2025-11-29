@@ -15,13 +15,10 @@ public interface SceneSink {
      * (unless split by atlas pages).
      * @param spriteKey        The texture sprite key used for UV mapping (e.g. "minecraft:block/glass").
      * Used to look up the correct UV region in the Atlas.
-     * @param overlaySpriteKey The overlay texture sprite key (or "voxelbridge:transparent" if no overlay).
-     * Used to map uv2 to the correct overlay texture per quad.
+     * @param overlaySpriteKey The overlay texture sprite key (or "voxelbridge:transparent" / null if no overlay).
      * @param positions        Vertex positions (x, y, z) * 4
-     * @param uv0              Primary texture coordinates (u, v) * 4
-     * @param uv1              Lightmap coordinates (u, v) * 4 (optional)
-     * @param uv2              Overlay texture coordinates (u, v) * 4 (optional)
-     * @param uv3              Overlay color coordinates (u, v) * 4 (optional)
+     * @param uv0              Primary texture coordinates (TEXCOORD_0: u, v) * 4
+     * @param uv1              Colormap coordinates for biome tinting (TEXCOORD_1: u, v) * 4
      * @param normal           Face normal (x, y, z)
      * @param colors           Vertex colors (r, g, b, a) * 4
      * @param doubleSided      Whether the face should be rendered double-sided
@@ -32,8 +29,6 @@ public interface SceneSink {
                  float[] positions,
                  float[] uv0,
                  float[] uv1,
-                 float[] uv2,
-                 float[] uv3,
                  float[] normal,
                  float[] colors,
                  boolean doubleSided);

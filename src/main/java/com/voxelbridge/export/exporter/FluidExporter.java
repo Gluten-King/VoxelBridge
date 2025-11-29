@@ -19,8 +19,6 @@ import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 
-import java.lang.reflect.Method;
-
 /**
  * Format-agnostic sampler for fluid geometry.
  * Uses Minecraft's liquid renderer to generate fluid geometry.
@@ -66,28 +64,8 @@ public final class FluidExporter {
             regionMin, regionMax, fluidKey
         );
 
-        // Try to invoke renderLiquid via reflection (API varies between versions)
-        try {
-            Method m = dispatcher.getClass().getMethod("renderLiquid",
-                BlockPos.class, BlockAndTintGetter.class, VertexConsumer.class, FluidState.class);
-            m.invoke(dispatcher, pos, level, collector, fs);
-            collector.flush();
-            return;
-        } catch (NoSuchMethodException e) {
-            // Try alternative signature
-        } catch (Throwable t) {
-            t.printStackTrace();
-        }
-
-        try {
-            Method m2 = dispatcher.getClass().getMethod("renderLiquid",
-                BlockPos.class, BlockAndTintGetter.class, VertexConsumer.class,
-                BlockState.class, FluidState.class);
-            m2.invoke(dispatcher, pos, level, collector, state, fs);
-            collector.flush();
-        } catch (Throwable t) {
-            t.printStackTrace();
-        }
+        dispatcher.renderLiquid(pos, level, collector, state, fs);
+        collector.flush();
     }
 
     /**

@@ -1,6 +1,7 @@
 
 /bin/
 /build/
+/META-INF/
 .gradle/
 /run/
 *.class

@@ -85,7 +85,7 @@ public final class ColorMapManager {
 
     /**
      * Generates colormap pages.
-     * NOTE: Now always generates colormap for UV3 consistency, regardless of biome color mode.
+     * NOTE: Now always generates colormap, regardless of biome color mode.
      * White color is pre-reserved in slot 0 by initializeReservedSlots().
      */
     public static void generateColorMaps(ExportContext ctx, Path outDir) throws IOException {
@@ -141,7 +141,7 @@ public final class ColorMapManager {
     /**
      * Registers a color if not present and returns the UV coordinates for its 4x4 slot.
      * The returned array contains [u0, v0, u1, v1].
-     * This is to be used for the second UV set (uv1) for biome coloring via colormap texture.
+     * This is used for the second UV set (TEXCOORD_1) for biome coloring via colormap texture.
      * @param ctx The export context.
      * @param argb The color to register.
      * @return A float array containing [u0, v0, u1, v1] for the color's slot in the colormap.

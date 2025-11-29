@@ -9,7 +9,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 
 /**
- * 收集来自 Minecraft 渲染管线（如流体渲染）的 Quad 并转发给 SceneSink。
+ * Collects quads emitted by the vanilla render pipeline (e.g., fluids) and forwards them to the SceneSink.
  */
 final class QuadCollector implements VertexConsumer {
     private final SceneSink sink;
@@ -21,7 +21,7 @@ final class QuadCollector implements VertexConsumer {
     private final boolean hasRegionBounds;
     private final String materialGroupKey;
 
-    // 坐标系检测相关
+    // Coordinate system detection
     private final float[] rawPositions = new float[12];
     private int rawCount = 0;
     private boolean decided = false;
@@ -31,7 +31,7 @@ final class QuadCollector implements VertexConsumer {
     private int chunkOffsetY = 0;
     private int chunkOffsetZ = 0;
 
-    // 顶点缓存
+    // Vertex buffers
     private final float[] positions = new float[12];
     private final float[] uvs = new float[8];
     private final float[] colors = new float[16];
@@ -57,23 +57,21 @@ final class QuadCollector implements VertexConsumer {
              this.regionMaxZ = regionMax.getZ() + offsetZ + 1;
              this.hasRegionBounds = true;
         } else {
-             this.regionMinX=0; this.regionMaxX=0; this.regionMinZ=0; this.regionMaxZ=0; hasRegionBounds=false;
+             this.regionMinX = 0; this.regionMaxX = 0; this.regionMinZ = 0; this.regionMaxZ = 0; hasRegionBounds = false;
         }
     }
 
-    // === 新增/必需的方法 ===
     /**
-     * 重置收集器状态。由外部调用以确保没有残留数据。
+     * Reset internal state; call between batches to avoid leftover data.
      */
     public void flush() {
         vertexIndex = 0;
         resetQuadState();
     }
-    // ======================
 
     @Override
     public VertexConsumer addVertex(float x, float y, float z) {
-        // 存储原始坐标用于判定坐标系
+        // Capture raw positions to infer coordinate system
         if (rawCount < 4) {
             rawPositions[rawCount * 3] = x;
             rawPositions[rawCount * 3 + 1] = y;
@@ -81,14 +79,14 @@ final class QuadCollector implements VertexConsumer {
             rawCount++;
         }
 
-        // 收集够4个顶点后判定坐标系
+        // Decide coordinate system after first quad is captured
         if (!decided && rawCount >= 4) {
             decideCoordinateSystem();
             decided = true;
             recomputePositions();
         }
 
-        // 应用偏移
+        // Apply offsets
         float[] adjusted = applyOffsets(x, y, z);
         positions[vertexIndex * 3] = adjusted[0];
         positions[vertexIndex * 3 + 1] = adjusted[1];
@@ -129,7 +127,7 @@ final class QuadCollector implements VertexConsumer {
         return this;
     }
     
-    // 兼容 1.21+ 接口
+    // 1.21+ compatibility shims
     public void endVertex() {} 
     public void defaultColor(int r, int g, int b, int a) {}
     public void unsetDefaultColor() {}
@@ -148,7 +146,7 @@ final class QuadCollector implements VertexConsumer {
         String spriteKey = SpriteKeyResolver.resolve(sprite);
         float[] normalizedUVs = normalizeUVs(uvs, sprite);
         
-        // 计算 Colormap UV (Biome Tint)
+        // Compute colormap UV (biome tint)
         float[] lut = ColorMapManager.remapColorUV(ctx, quadArgb); 
         float u0 = lut[0], v0 = lut[1], u1 = lut[2], v1 = lut[3];
         float du = u1 - u0, dv = v1 - v0;
@@ -161,8 +159,8 @@ final class QuadCollector implements VertexConsumer {
         
         float[] linearColors = whiteColor();
 
-        // 发送到 Sink (fluids typically don't have overlays)
-        sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions.clone(), normalizedUVs, uv1, null, null, normal, linearColors, true);
+        // Send to sink (fluids typically do not have overlays)
+        sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions.clone(), normalizedUVs, uv1, normal, linearColors, true);
 
         resetQuadState();
     }
@@ -198,7 +196,7 @@ final class QuadCollector implements VertexConsumer {
         if (sprites.length == 0) return null;
         if (sprites.length == 1) return sprites[0];
         
-        // 简单启发式：检查 UV 中心点更接近哪个 sprite
+        // Heuristic: pick the sprite whose center is closest to the UV centroid
         float centerU = 0, centerV = 0;
         for(int i=0; i<4; i++) { centerU += uvs[i*2]; centerV += uvs[i*2+1]; }
         centerU /= 4; centerV /= 4;
@@ -206,7 +204,7 @@ final class QuadCollector implements VertexConsumer {
         if (isPointInSprite(centerU, centerV, sprites[0])) return sprites[0];
         if (isPointInSprite(centerU, centerV, sprites[1])) return sprites[1];
         
-        // 距离回退
+        // Distance fallback
         float d0 = distToCenter(sprites[0], centerU, centerV);
         float d1 = distToCenter(sprites[1], centerU, centerV);
         return d0 <= d1 ? sprites[0] : sprites[1];
@@ -235,13 +233,13 @@ final class QuadCollector implements VertexConsumer {
             minZ = Math.min(minZ, vz); maxZ = Math.max(maxZ, vz);
         }
         
-        // 优先认定为 Chunk 局部坐标（0-16），避免把局部 y/z 重复叠加到世界坐标
+        // Prefer chunk-local coordinates (0-16) to avoid duplicating Y/Z offsets into world space
         boolean inChunkRange =
             minX >= -0.1f && maxX <= 16.1f &&
             minY >= -0.1f && maxY <= 16.1f &&
             minZ >= -0.1f && maxZ <= 16.1f;
 
-        // 其次才认定为单方块局部坐标（0-1）
+        // Next, treat as single-block local coordinates (0-1)
         boolean inUnit =
             minX >= -0.001f && maxX <= 1.001f &&
             minY >= -0.001f && maxY <= 1.001f &&
@@ -275,7 +273,7 @@ final class QuadCollector implements VertexConsumer {
     }
 
     private boolean isBoundarySideQuad(float[] normal) {
-        // 不裁剪边界上的流体面，除非顶点真的超出所选区域（理论上不会发生）
+        // Do not clip boundary faces unless verts truly exceed the selected region (should rarely happen)
         double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
         double minZ = Double.POSITIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
         for(int i=0; i<4; i++) {

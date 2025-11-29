@@ -366,7 +366,7 @@ public final class BlockEntityRenderer {
                         // (keep original isAtlasTexture, u0, u1, v0, v1 values from textureRes)
 
                         fillUvs(vertices, uv0, isAtlasTexture, u0, u1, v0, v1);
-                        parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, EMPTY_UV, null, null, NORMAL_UP, colors,
+                        parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, EMPTY_UV, NORMAL_UP, colors,
                             com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver.isDoubleSided(renderType));
                         return;
                     }
@@ -402,7 +402,7 @@ public final class BlockEntityRenderer {
                 // Keep UVs in sprite space (0-1) for now, consistent with BlockExporter and FluidExporter.
 
                 // Send quad to scene sink using the BlockEntity type as group key (block entities typically don't have overlays)
-                parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, EMPTY_UV, null, null, NORMAL_UP, colors,
+                parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, EMPTY_UV, NORMAL_UP, colors,
                     com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver.isDoubleSided(renderType));
             }
 

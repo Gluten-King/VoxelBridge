@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Objects;
 
 /**
  * Accumulates vertices/indices for a single material group (e.g. "minecraft:glass").
@@ -17,8 +18,6 @@ final class PrimitiveData {
     final FloatList positions = new FloatList();
     final FloatList uv0 = new FloatList();
     final FloatList uv1 = new FloatList();
-    final FloatList uv2 = new FloatList();
-    final FloatList uv3 = new FloatList();
     final FloatList colors = new FloatList();
     final IntList indices = new IntList();
     
@@ -29,8 +28,6 @@ final class PrimitiveData {
     final Set<QuadKey> quadKeys = new HashSet<>();
     int vertexCount = 0;
     boolean doubleSided = false;
-    boolean hasUv2 = false;
-    boolean hasUv3 = false;
     
     // Track which vertices use which sprite (for atlas remapping)
     // Range is [startVertexIndex, count] in terms of the FLAT arrays (not indices buffer)
@@ -45,17 +42,15 @@ final class PrimitiveData {
     /**
      * Registers a quad. Returns the indices [v0, v1, v2, v3] or null if degenerate/duplicate.
      */
-    int[] registerQuad(String spriteKey, String overlaySpriteKey, float[] pos, float[] uv, float[] uv1In, float[] uv2In, float[] uv3In, float[] col) {
+    int[] registerQuad(String spriteKey, String overlaySpriteKey, float[] pos, float[] uv, float[] uv1In, float[] col) {
         int startVert = vertexCount;
 
         // Reorder quad vertices into a consistent CCW order
         int[] order = sortQuadCCW(pos);
-        boolean quadHasUv2 = uv2In != null;
-        boolean quadHasUv3 = uv3In != null;
 
         // Use a hash of the spriteKey to prevent merging vertices from different source textures
         // (because they will need different Atlas UV remapping later).
-        int spriteHash = spriteKey.hashCode();
+        int spriteHash = java.util.Objects.hash(spriteKey, overlaySpriteKey);
 
         int v0 = registerVertex(
                 spriteHash,
@@ -63,12 +58,6 @@ final class PrimitiveData {
                 uv[order[0] * 2], uv[order[0] * 2 + 1],
                 uv1In != null ? uv1In[order[0] * 2] : 0f,
                 uv1In != null ? uv1In[order[0] * 2 + 1] : 0f,
-                quadHasUv2 ? uv2In[order[0] * 2] : 0f,
-                quadHasUv2 ? uv2In[order[0] * 2 + 1] : 0f,
-                quadHasUv2,
-                quadHasUv3 ? uv3In[order[0] * 2] : 0f,
-                quadHasUv3 ? uv3In[order[0] * 2 + 1] : 0f,
-                quadHasUv3,
                 col[order[0] * 4], col[order[0] * 4 + 1], col[order[0] * 4 + 2], col[order[0] * 4 + 3]);
         int v1 = registerVertex(
                 spriteHash,
@@ -76,12 +65,6 @@ final class PrimitiveData {
                 uv[order[1] * 2], uv[order[1] * 2 + 1],
                 uv1In != null ? uv1In[order[1] * 2] : 0f,
                 uv1In != null ? uv1In[order[1] * 2 + 1] : 0f,
-                quadHasUv2 ? uv2In[order[1] * 2] : 0f,
-                quadHasUv2 ? uv2In[order[1] * 2 + 1] : 0f,
-                quadHasUv2,
-                quadHasUv3 ? uv3In[order[1] * 2] : 0f,
-                quadHasUv3 ? uv3In[order[1] * 2 + 1] : 0f,
-                quadHasUv3,
                 col[order[1] * 4], col[order[1] * 4 + 1], col[order[1] * 4 + 2], col[order[1] * 4 + 3]);
         int v2 = registerVertex(
                 spriteHash,
@@ -89,12 +72,6 @@ final class PrimitiveData {
                 uv[order[2] * 2], uv[order[2] * 2 + 1],
                 uv1In != null ? uv1In[order[2] * 2] : 0f,
                 uv1In != null ? uv1In[order[2] * 2 + 1] : 0f,
-                quadHasUv2 ? uv2In[order[2] * 2] : 0f,
-                quadHasUv2 ? uv2In[order[2] * 2 + 1] : 0f,
-                quadHasUv2,
-                quadHasUv3 ? uv3In[order[2] * 2] : 0f,
-                quadHasUv3 ? uv3In[order[2] * 2 + 1] : 0f,
-                quadHasUv3,
                 col[order[2] * 4], col[order[2] * 4 + 1], col[order[2] * 4 + 2], col[order[2] * 4 + 3]);
         int v3 = registerVertex(
                 spriteHash,
@@ -102,12 +79,6 @@ final class PrimitiveData {
                 uv[order[3] * 2], uv[order[3] * 2 + 1],
                 uv1In != null ? uv1In[order[3] * 2] : 0f,
                 uv1In != null ? uv1In[order[3] * 2 + 1] : 0f,
-                quadHasUv2 ? uv2In[order[3] * 2] : 0f,
-                quadHasUv2 ? uv2In[order[3] * 2 + 1] : 0f,
-                quadHasUv2,
-                quadHasUv3 ? uv3In[order[3] * 2] : 0f,
-                quadHasUv3 ? uv3In[order[3] * 2 + 1] : 0f,
-                quadHasUv3,
                 col[order[3] * 4], col[order[3] * 4 + 1], col[order[3] * 4 + 2], col[order[3] * 4 + 3]);
 
         if (v0 == v1 || v1 == v2 || v2 == v3 || v0 == v3) {
@@ -157,24 +128,12 @@ final class PrimitiveData {
                        float px, float py, float pz,
                        float u, float v,
                        float u1, float v1,
-                       float u2, float v2,
-                       boolean vertexHasUv2,
-                       float u3, float v3,
-                       boolean vertexHasUv3,
                        float r, float g, float b, float a) {
-        if (vertexHasUv2) hasUv2 = true;
-        if (vertexHasUv3) hasUv3 = true;
-        
         VertexKey key = new VertexKey(
                 spriteHash, // Differentiate vertices by source texture
                 quantize(px), quantize(py), quantize(pz),
                 quantizeUV(u), quantizeUV(v),
                 quantizeUV(u1), quantizeUV(v1),
-                vertexHasUv2 ? quantizeUV(u2) : Integer.MIN_VALUE,
-                vertexHasUv2 ? quantizeUV(v2) : Integer.MIN_VALUE,
-                vertexHasUv2 ? 1 : 0,
-                quantizeUV(u3), quantizeUV(v3),
-                vertexHasUv3 ? 1 : 0,
                 quantizeColor(r), quantizeColor(g), quantizeColor(b), quantizeColor(a));
                 
         Integer existing = vertexLookup.get(key);
@@ -186,8 +145,6 @@ final class PrimitiveData {
         positions.add(px); positions.add(py); positions.add(pz);
         uv0.add(u); uv0.add(v);
         uv1.add(u1); uv1.add(v1);
-        uv2.add(u2); uv2.add(v2);
-        uv3.add(u3); uv3.add(v3);
         colors.add(r); colors.add(g); colors.add(b); colors.add(a);
         return idx;
     }
@@ -210,8 +167,8 @@ final class PrimitiveData {
     private int quantizeUV(float v) { return Math.round(v * 100000f); }
     private int quantizeColor(float v) { return Math.round(v * 100f); }
 
-    private record VertexKey(int spriteHash, int px, int py, int pz, int u, int v, int u1, int v1, int u2, int v2,
-                             int uv2Flag, int u3, int v3, int uv3Flag, int r, int g, int b, int a) {}
+    private record VertexKey(int spriteHash, int px, int py, int pz, int u, int v, int u1, int v1,
+                             int r, int g, int b, int a) {}
 
     private record QuadKey(int a, int b, int c, int d) {
         static QuadKey from(int v0, int v1, int v2, int v3) {

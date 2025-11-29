@@ -20,8 +20,6 @@ public final class BufferedSceneSink implements SceneSink {
                         float[] positions,
                         float[] uv0,
                         float[] uv1,
-                        float[] uv2,
-                        float[] uv3,
                         float[] normal,
                         float[] colors,
                         boolean doubleSided) {
@@ -32,8 +30,6 @@ public final class BufferedSceneSink implements SceneSink {
             positions,
             uv0,
             uv1,
-            uv2,
-            uv3,
             normal,
             colors,
             doubleSided
@@ -54,8 +50,6 @@ public final class BufferedSceneSink implements SceneSink {
                 q.positions,
                 q.uv0,
                 q.uv1,
-                q.uv2,
-                q.uv3,
                 q.normal,
                 q.colors,
                 q.doubleSided
@@ -79,8 +73,6 @@ public final class BufferedSceneSink implements SceneSink {
         float[] positions,
         float[] uv0,
         float[] uv1,
-        float[] uv2,
-        float[] uv3,
         float[] normal,
         float[] colors,
         boolean doubleSided

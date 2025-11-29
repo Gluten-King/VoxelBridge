@@ -38,7 +38,7 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     private record GltfQuadRecord(String materialGroupKey, String spriteKey, String overlaySpriteKey,
-                                 float[] positions, float[] uv0, float[] uv1, float[] uv2, float[] uv3,
+                                 float[] positions, float[] uv0, float[] uv1,
                                  float[] normal, float[] colors, boolean doubleSided) {}
 
     @Override
@@ -48,8 +48,6 @@ public final class GltfSceneBuilder implements SceneSink {
                         float[] positions,
                         float[] uv0,
                         float[] uv1,
-                        float[] uv2,
-                        float[] uv3,
                         float[] normal,
                         float[] colors,
                         boolean doubleSided) {
@@ -59,14 +57,10 @@ public final class GltfSceneBuilder implements SceneSink {
         boolean isBlockEntityTexture = spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:") || spriteKey.startsWith("base:");
         if (!isBlockEntityTexture) {
             TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
-            // Also register overlay texture if present
-            if (uv2 != null && overlaySpriteKey != null && !overlaySpriteKey.equals("voxelbridge:transparent")) {
-                TextureAtlasManager.registerTint(ctx, overlaySpriteKey, 0xFFFFFF);
-            }
         }
 
         synchronized (lock) {
-            bufferedQuads.add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, uv2, uv3, normal, colors, doubleSided));
+            bufferedQuads.add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, normal, colors, doubleSided));
         }
     }
 
@@ -90,16 +84,20 @@ public final class GltfSceneBuilder implements SceneSink {
         for (GltfQuadRecord q : bufferedQuads) {
             String spriteKey = q.spriteKey;
 
-            // Create a unique key for the GLTF Primitive: "minecraft:glass"
-            // All pages are merged into one mesh per material group
+            // Create a unique key for the GLTF Primitive
+            // Base quads: "minecraft:glass"
+            // Overlay quads: "minecraft:glass_overlay" (all overlays merged)
             String primitiveKey = q.materialGroupKey;
-            
+            if ("overlay".equals(q.overlaySpriteKey)) {
+                primitiveKey = q.materialGroupKey + "_overlay";
+            }
+
             PrimitiveData data = primitiveMap.computeIfAbsent(primitiveKey, k -> new PrimitiveData(q.materialGroupKey));
             
             // Use overlay sprite key from quad record
             String overlaySpriteKey = q.overlaySpriteKey;
 
-            int[] verts = data.registerQuad(spriteKey, overlaySpriteKey, q.positions, q.uv0, q.uv1, q.uv2, q.uv3, q.colors);
+            int[] verts = data.registerQuad(spriteKey, overlaySpriteKey, q.positions, q.uv0, q.uv1, q.colors);
             if (verts != null) {
                 data.doubleSided |= q.doubleSided;
                 data.addTriangle(verts[0], verts[1], verts[2]);
@@ -168,26 +166,6 @@ public final class GltfSceneBuilder implements SceneSink {
                 data.uv0.clear();
                 data.uv0.addAll(uvs);
 
-                // Remap UV2 (Overlay) if present
-                if (data.hasUv2) {
-                    float[] uvs2 = data.uv2.toArray();
-                    for (PrimitiveData.SpriteRange range : data.spriteRanges) {
-                        if (range.overlaySpriteKey() != null) {
-                            for (int i = 0; i < range.count(); i++) {
-                                int vIdx = range.startVertexIndex() + i;
-                                // FIX: Use overlay's original UV (from uvs2), not base UV
-                                float u = uvs2[vIdx * 2];
-                                float v = uvs2[vIdx * 2 + 1];
-
-                                float[] newUV = remapUV(range.overlaySpriteKey(), u, v);
-                                uvs2[vIdx * 2] = newUV[0];
-                                uvs2[vIdx * 2 + 1] = newUV[1];
-                            }
-                        }
-                    }
-                    data.uv2.clear();
-                    data.uv2.addAll(uvs2);
-                }
             }
 
             // 5. Write Buffers and Accessors
@@ -207,20 +185,6 @@ public final class GltfSceneBuilder implements SceneSink {
                 int off = chunk.writeFloatArray(data.uv1.toArray());
                 int view = addView(gltf, 0, off, data.uv1.size() * 4, 34962);
                 uv1Acc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
-            }
-
-            int uv2Acc = -1;
-            if (data.hasUv2) {
-                int off = chunk.writeFloatArray(data.uv2.toArray());
-                int view = addView(gltf, 0, off, data.uv2.size() * 4, 34962);
-                uv2Acc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
-            }
-
-            int uv3Acc = -1;
-            if (data.hasUv3) {
-                int off = chunk.writeFloatArray(data.uv3.toArray());
-                int view = addView(gltf, 0, off, data.uv3.size() * 4, 34962);
-                uv3Acc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
             }
 
             int idxOffset = chunk.writeIntArray(data.indices.toArray());
@@ -250,15 +214,6 @@ public final class GltfSceneBuilder implements SceneSink {
                 extras.put("voxelbridge:colormapTextures", colorMapIndices);
                 extras.put("voxelbridge:colormapUV", 1);
             }
-            if (uv2Acc >= 0) {
-                // Get overlay sprite key from the first sprite range
-                String overlayKey = data.spriteRanges.get(0).overlaySpriteKey();
-                if (overlayKey != null && !overlayKey.equals("voxelbridge:transparent")) {
-                    int overlayIndex = textureRegistry.ensureSpriteTexture(overlayKey, textures, images);
-                    extras.put("voxelbridge:overlayTexture", overlayIndex);
-                    extras.put("voxelbridge:overlayUV", 2);
-                }
-            }
             if (!extras.isEmpty()) material.setExtras(extras);
 
             materials.add(material);
@@ -270,8 +225,6 @@ public final class GltfSceneBuilder implements SceneSink {
             attrs.put("POSITION", posAcc);
             if (texAcc >= 0) attrs.put("TEXCOORD_0", texAcc);
             if (uv1Acc >= 0) attrs.put("TEXCOORD_1", uv1Acc);
-            if (uv2Acc >= 0) attrs.put("TEXCOORD_2", uv2Acc);
-            if (uv3Acc >= 0) attrs.put("TEXCOORD_3", uv3Acc);
             prim.setAttributes(attrs);
             prim.setIndices(idxAcc);
             prim.setMaterial(matIndex);
