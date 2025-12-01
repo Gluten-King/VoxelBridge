@@ -61,6 +61,8 @@ public final class ExportRuntimeConfig {
     private static AtlasSize atlasSize = AtlasSize.SIZE_8192;
     private static CoordinateMode coordinateMode = CoordinateMode.CENTERED;
     private static int exportThreadCount = Runtime.getRuntime().availableProcessors();
+    // 控制是否应用原版基于位置哈希的随机变换（草丛偏移、随机模型旋转等）
+    private static boolean vanillaRandomTransformEnabled = true;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -104,6 +106,14 @@ public final class ExportRuntimeConfig {
         } else {
             exportThreadCount = count;
         }
+    }
+
+    public static boolean isVanillaRandomTransformEnabled() {
+        return vanillaRandomTransformEnabled;
+    }
+
+    public static void setVanillaRandomTransformEnabled(boolean enabled) {
+        vanillaRandomTransformEnabled = enabled;
     }
 
 }

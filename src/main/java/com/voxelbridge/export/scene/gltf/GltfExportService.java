@@ -76,6 +76,7 @@ public final class GltfExportService {
         ctx.resetConsumedBlocks();
         ctx.setBlockEntityExportEnabled(true);
         ctx.setCoordinateMode(ExportRuntimeConfig.getCoordinateMode());
+        ctx.setVanillaRandomTransformEnabled(ExportRuntimeConfig.isVanillaRandomTransformEnabled());
 
         // Initialize reserved slots (must be done before any texture registration)
         TextureAtlasManager.initializeReservedSlots(ctx);

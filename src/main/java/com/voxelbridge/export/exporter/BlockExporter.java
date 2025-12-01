@@ -37,6 +37,7 @@ import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.extensions.IBakedModelExtension;
 import net.neoforged.neoforge.client.model.data.ModelData;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -58,6 +59,7 @@ public final class BlockExporter {
     private final Level level;
     private final ClientChunkCache chunkCache;
     private final SpriteFinder spriteFinder;
+    private final boolean vanillaRandomTransformEnabled;
     private BlockPos regionMin;
     private BlockPos regionMax;
     private double offsetX = 0;
@@ -128,6 +130,7 @@ public final class BlockExporter {
         this.level = level;
         this.chunkCache = (level instanceof ClientLevel cl) ? cl.getChunkSource() : null;
         this.spriteFinder = SpriteFinder.get(ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS));
+        this.vanillaRandomTransformEnabled = ctx.isVanillaRandomTransformEnabled();
     }
     public static void initializeCTMDebugLog(Path outDir) {
         if (!CTM_LOG_ENABLED) return;
@@ -182,6 +185,8 @@ public final class BlockExporter {
         overlayCacheCombined.clear();
         currentBlockIsCTM = false; // Reset for each block
         if (state.isAir()) return;
+        // 原版位置哈希随机偏移（草/蕨等），可开关
+        Vec3 randomOffset = vanillaRandomTransformEnabled ? state.getOffset(level, pos) : Vec3.ZERO;
         FluidState fluidState = state.getFluidState();
         if (fluidState != null && !fluidState.isEmpty()) {
             FluidExporter.sample(ctx, sceneSink, level, state, pos, fluidState, offsetX, offsetY, offsetZ, regionMin, regionMax);
@@ -255,7 +260,7 @@ public final class BlockExporter {
             }
             float[] positions = new float[12];
             float[] uv0 = new float[8];
-            extractVertices(quad, pos, positions, uv0, quad.getSprite());
+            extractVertices(quad, pos, positions, uv0, quad.getSprite(), randomOffset);
             long posHash = computePositionHash(positions);
             float[] normal = computeFaceNormal(positions);
             String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
@@ -296,7 +301,7 @@ public final class BlockExporter {
                         if (info.originalIndex > minIndex) {
                             // Find the actual BakedQuad from quads list
                             BakedQuad overlayQuad = quads.get(info.originalIndex);
-                            cacheOverlayQuad(state, pos, overlayQuad, true, overlayIdx++);
+                            cacheOverlayQuad(state, pos, overlayQuad, true, overlayIdx++, randomOffset);
                         }
                     }
                 }
@@ -306,7 +311,7 @@ public final class BlockExporter {
                 for (QuadInfo info : quadsAtPos) {
                     if (isVanillaOverlayQuad(info.sprite)) {
                         BakedQuad overlayQuad = quads.get(info.originalIndex);
-                        cacheOverlayQuad(state, pos, overlayQuad, false, overlayIdx++);
+                        cacheOverlayQuad(state, pos, overlayQuad, false, overlayIdx++, randomOffset);
                     }
                 }
             }
@@ -370,10 +375,10 @@ public final class BlockExporter {
                 }
                 // Regular transparent blocks (leaves, etc.): no culling
             }
-            processQuad(state, pos, quad, quadKeys, processedPositions, ctmPositionQuads, blockKey);
+            processQuad(state, pos, quad, quadKeys, processedPositions, ctmPositionQuads, blockKey, randomOffset);
         }
     }
-    private void processQuad(BlockState state, BlockPos pos, BakedQuad quad, Set<Long> quadKeys, Set<Long> processedPositions, Map<Long, List<QuadInfo>> ctmPositionQuads, String blockKey) {
+    private void processQuad(BlockState state, BlockPos pos, BakedQuad quad, Set<Long> quadKeys, Set<Long> processedPositions, Map<Long, List<QuadInfo>> ctmPositionQuads, String blockKey, Vec3 randomOffset) {
         TextureAtlasSprite sprite = quad.getSprite();
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
@@ -391,7 +396,7 @@ public final class BlockExporter {
         float[] positions = new float[12];
         float[] uv0 = new float[8];
         boolean doubleSided = state.getBlock() instanceof BushBlock;
-        extractVertices(quad, pos, positions, uv0, sprite);
+        extractVertices(quad, pos, positions, uv0, sprite, randomOffset);
         float[] normal = computeFaceNormal(positions);
         long quadKey = computeQuadKey(spriteKey, positions, normal, doubleSided, uv0);
         if (!quadKeys.add(quadKey)) return;
@@ -422,7 +427,7 @@ public final class BlockExporter {
             }
         }
     }
-    private void extractVertices(BakedQuad quad, BlockPos pos, float[] positions, float[] uv0, TextureAtlasSprite sprite) {
+    private void extractVertices(BakedQuad quad, BlockPos pos, float[] positions, float[] uv0, TextureAtlasSprite sprite, Vec3 randomOffset) {
         int[] verts = quad.getVertices();
         float u0 = sprite.getU0(), u1 = sprite.getU1(), v0 = sprite.getV0(), v1 = sprite.getV1();
         // Detect animated texture (height > width) and adjust v1 to first frame
@@ -449,9 +454,9 @@ public final class BlockExporter {
             float uu = Float.intBitsToFloat(verts[base+4]);
             float vv = Float.intBitsToFloat(verts[base+5]);
             // Use double precision to avoid precision loss in large scenes
-            double worldX = pos.getX() + vx + offsetX;
-            double worldY = pos.getY() + vy + offsetY;
-            double worldZ = pos.getZ() + vz + offsetZ;
+            double worldX = pos.getX() + vx + offsetX + (randomOffset != null ? randomOffset.x : 0);
+            double worldY = pos.getY() + vy + offsetY + (randomOffset != null ? randomOffset.y : 0);
+            double worldZ = pos.getZ() + vz + offsetZ + (randomOffset != null ? randomOffset.z : 0);
             positions[i*3] = (float)worldX;
             positions[i*3+1] = (float)worldY;
             positions[i*3+2] = (float)worldZ;
@@ -733,7 +738,7 @@ public final class BlockExporter {
         if (Math.abs(sizeU - UNIT_SIZE) > SIZE_TOLERANCE) return false;
         return true;
     }
-    private void cacheOverlayQuad(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex) {
+    private void cacheOverlayQuad(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset) {
         var sprite = quad.getSprite();
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
@@ -804,9 +809,9 @@ public final class BlockExporter {
 
         // Convert to world coordinates with double precision to avoid precision loss
         for (int i = 0; i < 4; i++) {
-            double worldX = pos.getX() + localPos[i * 3] + offsetX;
-            double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY;
-            double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ;
+            double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
+            double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
+            double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
             positions[i * 3] = (float)worldX;
             positions[i * 3 + 1] = (float)worldY;
             positions[i * 3 + 2] = (float)worldZ;

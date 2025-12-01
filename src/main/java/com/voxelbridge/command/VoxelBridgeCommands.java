@@ -90,6 +90,8 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas size: f" + ExportRuntimeConfig.getAtlasSize().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Coordinate mode: f" +
                     (ExportRuntimeConfig.getCoordinateMode() == CoordinateMode.CENTERED ? "centered" : "world")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  Vanilla random transform: f" +
+                    (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Export threads: f" + ExportRuntimeConfig.getExportThreadCount()));
             return 1;
         }));
@@ -186,6 +188,27 @@ public final class VoxelBridgeCommands {
                 .then(Commands.literal("world").executes(ctx -> {
                     ExportRuntimeConfig.setCoordinateMode(CoordinateMode.WORLD_ORIGIN);
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Coordinate mode -> World (preserve coordinates)"));
+                    return 1;
+                }))
+        );
+
+        root.then(Commands.literal("poshash")
+                .executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Vanilla random transform is currently f"
+                            + (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge poshash <on|off>"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   on : 应用原版基于位置哈希的随机偏移/变体"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   off: 关闭此偏移，保持旧行为"));
+                    return 1;
+                })
+                .then(Commands.literal("on").executes(ctx -> {
+                    ExportRuntimeConfig.setVanillaRandomTransformEnabled(true);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Vanilla random transform -> ON"));
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(ctx -> {
+                    ExportRuntimeConfig.setVanillaRandomTransformEnabled(false);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Vanilla random transform -> OFF"));
                     return 1;
                 }))
         );

@@ -39,6 +39,8 @@ public final class ExportContext {
 
     private boolean blockEntityExportEnabled = true;
     private CoordinateMode coordinateMode = CoordinateMode.CENTERED;
+    // 是否应用原版位置哈希随机变换（草偏移/随机变体旋转）
+    private boolean vanillaRandomTransformEnabled = true;
 
     public ExportContext(Minecraft mc) {
         this.mc = mc;
@@ -147,6 +149,14 @@ public final class ExportContext {
 
     public void setCoordinateMode(CoordinateMode mode) {
         this.coordinateMode = mode;
+    }
+
+    public boolean isVanillaRandomTransformEnabled() {
+        return vanillaRandomTransformEnabled;
+    }
+
+    public void setVanillaRandomTransformEnabled(boolean enabled) {
+        this.vanillaRandomTransformEnabled = enabled;
     }
 
     private static String safe(String s) {
