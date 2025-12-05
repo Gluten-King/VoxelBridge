@@ -249,6 +249,12 @@ public final class BlockExporter {
         // Generate Material Group Key for this block
         // Format: "minecraft:glass"
         String blockKey = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+
+        // Detect emissive blocks and add suffix for renderer identification
+        int lightLevel = state.getLightEmission();
+        if (lightLevel > 0) {
+            blockKey = blockKey + "_emissive";
+        }
         // PASS 1: Identify and cache all overlays (vanilla + CTM)
         Map<Long, List<QuadInfo>> ctmPositionQuads = new HashMap<>();
         // Collect geometric info for all quads (needed for CTM detection)
@@ -410,8 +416,20 @@ public final class BlockExporter {
 
         // This is a base quad - output it
         int argb = computeTintColor(state, pos, quad);
-        float[] uv1 = getColormapUV(argb);
-        float[] colors = whiteColor();
+
+        float[] uv1;
+        float[] colors;
+
+        if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+            // VertexColor模式：颜色写入COLOR_0
+            uv1 = null; // 不需要TEXCOORD_1
+            colors = computeVertexColors(argb, quad.getTintIndex() >= 0);
+        } else {
+            // ColorMap模式：使用TEXCOORD_1（现有行为）
+            uv1 = getColormapUV(argb);
+            colors = whiteColor();
+        }
+
         sceneSink.addQuad(blockKey, spriteKey, null, positions, uv0, uv1, normal, colors, doubleSided);
 
         // Check if we've already processed overlays for this position
@@ -423,7 +441,18 @@ public final class BlockExporter {
         List<OverlayQuadData> overlays = overlayCacheCombined.get(posHash);
         if (overlays != null && !overlays.isEmpty()) {
             for (OverlayQuadData overlay : overlays) {
-                sceneSink.addQuad(blockKey, overlay.spriteKey, "overlay", overlay.positions, overlay.uv, overlay.colorUv, overlay.normal, colors, doubleSided);
+                float[] overlayUv1;
+                float[] overlayColors;
+
+                if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+                    overlayUv1 = null;
+                    overlayColors = computeVertexColors(overlay.color, true); // overlay总是有颜色
+                } else {
+                    overlayUv1 = overlay.colorUv;
+                    overlayColors = colors; // 重用基础quad的白色
+                }
+
+                sceneSink.addQuad(blockKey, overlay.spriteKey, "overlay", overlay.positions, overlay.uv, overlayUv1, overlay.normal, overlayColors, doubleSided);
             }
         }
     }
@@ -1122,6 +1151,31 @@ public final class BlockExporter {
     }
     private float[] whiteColor() {
         return new float[]{1f,1f,1f,1f, 1f,1f,1f,1f, 1f,1f,1f,1f, 1f,1f,1f,1f};
+    }
+    /**
+     * 为VertexColor模式计算顶点颜色。
+     * @param argb 生物群系颜色（0xAARRGGBB格式）
+     * @param hasTint 该面是否有tint
+     * @return 16个float（RGBA * 4个顶点）
+     */
+    private float[] computeVertexColors(int argb, boolean hasTint) {
+        if (!hasTint || argb == 0xFFFFFFFF || argb == -1) {
+            return whiteColor(); // 无tint或白色tint
+        }
+
+        // 提取RGB分量（忽略alpha）
+        float r = ((argb >> 16) & 0xFF) / 255.0f;
+        float g = ((argb >> 8) & 0xFF) / 255.0f;
+        float b = (argb & 0xFF) / 255.0f;
+        float a = 1.0f; // 始终不透明
+
+        // 4个顶点使用相同颜色
+        return new float[]{
+            r, g, b, a,
+            r, g, b, a,
+            r, g, b, a,
+            r, g, b, a
+        };
     }
     private long computePositionHash(float[] positions) {
         Integer[] order = {0, 1, 2, 3};

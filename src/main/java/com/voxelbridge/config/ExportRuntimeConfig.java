@@ -57,8 +57,24 @@ public final class ExportRuntimeConfig {
         }
     }
 
+    public enum ColorMode {
+        COLORMAP("ColorMap (TEXCOORD_1 + texture)"),
+        VERTEX_COLOR("Vertex Color (COLOR_0 attribute)");
+
+        private final String description;
+
+        ColorMode(String description) {
+            this.description = description;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+    }
+
     private static AtlasMode atlasMode = AtlasMode.ATLAS;
     private static AtlasSize atlasSize = AtlasSize.SIZE_8192;
+    private static ColorMode colorMode = ColorMode.COLORMAP;
     private static CoordinateMode coordinateMode = CoordinateMode.CENTERED;
     private static int exportThreadCount = Runtime.getRuntime().availableProcessors();
     // 控制是否应用原版基于位置哈希的随机变换（草丛偏移、随机模型旋转等）
@@ -114,6 +130,16 @@ public final class ExportRuntimeConfig {
 
     public static void setVanillaRandomTransformEnabled(boolean enabled) {
         vanillaRandomTransformEnabled = enabled;
+    }
+
+    public static ColorMode getColorMode() {
+        return colorMode;
+    }
+
+    public static void setColorMode(ColorMode mode) {
+        if (mode != null) {
+            colorMode = mode;
+        }
     }
 
 }

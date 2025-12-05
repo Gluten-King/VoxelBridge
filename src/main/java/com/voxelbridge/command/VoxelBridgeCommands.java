@@ -90,6 +90,7 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas size: f" + ExportRuntimeConfig.getAtlasSize().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Coordinate mode: f" +
                     (ExportRuntimeConfig.getCoordinateMode() == CoordinateMode.CENTERED ? "centered" : "world")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  Color mode: f" + ExportRuntimeConfig.getColorMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Vanilla random transform: f" +
                     (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Export threads: f" + ExportRuntimeConfig.getExportThreadCount()));
@@ -209,6 +210,26 @@ public final class VoxelBridgeCommands {
                 .then(Commands.literal("off").executes(ctx -> {
                     ExportRuntimeConfig.setVanillaRandomTransformEnabled(false);
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Vanilla random transform -> OFF"));
+                    return 1;
+                }))
+        );
+
+        root.then(Commands.literal("colormode")
+                .executes(ctx -> {
+                    ExportRuntimeConfig.ColorMode current = ExportRuntimeConfig.getColorMode();
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Current color mode: f" + current.getDescription()));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   colormap: TEXCOORD_1 + colormap texture (default)"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   vertexcolor: COLOR_0 vertex attribute"));
+                    return 1;
+                })
+                .then(Commands.literal("colormap").executes(ctx -> {
+                    ExportRuntimeConfig.setColorMode(ExportRuntimeConfig.ColorMode.COLORMAP);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Color mode -> ColorMap"));
+                    return 1;
+                }))
+                .then(Commands.literal("vertexcolor").executes(ctx -> {
+                    ExportRuntimeConfig.setColorMode(ExportRuntimeConfig.ColorMode.VERTEX_COLOR);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Color mode -> Vertex Color"));
                     return 1;
                 }))
         );

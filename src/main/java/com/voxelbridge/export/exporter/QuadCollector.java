@@ -145,19 +145,27 @@ final class QuadCollector implements VertexConsumer {
 
         String spriteKey = SpriteKeyResolver.resolve(sprite);
         float[] normalizedUVs = normalizeUVs(uvs, sprite);
-        
-        // Compute colormap UV (biome tint)
-        float[] lut = ColorMapManager.remapColorUV(ctx, quadArgb); 
-        float u0 = lut[0], v0 = lut[1], u1 = lut[2], v1 = lut[3];
-        float du = u1 - u0, dv = v1 - v0;
-        
-        float[] uv1 = new float[8];
-        for (int i = 0; i < 4; i++) {
-            uv1[i * 2] = u0 + normalizedUVs[i * 2] * du;
-            uv1[i * 2 + 1] = v0 + normalizedUVs[i * 2 + 1] * dv;
+
+        float[] uv1;
+        float[] linearColors;
+
+        if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+            // VertexColor模式：颜色写入COLOR_0
+            uv1 = null;
+            linearColors = computeVertexColorsFromArgb(quadArgb);
+        } else {
+            // ColorMap模式：使用TEXCOORD_1
+            float[] lut = ColorMapManager.remapColorUV(ctx, quadArgb);
+            float u0 = lut[0], v0 = lut[1], u1 = lut[2], v1 = lut[3];
+            float du = u1 - u0, dv = v1 - v0;
+
+            uv1 = new float[8];
+            for (int i = 0; i < 4; i++) {
+                uv1[i * 2] = u0 + normalizedUVs[i * 2] * du;
+                uv1[i * 2 + 1] = v0 + normalizedUVs[i * 2 + 1] * dv;
+            }
+            linearColors = whiteColor();
         }
-        
-        float[] linearColors = whiteColor();
 
         // Send to sink (fluids typically do not have overlays)
         sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions.clone(), normalizedUVs, uv1, normal, linearColors, true);
@@ -296,4 +304,25 @@ final class QuadCollector implements VertexConsumer {
     
     private float clamp01(float v) { return v<0?0:(v>1?1:v); }
     private float[] whiteColor() { return new float[]{1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1}; }
+
+    /**
+     * 将ARGB颜色转换为顶点颜色数组（4个顶点，相同颜色）。
+     */
+    private float[] computeVertexColorsFromArgb(int argb) {
+        if (argb == 0xFFFFFFFF || argb == -1) {
+            return whiteColor();
+        }
+
+        float r = ((argb >> 16) & 0xFF) / 255.0f;
+        float g = ((argb >> 8) & 0xFF) / 255.0f;
+        float b = (argb & 0xFF) / 255.0f;
+        float a = 1.0f;
+
+        return new float[]{
+            r, g, b, a,
+            r, g, b, a,
+            r, g, b, a,
+            r, g, b, a
+        };
+    }
 }

@@ -85,10 +85,16 @@ public final class ColorMapManager {
 
     /**
      * Generates colormap pages.
-     * NOTE: Now always generates colormap, regardless of biome color mode.
+     * Skipped in VertexColor mode since colors are baked into COLOR_0 attribute.
      * White color is pre-reserved in slot 0 by initializeReservedSlots().
      */
     public static void generateColorMaps(ExportContext ctx, Path outDir) throws IOException {
+        // Skip colormap generation in VertexColor mode
+        if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+            ExportLogger.log("[ColorMap] Skipping colormap generation (VertexColor mode)");
+            return;
+        }
+
         Path dir = outDir.resolve("textures/colormap");
         Files.createDirectories(dir);
 

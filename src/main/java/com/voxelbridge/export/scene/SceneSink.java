@@ -18,9 +18,12 @@ public interface SceneSink {
      * @param overlaySpriteKey The overlay texture sprite key (or "voxelbridge:transparent" / null if no overlay).
      * @param positions        Vertex positions (x, y, z) * 4
      * @param uv0              Primary texture coordinates (TEXCOORD_0: u, v) * 4
-     * @param uv1              Colormap coordinates for biome tinting (TEXCOORD_1: u, v) * 4
+     * @param uv1              Colormap coordinates for biome tinting (TEXCOORD_1: u, v) * 4.
+     *                         May be null in VertexColor mode (colors baked into COLOR_0 instead).
      * @param normal           Face normal (x, y, z)
-     * @param colors           Vertex colors (r, g, b, a) * 4
+     * @param colors           Vertex colors (r, g, b, a) * 4.
+     *                         In ColorMap mode: typically all white (1,1,1,1).
+     *                         In VertexColor mode: contains actual biome tint colors.
      * @param doubleSided      Whether the face should be rendered double-sided
      */
     void addQuad(String materialGroupKey,

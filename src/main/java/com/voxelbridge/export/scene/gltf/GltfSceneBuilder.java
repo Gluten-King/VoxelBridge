@@ -60,7 +60,9 @@ public final class GltfSceneBuilder implements SceneSink {
         }
 
         synchronized (lock) {
-            bufferedQuads.add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, normal, colors, doubleSided));
+            // 标准化null uv1为空数组，保持存储一致性
+            float[] normalizedUv1 = (uv1 != null) ? uv1 : new float[8];
+            bufferedQuads.add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, normalizedUv1, normal, colors, doubleSided));
         }
     }
 
@@ -180,11 +182,20 @@ public final class GltfSceneBuilder implements SceneSink {
                 texAcc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
             }
             
+            // 只在UV1数据存在且非全零时创建TEXCOORD_1访问器
             int uv1Acc = -1;
-            if (!data.uv1.isEmpty()) {
+            if (!data.uv1.isEmpty() && hasNonZeroUV1(data)) {
                 int off = chunk.writeFloatArray(data.uv1.toArray());
                 int view = addView(gltf, 0, off, data.uv1.size() * 4, 34962);
                 uv1Acc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
+            }
+
+            // 当颜色数据非全白时添加COLOR_0属性
+            int colorAcc = -1;
+            if (!data.colors.isEmpty() && hasNonWhiteColors(data)) {
+                int off = chunk.writeFloatArray(data.colors.toArray());
+                int view = addView(gltf, 0, off, data.colors.size() * 4, 34962);
+                colorAcc = addAccessor(gltf, view, data.vertexCount, "VEC4", 5126, null, null);
             }
 
             int idxOffset = chunk.writeIntArray(data.indices.toArray());
@@ -225,6 +236,7 @@ public final class GltfSceneBuilder implements SceneSink {
             attrs.put("POSITION", posAcc);
             if (texAcc >= 0) attrs.put("TEXCOORD_0", texAcc);
             if (uv1Acc >= 0) attrs.put("TEXCOORD_1", uv1Acc);
+            if (colorAcc >= 0) attrs.put("COLOR_0", colorAcc);
             prim.setAttributes(attrs);
             prim.setIndices(idxAcc);
             prim.setMaterial(matIndex);
@@ -350,5 +362,36 @@ public final class GltfSceneBuilder implements SceneSink {
              indices.add(textures.size() - 1);
          }
          return indices;
+    }
+
+    /**
+     * 检查UV1数据是否包含任何非零值。
+     */
+    private boolean hasNonZeroUV1(PrimitiveData data) {
+        float[] uvs = data.uv1.toArray();
+        for (float v : uvs) {
+            if (Math.abs(v) > 1e-6f) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 检查颜色数据是否包含任何非白色值。
+     */
+    private boolean hasNonWhiteColors(PrimitiveData data) {
+        float[] cols = data.colors.toArray();
+        for (int i = 0; i < cols.length; i += 4) {
+            float r = cols[i];
+            float g = cols[i + 1];
+            float b = cols[i + 2];
+            float a = cols[i + 3];
+            if (Math.abs(r - 1.0f) > 1e-3f ||
+                Math.abs(g - 1.0f) > 1e-3f ||
+                Math.abs(b - 1.0f) > 1e-3f ||
+                Math.abs(a - 1.0f) > 1e-3f) {
+                return true;
+            }
+        }
+        return false;
     }
 }
