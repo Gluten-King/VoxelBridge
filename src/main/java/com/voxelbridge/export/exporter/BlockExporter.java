@@ -7,6 +7,7 @@ import com.voxelbridge.export.exporter.blockentity.BlockEntityExportResult;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
+import com.voxelbridge.util.ExportLogger;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import com.voxelbridge.modhandler.ModHandlerRegistry;
 // Fabric API imports
@@ -31,6 +32,7 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.RenderShape;
@@ -47,6 +49,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Path;
+import java.lang.reflect.Method;
 import java.util.*;
 
 /**
@@ -78,6 +81,13 @@ public final class BlockExporter {
     private static final boolean CTM_LOG_ENABLED = true;
     private static final float AXIS_NORMAL_DOT_MIN = 0.9999f;
     private static final float AXIS_COMPONENT_EPS = 1e-3f;
+    // Iris PBR reflection state
+    private boolean irisPbrReflectionInitialized = false;
+    private boolean irisPbrReflectionFailed = false;
+    private Class<?> irisSpriteExtClass;
+    private Method irisGetPbrHolder;
+    private Method irisHolderGetNormal;
+    private Method irisHolderGetSpecular;
     private static final float PLANE_EPS = 1e-4f;
     private static final float SIZE_EPS = 1e-4f;
     private static final float UNIT_SIZE = 1.0f;
@@ -388,6 +398,8 @@ public final class BlockExporter {
         TextureAtlasSprite sprite = quad.getSprite();
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
+        // Try to load PBR companion textures for individual export (normal/specular)
+        ensurePbrTexturesCached(sprite, spriteKey);
         // Handle dynamic textures (CTM, numbered sprites)
         boolean isDynamic = spriteKey.matches(".*\\d+$") || !ctx.getMaterialPaths().containsKey(spriteKey);
         if (isDynamic) {
@@ -1046,6 +1058,179 @@ public final class BlockExporter {
         int ny = (int) (y * 127.0f) & 0xFF;
         int nz = (int) (z * 127.0f) & 0xFF;
         return nx | (ny << 8) | (nz << 16);
+    }
+    /**
+     * Load and cache PBR companion textures (_n, _s) for the given spriteKey if present in resource packs.
+     * This is for individual export mode; atlas generation will reuse the cache contents later.
+     */
+    private void ensurePbrTexturesCached(TextureAtlasSprite sprite, String spriteKey) {
+        if (sprite == null || spriteKey == null) return;
+        // Only attempt if not already cached
+        String normalKey = spriteKey + "_n";
+        String specKey = spriteKey + "_s";
+        boolean needNormal = ctx.getCachedSpriteImage(normalKey) == null;
+        boolean needSpec = ctx.getCachedSpriteImage(specKey) == null;
+        if (!needNormal && !needSpec) return;
+
+        ResourceLocation baseName = sprite.contents().name();
+        if (needNormal) {
+            BufferedImage normal = tryLoadPbrResource(baseName, "_n");
+            if (normal != null) {
+                ctx.cacheSpriteImage(normalKey, normal);
+            } else {
+                tryLoadPbrFromIris(sprite, normalKey, true);
+            }
+        }
+        if (needSpec) {
+            BufferedImage spec = tryLoadPbrResource(baseName, "_s");
+            if (spec != null) {
+                ctx.cacheSpriteImage(specKey, spec);
+            } else {
+                tryLoadPbrFromIris(sprite, specKey, false);
+            }
+        }
+    }
+
+    /**
+     * Enhanced PBR texture lookup with fallback strategies.
+     * Handles non-standard resource pack layouts by trying multiple candidate paths.
+     */
+    private BufferedImage tryLoadPbrResource(ResourceLocation spriteName, String suffix) {
+        if (spriteName == null || suffix == null) return null;
+
+        String namespace = spriteName.getNamespace();
+        String path = spriteName.getPath();
+
+        // Build candidate paths in priority order
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+
+        // 1. Direct: same location as base texture
+        candidates.add(buildPbrPath(path, suffix));
+
+        // 2. If it's a CTM variant (ends with /digit), try parent directory
+        //    Example: block/ctm/stone/0 -> block/ctm/stone + suffix
+        if (path.matches(".*/\\d+$")) {
+            String parent = path.replaceAll("/\\d+$", "");
+            candidates.add(buildPbrPath(parent, suffix));
+        }
+
+        // 3. If it has _overlay suffix, try base name
+        //    Example: block/grass_block_overlay -> block/grass_block + suffix
+        if (path.contains("_overlay")) {
+            String base = path.replaceAll("_overlay$", "");
+            candidates.add(buildPbrPath(base, suffix));
+        }
+
+        // 4. If it has numeric suffix, try without it
+        //    Example: block/stone_47 -> block/stone + suffix
+        if (path.matches(".*_\\d+$")) {
+            String base = path.replaceAll("_\\d+$", "");
+            candidates.add(buildPbrPath(base, suffix));
+        }
+
+        // 5. If it's in a CTM/connected subdirectory, try base block texture
+        //    Example: block/ctm/stone/side -> block/stone + suffix
+        if (path.contains("/ctm/") || path.contains("/connected/")) {
+            String baseName = extractCtmBaseName(path);
+            if (baseName != null) {
+                candidates.add(buildPbrPath(baseName, suffix));
+            }
+        }
+
+        // Try each candidate
+        for (String candidate : candidates) {
+            ResourceLocation loc = ResourceLocation.fromNamespaceAndPath(namespace, candidate);
+            BufferedImage result = TextureLoader.readTexture(loc);
+            if (result != null) {
+                ExportLogger.log(String.format("[PBR] Found %s at: %s", suffix, loc));
+                return result;
+            }
+        }
+
+        ExportLogger.log(String.format("[PBR] Not found %s for: %s (tried %d paths)",
+            suffix, spriteName, candidates.size()));
+        return null;
+    }
+
+    /**
+     * Build PBR texture path, handling special cases.
+     */
+    private String buildPbrPath(String basePath, String suffix) {
+        // Handle optifine/cit paths
+        if (basePath.startsWith("optifine/cit/")) {
+            return basePath + suffix + ".png";
+        }
+
+        // If already has textures/ prefix, don't add it again
+        if (basePath.startsWith("textures/")) {
+            return basePath + suffix + ".png";
+        }
+
+        // Standard case: add textures/ prefix
+        return "textures/" + basePath + suffix + ".png";
+    }
+
+    /**
+     * Extract base block name from CTM path.
+     * Examples:
+     *   block/ctm/stone/0 -> block/stone
+     *   block/connected/glass/top -> block/glass
+     *   block/continuity/oak_planks/horizontal -> block/oak_planks
+     */
+    private String extractCtmBaseName(String path) {
+        // Match patterns: block/{ctm|connected|continuity}/NAME/...
+        String pattern = "^(block|entity)/(ctm|connected|continuity)/([^/]+)";
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
+        java.util.regex.Matcher m = p.matcher(path);
+
+        if (m.find()) {
+            String prefix = m.group(1);  // "block" or "entity"
+            String name = m.group(3);    // texture name
+            return prefix + "/" + name;
+        }
+
+        return null;
+    }
+
+    /**
+     * Attempt to load PBR sprites from Iris PBRSpriteHolder via reflection.
+     */
+    private void tryLoadPbrFromIris(TextureAtlasSprite baseSprite, String cacheKey, boolean normal) {
+        if (irisPbrReflectionFailed || baseSprite == null || cacheKey == null) return;
+        try {
+            initIrisPbrReflection();
+            if (irisPbrReflectionFailed || irisSpriteExtClass == null || irisGetPbrHolder == null) return;
+            Object contents = baseSprite.contents();
+            if (!irisSpriteExtClass.isInstance(contents)) return;
+            Object holder = irisGetPbrHolder.invoke(contents);
+            if (holder == null) return;
+            Object pbrSprite = normal ? irisHolderGetNormal.invoke(holder) : irisHolderGetSpecular.invoke(holder);
+            if (pbrSprite instanceof TextureAtlasSprite tas) {
+                BufferedImage img = TextureLoader.fromSprite(tas);
+                if (img != null) {
+                    ctx.cacheSpriteImage(cacheKey, img);
+                }
+            }
+        } catch (Throwable t) {
+            irisPbrReflectionFailed = true;
+        }
+    }
+
+    private void initIrisPbrReflection() {
+        if (irisPbrReflectionInitialized || irisPbrReflectionFailed) return;
+        synchronized (BlockExporter.class) {
+            if (irisPbrReflectionInitialized || irisPbrReflectionFailed) return;
+            try {
+                irisSpriteExtClass = Class.forName("net.irisshaders.iris.texture.pbr.SpriteContentsExtension");
+                Class<?> holderClass = Class.forName("net.irisshaders.iris.texture.pbr.PBRSpriteHolder");
+                irisGetPbrHolder = irisSpriteExtClass.getMethod("getPBRHolder");
+                irisHolderGetNormal = holderClass.getMethod("getNormalSprite");
+                irisHolderGetSpecular = holderClass.getMethod("getSpecularSprite");
+                irisPbrReflectionInitialized = true;
+            } catch (Throwable t) {
+                irisPbrReflectionFailed = true;
+            }
+        }
     }
     /**
      * Detects if a model uses CTM/connected textures.

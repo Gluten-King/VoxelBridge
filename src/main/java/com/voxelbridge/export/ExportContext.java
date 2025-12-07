@@ -135,6 +135,13 @@ public final class ExportContext {
         return spriteImageCache.get(spriteKey);
     }
 
+    /**
+     * Exposes keys of cached sprite images (including dynamically loaded CTM/PBR companions).
+     */
+    public Set<String> getCachedSpriteKeys() {
+        return spriteImageCache.keySet();
+    }
+
     public boolean isBlockEntityExportEnabled() {
         return blockEntityExportEnabled;
     }
