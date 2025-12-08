@@ -4,6 +4,7 @@ import com.voxelbridge.export.CoordinateMode;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityExporter;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityExportResult;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
@@ -60,6 +61,7 @@ public final class BlockExporter {
     private final ClientChunkCache chunkCache;
     private final SpriteFinder spriteFinder;
     private final boolean vanillaRandomTransformEnabled;
+    private final BlockEntityRenderBatch blockEntityBatch;
     private BlockPos regionMin;
     private BlockPos regionMax;
     private double offsetX = 0;
@@ -125,12 +127,16 @@ public final class BlockExporter {
         }
     }
     public BlockExporter(ExportContext ctx, SceneSink sceneSink, Level level) {
+        this(ctx, sceneSink, level, null);
+    }
+    public BlockExporter(ExportContext ctx, SceneSink sceneSink, Level level, BlockEntityRenderBatch blockEntityBatch) {
         this.ctx = ctx;
         this.sceneSink = sceneSink;
         this.level = level;
         this.chunkCache = (level instanceof ClientLevel cl) ? cl.getChunkSource() : null;
         this.spriteFinder = SpriteFinder.get(ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS));
         this.vanillaRandomTransformEnabled = ctx.isVanillaRandomTransformEnabled();
+        this.blockEntityBatch = blockEntityBatch;
     }
     public static void initializeCTMDebugLog(Path outDir) {
         if (!CTM_LOG_ENABLED) return;
@@ -193,7 +199,7 @@ public final class BlockExporter {
         }
         BlockEntity be = level.getBlockEntity(pos);
         if (be != null && ctx.isBlockEntityExportEnabled()) {
-            BlockEntityExportResult beResult = BlockEntityExporter.export(ctx, level, state, be, pos, sceneSink, offsetX, offsetY, offsetZ);
+            BlockEntityExportResult beResult = BlockEntityExporter.export(ctx, level, state, be, pos, sceneSink, offsetX, offsetY, offsetZ, blockEntityBatch);
             if (beResult.replaceBlockModel()) return;
         }
         if (state.getRenderShape() == RenderShape.INVISIBLE) return;

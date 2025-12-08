@@ -26,7 +26,8 @@ final class BannerBlockEntityHandler implements BlockEntityHandler {
         SceneSink sceneSink,
         double offsetX,
         double offsetY,
-        double offsetZ
+        double offsetZ,
+        BlockEntityRenderBatch renderBatch
     ) {
         if (!(blockEntity instanceof BannerBlockEntity banner)) {
             return BlockEntityExportResult.NOT_HANDLED;
@@ -66,7 +67,7 @@ final class BannerBlockEntityHandler implements BlockEntityHandler {
             };
         }
 
-        boolean rendered = BlockEntityRenderer.render(
+        BlockEntityRenderer.RenderTask task = BlockEntityRenderer.createTask(
             ctx,
             blockEntity,
             sceneSink,
@@ -75,6 +76,17 @@ final class BannerBlockEntityHandler implements BlockEntityHandler {
             pos.getZ() + offsetZ,
             overrideWrapper
         );
+
+        boolean rendered = false;
+        if (task != null) {
+            if (renderBatch != null) {
+                renderBatch.enqueue(task);
+                rendered = true;
+            } else {
+                task.run();
+                rendered = task.wasSuccessful();
+            }
+        }
 
         return rendered ? BlockEntityExportResult.RENDERED_KEEP_BLOCK : BlockEntityExportResult.NOT_HANDLED;
     }

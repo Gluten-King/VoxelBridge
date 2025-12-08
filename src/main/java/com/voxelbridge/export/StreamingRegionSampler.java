@@ -2,6 +2,7 @@ package com.voxelbridge.export;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.exporter.BlockExporter;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.export.scene.BufferedSceneSink;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.util.ExportLogger;
@@ -204,7 +205,8 @@ public final class StreamingRegionSampler {
 
             // ATOMIC EXPORT
             BufferedSceneSink buffer = new BufferedSceneSink();
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level);
+            BlockEntityRenderBatch beBatch = new BlockEntityRenderBatch();
+            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, beBatch);
             localSampler.setRegionBounds(regionMin, regionMax);
 
             int blockCount = 0;
@@ -228,10 +230,12 @@ public final class StreamingRegionSampler {
 
             if (localSampler.hadMissingNeighborAndReset()) {
                 ExportLogger.log("[Streaming] Chunk " + chunkPos + " incomplete (missing neighbors), retry.");
+                beBatch.clear();
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                 return;
             }
 
+            beBatch.flush(mc);
             if (!buffer.isEmpty()) {
                 buffer.flushTo(finalSink);
             }

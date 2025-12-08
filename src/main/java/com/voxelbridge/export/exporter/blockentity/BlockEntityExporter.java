@@ -49,7 +49,8 @@ public final class BlockEntityExporter {
         SceneSink sceneSink,
         double offsetX,
         double offsetY,
-        double offsetZ
+        double offsetZ,
+        BlockEntityRenderBatch renderBatch
     ) {
         if (blockEntity == null || !ctx.isBlockEntityExportEnabled()) {
             return BlockEntityExportResult.NOT_HANDLED;
@@ -59,7 +60,7 @@ public final class BlockEntityExporter {
         for (BlockEntityHandler handler : HANDLERS) {
             BlockEntityExportResult result = handler.export(
                 ctx, level, state, blockEntity, pos, sceneSink,
-                offsetX, offsetY, offsetZ
+                offsetX, offsetY, offsetZ, renderBatch
             );
 
             if (result.rendered()) {

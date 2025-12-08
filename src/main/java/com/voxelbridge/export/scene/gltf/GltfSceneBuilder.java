@@ -27,9 +27,13 @@ public final class GltfSceneBuilder implements SceneSink {
     private final Path texturesDir;
     private final TextureRegistry textureRegistry;
     
-    // Buffer all quads first, process them after atlas generation
-    private final List<GltfQuadRecord> bufferedQuads = new ArrayList<>();
-    private final Object lock = new Object();
+    // Thread-local buffers to avoid global locks during sampling
+    private final List<List<GltfQuadRecord>> allBuffers = Collections.synchronizedList(new ArrayList<>());
+    private final ThreadLocal<List<GltfQuadRecord>> threadLocalBuffer = ThreadLocal.withInitial(() -> {
+        List<GltfQuadRecord> list = new ArrayList<>();
+        allBuffers.add(list);
+        return list;
+    });
 
     public GltfSceneBuilder(ExportContext ctx, Path outDir) {
         this.ctx = ctx;
@@ -59,25 +63,42 @@ public final class GltfSceneBuilder implements SceneSink {
             TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
         }
 
-        synchronized (lock) {
-            // 标准化null uv1为空数组，保持存储一致性
-            float[] normalizedUv1 = (uv1 != null) ? uv1 : new float[8];
-            bufferedQuads.add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, normalizedUv1, normal, colors, doubleSided));
-        }
+        // 标准化null uv1为空数组，保持存储一致性
+        float[] normalizedUv1 = (uv1 != null) ? uv1 : new float[8];
+        threadLocalBuffer.get().add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, normalizedUv1, normal, colors, doubleSided));
     }
 
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
-        synchronized (lock) {
-            try {
-                return writeInternal(request);
-            } finally {
-                bufferedQuads.clear(); // avoid re-emitting old geometry and unbounded growth
-            }
+        List<GltfQuadRecord> quads = collectAllQuads();
+        try {
+            return writeInternal(request, quads);
+        } finally {
+            clearBuffers();
         }
     }
 
-    private Path writeInternal(SceneWriteRequest request) throws IOException {
+    private List<GltfQuadRecord> collectAllQuads() {
+        List<GltfQuadRecord> merged = new ArrayList<>();
+        synchronized (allBuffers) {
+            for (List<GltfQuadRecord> list : allBuffers) {
+                merged.addAll(list);
+            }
+        }
+        return merged;
+    }
+
+    private void clearBuffers() {
+        synchronized (allBuffers) {
+            for (List<GltfQuadRecord> list : allBuffers) {
+                list.clear();
+            }
+            allBuffers.clear();
+        }
+        threadLocalBuffer.remove();
+    }
+
+    private Path writeInternal(SceneWriteRequest request, List<GltfQuadRecord> quads) throws IOException {
         // 1. Generate Atlases first so we know UV mappings and Pages
         ColorMapManager.generateColorMaps(ctx, request.outputDir());
         // Note: Main atlas generation happens in GltfExportService, explicitly called BEFORE sceneSink.write()
@@ -87,7 +108,7 @@ public final class GltfSceneBuilder implements SceneSink {
         Map<String, PrimitiveData> primitiveMap = new LinkedHashMap<>();
 
         // 2. Sort quads into Primitives based on MaterialGroup only (ignore atlas pages)
-        for (GltfQuadRecord q : bufferedQuads) {
+        for (GltfQuadRecord q : quads) {
             String spriteKey = q.spriteKey;
 
             // Create a unique key for the GLTF Primitive

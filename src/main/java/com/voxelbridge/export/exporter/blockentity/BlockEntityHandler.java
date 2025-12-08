@@ -39,6 +39,7 @@ public interface BlockEntityHandler {
         SceneSink sceneSink,
         double offsetX,
         double offsetY,
-        double offsetZ
+        double offsetZ,
+        BlockEntityRenderBatch renderBatch
     );
 }

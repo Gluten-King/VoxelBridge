@@ -1,6 +1,7 @@
 package com.voxelbridge.export;
 
 import com.voxelbridge.export.exporter.BlockExporter;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.export.scene.BufferedSceneSink;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.util.ExportLogger;
@@ -117,7 +118,8 @@ public final class RegionSampler {
                 }
 
                 BufferedSceneSink buffer = new BufferedSceneSink();
-                BlockExporter localSampler = new BlockExporter(ctx, buffer, level);
+                BlockEntityRenderBatch beBatch = new BlockEntityRenderBatch();
+                BlockExporter localSampler = new BlockExporter(ctx, buffer, level, beBatch);
                 localSampler.setRegionBounds(regionMin, regionMax);
 
                 for (int x = fx0; x <= fx1; x++) {
@@ -134,6 +136,7 @@ public final class RegionSampler {
                     }
                 }
 
+                beBatch.flush(mc);
                 // In standard export, we flush best-effort even if neighbors missing
                 if (!buffer.isEmpty()) {
                     buffer.flushTo(sink);

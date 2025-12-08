@@ -26,17 +26,29 @@ public final class GenericBlockEntityHandler implements BlockEntityHandler {
         SceneSink sceneSink,
         double offsetX,
         double offsetY,
-        double offsetZ
+        double offsetZ,
+        BlockEntityRenderBatch renderBatch
     ) {
-        // Use the BlockEntityRenderer to capture geometry
-        boolean rendered = BlockEntityRenderer.render(
+        BlockEntityRenderer.RenderTask task = BlockEntityRenderer.createTask(
             ctx,
             blockEntity,
             sceneSink,
             pos.getX() + offsetX,
             pos.getY() + offsetY,
-            pos.getZ() + offsetZ
+            pos.getZ() + offsetZ,
+            null
         );
+
+        boolean rendered = false;
+        if (task != null) {
+            if (renderBatch != null) {
+                renderBatch.enqueue(task);
+                rendered = true; // scheduled for batch execution
+            } else {
+                task.run();
+                rendered = task.wasSuccessful();
+            }
+        }
 
         if (rendered) {
             // Keep the block model (BlockEntity adds to it, doesn't replace)

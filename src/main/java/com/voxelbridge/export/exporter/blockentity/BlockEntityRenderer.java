@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Renders BlockEntities and captures their geometry to a SceneSink.
@@ -72,8 +71,27 @@ public final class BlockEntityRenderer {
         double offsetZ,
         TextureOverrideMap overrides
     ) {
-        com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
+        RenderTask task = createTask(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides);
+        if (task == null) {
+            return false;
+        }
+        Minecraft.getInstance().executeBlocking(task);
+        return task.wasSuccessful();
+    }
 
+    /**
+     * Creates a render task that can be executed later (ideally on the main thread).
+     */
+    public static RenderTask createTask(
+        ExportContext ctx,
+        BlockEntity blockEntity,
+        SceneSink sceneSink,
+        double offsetX,
+        double offsetY,
+        double offsetZ,
+        TextureOverrideMap overrides
+    ) {
+        com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
         BlockEntityRenderDispatcher dispatcher = ctx.getMc().getBlockEntityRenderDispatcher();
         net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer =
             (net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity>)
@@ -81,52 +99,102 @@ public final class BlockEntityRenderer {
 
         if (renderer == null) {
             com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] No renderer found for: " + blockEntity.getClass().getSimpleName());
-            return false;
+            return null;
         }
 
         com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Found renderer: " + renderer.getClass().getSimpleName());
+        return new RenderTask(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer);
+    }
 
-        AtomicBoolean success = new AtomicBoolean(false);
-
-        // Execute rendering on main thread
-        Minecraft.getInstance().executeBlocking(() -> {
-            try {
-                if (overrides != null) {
-                    OVERRIDES.set(overrides);
-                }
-                PoseStack poseStack = new PoseStack();
-                poseStack.translate(offsetX, offsetY, offsetZ);
-
-                // Create capture buffer
-                CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, offsetX, offsetY, offsetZ, blockEntity);
-
-                // Render the block entity
-                renderer.render(
-                    blockEntity,
-                    0.0f,  // partialTick
-                    poseStack,
-                    captureBuffer,
-                    0xF000F0,  // packedLight (full bright)
-                    OverlayTexture.NO_OVERLAY
-                );
-
-                // Flush any remaining quads
-                captureBuffer.flush();
-
-                boolean hadGeometry = captureBuffer.hadGeometry();
-                success.set(hadGeometry);
-                com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Render complete: hadGeometry=" + hadGeometry);
-            } catch (Exception e) {
-                com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Render error: " + e.getMessage());
-                e.printStackTrace();
-            } finally {
-                OVERRIDES.remove();
+    /**
+     * Executes render logic without scheduling. Caller must run on the main thread.
+     */
+    private static boolean renderDirect(
+        ExportContext ctx,
+        BlockEntity blockEntity,
+        SceneSink sceneSink,
+        double offsetX,
+        double offsetY,
+        double offsetZ,
+        TextureOverrideMap overrides,
+        net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer
+    ) {
+        try {
+            if (overrides != null) {
+                OVERRIDES.set(overrides);
             }
-        });
+            PoseStack poseStack = new PoseStack();
+            poseStack.translate(offsetX, offsetY, offsetZ);
 
-        boolean result = success.get();
-        com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Final result: " + result);
-        return result;
+            CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, offsetX, offsetY, offsetZ, blockEntity);
+
+            renderer.render(
+                blockEntity,
+                0.0f,
+                poseStack,
+                captureBuffer,
+                0xF000F0,
+                OverlayTexture.NO_OVERLAY
+            );
+
+            captureBuffer.flush();
+
+            boolean hadGeometry = captureBuffer.hadGeometry();
+            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Render complete: hadGeometry=" + hadGeometry);
+            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Final result: " + hadGeometry);
+            return hadGeometry;
+        } catch (Exception e) {
+            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Render error: " + e.getMessage());
+            e.printStackTrace();
+            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Final result: false");
+            return false;
+        } finally {
+            OVERRIDES.remove();
+        }
+    }
+
+    /**
+     * Task wrapper for batch execution.
+     */
+    public static final class RenderTask implements Runnable {
+        private final ExportContext ctx;
+        private final BlockEntity blockEntity;
+        private final SceneSink sceneSink;
+        private final double offsetX;
+        private final double offsetY;
+        private final double offsetZ;
+        private final TextureOverrideMap overrides;
+        private final net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer;
+        private boolean success;
+
+        RenderTask(
+            ExportContext ctx,
+            BlockEntity blockEntity,
+            SceneSink sceneSink,
+            double offsetX,
+            double offsetY,
+            double offsetZ,
+            TextureOverrideMap overrides,
+            net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer
+        ) {
+            this.ctx = ctx;
+            this.blockEntity = blockEntity;
+            this.sceneSink = sceneSink;
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+            this.offsetZ = offsetZ;
+            this.overrides = overrides;
+            this.renderer = renderer;
+        }
+
+        @Override
+        public void run() {
+            this.success = renderDirect(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer);
+        }
+
+        public boolean wasSuccessful() {
+            return success;
+        }
     }
 
     /**
