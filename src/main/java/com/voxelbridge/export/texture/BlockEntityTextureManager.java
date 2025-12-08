@@ -13,7 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 
@@ -25,14 +25,14 @@ import java.nio.file.StandardOpenOption;
 @OnlyIn(Dist.CLIENT)
 public final class BlockEntityTextureManager {
 
-    // Cache loaded textures to avoid reloading
-    private static final Map<ResourceLocation, BufferedImage> textureCache = new ConcurrentHashMap<>();
-    // Track spriteKey -> resolved texture location for exporting
-    private static final Map<String, ResourceLocation> registeredTextures = new ConcurrentHashMap<>();
-    private static final int DEFAULT_NORMAL = 0xFF8080FF; // 128/128/255/255
-    private static final int DEFAULT_SPEC = 0x00000000;   // 0/0/0/0
+    private static final int DEFAULT_NORMAL = PbrTextureHelper.DEFAULT_NORMAL_COLOR;
+    private static final int DEFAULT_SPEC = PbrTextureHelper.DEFAULT_SPECULAR_COLOR;
 
     private BlockEntityTextureManager() {}
+
+    private static TextureRepository repo(ExportContext ctx) {
+        return ctx.getTextureRepository();
+    }
 
     /**
      * Registers a generated texture (e.g., baked banner) directly.
@@ -45,8 +45,8 @@ public final class BlockEntityTextureManager {
             : "blockentity:" + handle.spriteKey();
         ResourceLocation loc = handle.textureLocation();
 
-        textureCache.put(loc, image);
-        registeredTextures.put(spriteKey, loc);
+        TextureRepository repo = repo(ctx);
+        repo.put(loc, spriteKey, image);
 
         ctx.getGeneratedEntityTextures().put(spriteKey, image);
         ctx.getMaterialPaths().putIfAbsent(spriteKey, handle.relativePath());
@@ -70,7 +70,8 @@ public final class BlockEntityTextureManager {
 
         ResourceLocation pngLocation = ensurePngLocation(textureLoc);
 
-        BufferedImage texture = textureCache.computeIfAbsent(pngLocation, loc -> {
+        TextureRepository repo = repo(ctx);
+        BufferedImage texture = repo.computeIfAbsent(pngLocation, loc -> {
             BufferedImage img = loadTextureFromResolved(textureRes, loc);
             if (img != null) {
                 ExportLogger.log("[BlockEntityTex] Loaded texture: " + loc + " (" + img.getWidth() + "x" + img.getHeight() + ")");
@@ -82,7 +83,7 @@ public final class BlockEntityTextureManager {
 
         // Register the texture with the export context (same as old EntityTextureManager)
         if (texture != null) {
-            registeredTextures.put(spriteKey, pngLocation);
+            repo.put(pngLocation, spriteKey, texture);
 
             // Register material path (EntityTextureManager line 29-30)
             String relativePath = ctx.getMaterialPaths()
@@ -97,8 +98,7 @@ public final class BlockEntityTextureManager {
             // PBR companions (_n/_s) if present in RP
             var pbr = com.voxelbridge.export.texture.PbrTextureHelper.ensurePbrCached(ctx, spriteKey, textureRes.sprite());
             if (pbr.normalImage() != null && pbr.normalLocation() != null) {
-                registeredTextures.put(normalKey(spriteKey), pbr.normalLocation());
-                textureCache.put(pbr.normalLocation(), pbr.normalImage());
+                repo.put(pbr.normalLocation(), normalKey(spriteKey), pbr.normalImage());
                 ctx.getMaterialPaths().putIfAbsent(normalKey(spriteKey),
                     "entity_textures/" + safe(textureLoc.toString()) + "_n.png");
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
@@ -108,8 +108,7 @@ public final class BlockEntityTextureManager {
                 logBerProbe(ctx, "[BER-PBR] direct normal miss for " + spriteKey);
             }
             if (pbr.specularImage() != null && pbr.specularLocation() != null) {
-                registeredTextures.put(specKey(spriteKey), pbr.specularLocation());
-                textureCache.put(pbr.specularLocation(), pbr.specularImage());
+                repo.put(pbr.specularLocation(), specKey(spriteKey), pbr.specularImage());
                 ctx.getMaterialPaths().putIfAbsent(specKey(spriteKey),
                     "entity_textures/" + safe(textureLoc.toString()) + "_s.png");
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
@@ -126,6 +125,8 @@ public final class BlockEntityTextureManager {
 
             // Final fallback: try sibling files next to the base texture (e.g., textures/entity/chest/normal_n.png)
             trySiblingPbr(ctx, textureLoc, spriteKey);
+        } else {
+            throw new IllegalStateException("Failed to load BlockEntity texture: " + textureLoc);
         }
 
         return spriteKey;
@@ -135,22 +136,22 @@ public final class BlockEntityTextureManager {
      * Loads a BlockEntity texture from Minecraft's resource system.
      * This must be called to populate the texture cache before atlas generation.
      */
-    public static BufferedImage getTexture(ResourceLocation location) {
-        return textureCache.get(location);
+    public static BufferedImage getTexture(ExportContext ctx, ResourceLocation location) {
+        return repo(ctx).get(location);
     }
 
     /**
      * Checks if a texture is loaded.
      */
-    public static boolean hasTexture(ResourceLocation location) {
-        return textureCache.containsKey(location);
+    public static boolean hasTexture(ExportContext ctx, ResourceLocation location) {
+        return repo(ctx).contains(location);
     }
 
     /**
      * Returns the registered PNG location for a spriteKey, if any.
      */
-    public static ResourceLocation getRegisteredLocation(String spriteKey) {
-        return registeredTextures.get(spriteKey);
+    public static ResourceLocation getRegisteredLocation(ExportContext ctx, String spriteKey) {
+        return repo(ctx).getRegisteredLocation(spriteKey);
     }
 
     /**
@@ -165,6 +166,7 @@ public final class BlockEntityTextureManager {
      * Same logic as old EntityTextureManager.dumpAll()
      */
     public static void exportTextures(ExportContext ctx, Path outDir) throws java.io.IOException {
+        Map<String, ResourceLocation> registeredTextures = repo(ctx).getRegisteredTextures();
         if (registeredTextures.isEmpty()) {
             return;
         }
@@ -190,7 +192,7 @@ public final class BlockEntityTextureManager {
             }
 
             // Get texture from cache
-            BufferedImage img = textureCache.get(pngLocation);
+            BufferedImage img = repo(ctx).get(pngLocation);
             if (img != null) {
                 // Write cached texture
                 java.nio.file.Files.createDirectories(target.getParent());
@@ -270,6 +272,7 @@ public final class BlockEntityTextureManager {
      * This must be called after exportTextures() and before glTF write.
      */
     public static void packIntoAtlas(ExportContext ctx, Path outDir) throws java.io.IOException {
+        Map<String, ResourceLocation> registeredTextures = repo(ctx).getRegisteredTextures();
         if (registeredTextures.isEmpty()) {
             ExportLogger.log("[BlockEntityTex] No textures to pack into atlas");
             return;
@@ -282,21 +285,20 @@ public final class BlockEntityTextureManager {
         java.nio.file.Files.createDirectories(atlasDir);
 
         // Pack base channel to determine placements
-        com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker packer =
-            new com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker(atlasSize, false);
+        TextureAtlasPacker packer = new TextureAtlasPacker(atlasSize, false);
         for (Map.Entry<String, ResourceLocation> entry : registeredTextures.entrySet()) {
             String spriteKey = entry.getKey();
             if (spriteKey.endsWith("_n") || spriteKey.endsWith("_s")) continue;
-            BufferedImage image = textureCache.get(entry.getValue());
+            BufferedImage image = repo(ctx).get(entry.getValue());
             if (image == null) continue;
             packer.addTexture(spriteKey, image);
         }
-        Map<String, com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker.Placement> basePlacements =
+        Map<String, TextureAtlasPacker.Placement> basePlacements =
             packer.pack(atlasDir, "blockentity_atlas_");
 
         // Record base placements and material paths
         Map<Integer, Integer> pageToUdim = new java.util.HashMap<>();
-        for (Map.Entry<String, com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker.Placement> entry : basePlacements.entrySet()) {
+        for (Map.Entry<String, TextureAtlasPacker.Placement> entry : basePlacements.entrySet()) {
             String spriteKey = entry.getKey();
             var p = entry.getValue();
             pageToUdim.putIfAbsent(p.page(), p.udim());
@@ -308,17 +310,79 @@ public final class BlockEntityTextureManager {
             ctx.getMaterialPaths().put(spriteKey, atlasPath);
         }
 
-        // Generate PBR channels aligned to base placements
-        packChannel(ctx, atlasDir, atlasSize, "blockentity_atlas_n_", Channel.NORMAL, basePlacements, pageToUdim);
-        packChannel(ctx, atlasDir, atlasSize, "blockentity_atlas_s_", Channel.SPECULAR, basePlacements, pageToUdim);
+        // Generate PBR channels aligned to base placements using PbrAtlasWriter
+        Set<Integer> usedPages = new java.util.HashSet<>(pageToUdim.keySet());
+
+        // Generate normal map atlas
+        PbrAtlasWriter.PbrAtlasConfig normalConfig = new PbrAtlasWriter.PbrAtlasConfig(
+            atlasDir, atlasSize, "blockentity_atlas_n_",
+            PbrTextureHelper.DEFAULT_NORMAL_COLOR, usedPages, pageToUdim
+        );
+        Map<String, PbrAtlasWriter.Placement> normalPlacements = adaptPlacements(basePlacements);
+        PbrAtlasWriter.generatePbrAtlas(normalConfig, normalPlacements, spriteKey -> {
+            String normalKey = spriteKey + "_n";
+            ResourceLocation loc = registeredTextures.get(normalKey);
+            BufferedImage img = loc != null ? repo(ctx).get(loc) : null;
+            if (img != null) {
+                // Update material paths for normal textures
+                int page = basePlacements.get(spriteKey).page();
+                int udim = pageToUdim.getOrDefault(page, page + 1001);
+                String normalPath = "textures/blockentity_atlas/blockentity_atlas_n_" + udim + ".png";
+                ctx.getMaterialPaths().put(normalKey, normalPath);
+                ctx.getEntityTextures().putIfAbsent(normalKey,
+                    new ExportContext.EntityTexture(loc, img.getWidth(), img.getHeight()));
+                ctx.getBlockEntityAtlasPlacements().put(normalKey,
+                    new ExportContext.BlockEntityAtlasPlacement(page, udim,
+                        basePlacements.get(spriteKey).x(), basePlacements.get(spriteKey).y(),
+                        basePlacements.get(spriteKey).width(), basePlacements.get(spriteKey).height(), atlasSize));
+            }
+            return img;
+        });
+
+        // Generate specular map atlas
+        PbrAtlasWriter.PbrAtlasConfig specConfig = new PbrAtlasWriter.PbrAtlasConfig(
+            atlasDir, atlasSize, "blockentity_atlas_s_",
+            PbrTextureHelper.DEFAULT_SPECULAR_COLOR, usedPages, pageToUdim
+        );
+        Map<String, PbrAtlasWriter.Placement> specPlacements = adaptPlacements(basePlacements);
+        PbrAtlasWriter.generatePbrAtlas(specConfig, specPlacements, spriteKey -> {
+            String specKey = spriteKey + "_s";
+            ResourceLocation loc = registeredTextures.get(specKey);
+            BufferedImage img = loc != null ? repo(ctx).get(loc) : null;
+            if (img != null) {
+                // Update material paths for specular textures
+                int page = basePlacements.get(spriteKey).page();
+                int udim = pageToUdim.getOrDefault(page, page + 1001);
+                String specPath = "textures/blockentity_atlas/blockentity_atlas_s_" + udim + ".png";
+                ctx.getMaterialPaths().put(specKey, specPath);
+                ctx.getEntityTextures().putIfAbsent(specKey,
+                    new ExportContext.EntityTexture(loc, img.getWidth(), img.getHeight()));
+                ctx.getBlockEntityAtlasPlacements().put(specKey,
+                    new ExportContext.BlockEntityAtlasPlacement(page, udim,
+                        basePlacements.get(spriteKey).x(), basePlacements.get(spriteKey).y(),
+                        basePlacements.get(spriteKey).width(), basePlacements.get(spriteKey).height(), atlasSize));
+            }
+            return img;
+        });
+    }
+
+    /**
+     * Adapts TextureAtlasPacker.Placement to PbrAtlasWriter.Placement interface.
+     */
+    private static Map<String, PbrAtlasWriter.Placement> adaptPlacements(
+            Map<String, TextureAtlasPacker.Placement> placements) {
+        Map<String, PbrAtlasWriter.Placement> adapted = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, TextureAtlasPacker.Placement> entry : placements.entrySet()) {
+            adapted.put(entry.getKey(), new PbrAtlasWriter.PackerPlacementAdapter(entry.getValue()));
+        }
+        return adapted;
     }
 
     /**
      * Clears the texture cache (call at start of each export).
      */
-    public static void clear() {
-        textureCache.clear();
-        registeredTextures.clear();
+    public static void clear(ExportContext ctx) {
+        repo(ctx).clear();
     }
 
     private static String normalKey(String baseKey) {
@@ -327,58 +391,6 @@ public final class BlockEntityTextureManager {
 
     private static String specKey(String baseKey) {
         return baseKey + "_s";
-    }
-
-    private enum Channel { BASE, NORMAL, SPECULAR }
-
-    private static void packChannel(ExportContext ctx, Path atlasDir, int atlasSize, String prefix, Channel channel,
-                                    Map<String, com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker.Placement> basePlacements,
-                                    Map<Integer, Integer> pageToUdim) throws java.io.IOException {
-        int fillColor = switch (channel) {
-            case NORMAL -> DEFAULT_NORMAL;
-            case SPECULAR -> DEFAULT_SPEC;
-            default -> 0x00000000;
-        };
-
-        // Build page images aligned to base placements
-        java.util.Map<Integer, BufferedImage> pageImages = new java.util.HashMap<>();
-
-        for (Map.Entry<String, com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker.Placement> entry : basePlacements.entrySet()) {
-            String baseKey = entry.getKey();
-            com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker.Placement p = entry.getValue();
-            String targetKey = switch (channel) {
-                case NORMAL -> normalKey(baseKey);
-                case SPECULAR -> specKey(baseKey);
-                default -> baseKey;
-            };
-
-            ResourceLocation targetLoc = registeredTextures.get(targetKey);
-            BufferedImage src = targetLoc != null ? textureCache.get(targetLoc) : null;
-            // If PBR channel missing or not cached, use default fill (do NOT fall back to albedo)
-            if (src == null) {
-                src = filled(p.width(), p.height(), fillColor);
-            }
-
-            BufferedImage page = pageImages.computeIfAbsent(p.page(), k -> filled(atlasSize, atlasSize, fillColor));
-            page.getGraphics().drawImage(src, p.x(), p.y(), null);
-
-            // Update context/material paths for this channel
-            int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
-            String atlasPath = "textures/blockentity_atlas/" + prefix + udim + ".png";
-            ctx.getMaterialPaths().put(targetKey, atlasPath);
-            ctx.getEntityTextures().putIfAbsent(targetKey,
-                new ExportContext.EntityTexture(ResourceLocation.fromNamespaceAndPath("voxelbridge", atlasPath), src.getWidth(), src.getHeight()));
-            ctx.getBlockEntityAtlasPlacements().put(targetKey,
-                new ExportContext.BlockEntityAtlasPlacement(p.page(), udim, p.x(), p.y(), p.width(), p.height(), atlasSize));
-        }
-
-        // Write filled pages
-        for (Map.Entry<Integer, BufferedImage> e : pageImages.entrySet()) {
-            int page = e.getKey();
-            int udim = pageToUdim.getOrDefault(page, page + 1001);
-            Path target = atlasDir.resolve(prefix + udim + ".png");
-            javax.imageio.ImageIO.write(e.getValue(), "png", target.toFile());
-        }
     }
 
     private static void logBerProbe(ExportContext ctx, String msg) {
@@ -417,9 +429,7 @@ public final class BlockEntityTextureManager {
             BufferedImage cropped = crop(atlasImg, u0, u1, v0, v1);
             if (cropped != null) {
                 ResourceLocation genLoc = generatedLocation(normalKey(spriteKey));
-                textureCache.put(genLoc, cropped);
-                registeredTextures.put(normalKey(spriteKey), genLoc);
-                ctx.cacheSpriteImage(normalKey(spriteKey), cropped);
+                repo(ctx).put(genLoc, normalKey(spriteKey), cropped);
                 ctx.getMaterialPaths().putIfAbsent(normalKey(spriteKey),
                     "entity_textures/" + safe(spriteKey) + "_n.png");
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
@@ -437,9 +447,7 @@ public final class BlockEntityTextureManager {
             BufferedImage cropped = crop(atlasImg, u0, u1, v0, v1);
             if (cropped != null) {
                 ResourceLocation genLoc = generatedLocation(specKey(spriteKey));
-                textureCache.put(genLoc, cropped);
-                registeredTextures.put(specKey(spriteKey), genLoc);
-                ctx.cacheSpriteImage(specKey(spriteKey), cropped);
+                repo(ctx).put(genLoc, specKey(spriteKey), cropped);
                 ctx.getMaterialPaths().putIfAbsent(specKey(spriteKey),
                     "entity_textures/" + safe(spriteKey) + "_s.png");
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
@@ -483,9 +491,7 @@ public final class BlockEntityTextureManager {
             logBerProbe(ctx, "[BER-PBR] sibling normal try " + sibNormal + " for " + spriteKey);
             BufferedImage img = TextureLoader.readTexture(sibNormal);
             if (img != null) {
-                textureCache.put(sibNormal, img);
-                registeredTextures.put(normalKey(spriteKey), sibNormal);
-                ctx.cacheSpriteImage(normalKey(spriteKey), img);
+                repo(ctx).put(sibNormal, normalKey(spriteKey), img);
                 ctx.getMaterialPaths().putIfAbsent(normalKey(spriteKey),
                     "entity_textures/" + safe(spriteKey) + "_n.png");
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
@@ -501,9 +507,7 @@ public final class BlockEntityTextureManager {
             logBerProbe(ctx, "[BER-PBR] sibling spec try " + sibSpec + " for " + spriteKey);
             BufferedImage img = TextureLoader.readTexture(sibSpec);
             if (img != null) {
-                textureCache.put(sibSpec, img);
-                registeredTextures.put(specKey(spriteKey), sibSpec);
-                ctx.cacheSpriteImage(specKey(spriteKey), img);
+                repo(ctx).put(sibSpec, specKey(spriteKey), img);
                 ctx.getMaterialPaths().putIfAbsent(specKey(spriteKey),
                     "entity_textures/" + safe(spriteKey) + "_s.png");
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
@@ -532,16 +536,6 @@ public final class BlockEntityTextureManager {
             ExportLogger.log("[BlockEntityTex][WARN] Crop failed: " + e.getMessage());
             return null;
         }
-    }
-
-    private static BufferedImage filled(int w, int h, int argb) {
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        int[] row = new int[w];
-        java.util.Arrays.fill(row, argb);
-        for (int y = 0; y < h; y++) {
-            img.setRGB(0, y, w, 1, row, 0, w);
-        }
-        return img;
     }
 
     private static String safe(String s) {

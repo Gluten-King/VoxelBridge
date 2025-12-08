@@ -17,6 +17,12 @@ import java.awt.image.BufferedImage;
 public final class PbrTextureHelper {
     private PbrTextureHelper() {}
 
+    /**
+     * Default PBR color values used when actual PBR textures are missing.
+     */
+    public static final int DEFAULT_NORMAL_COLOR = 0xFF8080FF;   // RGB(128, 128, 255) - neutral normal map
+    public static final int DEFAULT_SPECULAR_COLOR = 0x00000000; // Transparent black - no specularity
+
     public record PbrResult(BufferedImage normalImage, BufferedImage specularImage,
                             ResourceLocation normalLocation, ResourceLocation specularLocation) {}
 

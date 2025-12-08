@@ -69,7 +69,11 @@ public final class GltfSceneBuilder implements SceneSink {
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
         synchronized (lock) {
-            return writeInternal(request);
+            try {
+                return writeInternal(request);
+            } finally {
+                bufferedQuads.clear(); // avoid re-emitting old geometry and unbounded growth
+            }
         }
     }
 
@@ -148,6 +152,10 @@ public final class GltfSceneBuilder implements SceneSink {
             PrimitiveData data = entry.getValue();
             
             if (data.vertexCount == 0) continue;
+            if (data.spriteRanges.isEmpty()) {
+                ExportLogger.log(String.format("[GLTF][WARN] primitive '%s' has no sprite ranges; skipping to avoid invalid UV remap", primitiveKey));
+                continue;
+            }
 
             // 4. Remap UVs using SpriteRanges
             if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {

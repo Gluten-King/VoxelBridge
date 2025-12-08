@@ -73,6 +73,7 @@ public final class ExportService {
         }
 
         ctx.resetConsumedBlocks();
+        ctx.clearTextureState();
         ExportLogger.log("Tint scan complete - scanned " + scanned + " chunks");
         System.out.println("[VoxelBridge] Tint scan complete");
     }

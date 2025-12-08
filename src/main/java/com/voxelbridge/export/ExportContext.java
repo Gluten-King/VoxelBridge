@@ -7,6 +7,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+import com.voxelbridge.export.texture.TextureRepository;
+
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.util.Map;
@@ -31,15 +33,11 @@ public final class ExportContext {
     private final AtomicInteger nextColorSlot = new AtomicInteger(0); // Will be set to 1 after white is reserved in slot 0
     private final Set<Long> consumedBlocks = ConcurrentHashMap.newKeySet();
     private final Map<String, EntityTexture> entityTextures = new ConcurrentHashMap<>();
-    private final Map<String, BufferedImage> generatedEntityTextures = new ConcurrentHashMap<>();
     private final Map<String, BlockEntityAtlasPlacement> blockEntityAtlasPlacements = new ConcurrentHashMap<>();
-
-    // 用于缓存从 Sprite 对象直接提取的图像（用于 CTM 等动态纹理）
-    private final Map<String, BufferedImage> spriteImageCache = new ConcurrentHashMap<>();
+    private final TextureRepository textureRepository = new TextureRepository();
 
     private boolean blockEntityExportEnabled = true;
     private CoordinateMode coordinateMode = CoordinateMode.CENTERED;
-    // 是否应用原版位置哈希随机变换（草偏移/随机变体旋转）
     private boolean vanillaRandomTransformEnabled = true;
 
     public ExportContext(Minecraft mc) {
@@ -99,8 +97,6 @@ public final class ExportContext {
 
     public void resetConsumedBlocks() {
         consumedBlocks.clear();
-        // [FIX] 重置时也清理缓存，防止内存泄漏
-        spriteImageCache.clear();
     }
 
     public Map<String, EntityTexture> getEntityTextures() {
@@ -111,35 +107,45 @@ public final class ExportContext {
         return blockEntityAtlasPlacements;
     }
 
+    public TextureRepository getTextureRepository() {
+        return textureRepository;
+    }
+
+    /**
+     * Clears all texture-related state to isolate export sessions.
+     */
+    public void clearTextureState() {
+        textureRepository.clear();
+        materialPaths.clear();
+        blockEntityAtlasPlacements.clear();
+        entityTextures.clear();
+    }
+
     public void clearEntityTextures() {
         entityTextures.clear();
-        generatedEntityTextures.clear();
     }
 
     public Map<String, BufferedImage> getGeneratedEntityTextures() {
-        return generatedEntityTextures;
+        return textureRepository.getSpriteCache();
     }
 
     public void registerGeneratedEntityTexture(String key, BufferedImage image) {
-        generatedEntityTextures.put(key, image);
+        textureRepository.putGenerated(key, image);
     }
 
-    // [FIX] 新增缓存访问方法
     public void cacheSpriteImage(String spriteKey, BufferedImage image) {
-        if (image != null && spriteKey != null) {
-            spriteImageCache.put(spriteKey, image);
-        }
+        textureRepository.put(null, spriteKey, image);
     }
 
     public BufferedImage getCachedSpriteImage(String spriteKey) {
-        return spriteImageCache.get(spriteKey);
+        return textureRepository.getBySpriteKey(spriteKey);
     }
 
     /**
      * Exposes keys of cached sprite images (including dynamically loaded CTM/PBR companions).
      */
     public Set<String> getCachedSpriteKeys() {
-        return spriteImageCache.keySet();
+        return textureRepository.getSpriteKeys();
     }
 
     public boolean isBlockEntityExportEnabled() {
@@ -213,3 +219,6 @@ public final class ExportContext {
         }
     }
 }
+
+
+

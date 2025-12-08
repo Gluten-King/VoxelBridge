@@ -74,6 +74,7 @@ public final class GltfExportService {
         Minecraft mc = Minecraft.getInstance();
         ExportContext ctx = new ExportContext(mc);
         ctx.resetConsumedBlocks();
+        ctx.clearTextureState();
         ctx.setBlockEntityExportEnabled(true);
         ctx.setCoordinateMode(ExportRuntimeConfig.getCoordinateMode());
         ctx.setVanillaRandomTransformEnabled(ExportRuntimeConfig.isVanillaRandomTransformEnabled());
@@ -91,7 +92,7 @@ public final class GltfExportService {
         BlockExporter.initializeCTMDebugLog(outDir);
 
         // Clear BlockEntity texture registry for new export
-        com.voxelbridge.export.texture.BlockEntityTextureManager.clear();
+        com.voxelbridge.export.texture.BlockEntityTextureManager.clear(ctx);
 
         // Create glTF-specific scene sink
         SceneSink sceneSink = new GltfSceneBuilder(ctx, gltfDir);

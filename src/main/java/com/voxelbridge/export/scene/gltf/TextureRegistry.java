@@ -3,6 +3,7 @@ package com.voxelbridge.export.scene.gltf;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.texture.TextureLoader;
+import com.voxelbridge.export.texture.TextureRepository;
 import de.javagl.jgltf.impl.v2.Image;
 import de.javagl.jgltf.impl.v2.Texture;
 import net.minecraft.resources.ResourceLocation;
@@ -24,10 +25,12 @@ final class TextureRegistry {
     private final Path texturesDir;
     private final Map<String, String> spriteRelativePaths = new HashMap<>();
     private final Map<String, Integer> spriteTextureIndices = new HashMap<>();
+    private final TextureRepository repo;
 
     TextureRegistry(ExportContext ctx, Path outDir) {
         this.ctx = ctx;
         this.texturesDir = outDir.resolve("textures");
+        this.repo = ctx.getTextureRepository();
     }
 
     void ensureSpriteExport(String spriteKey) {
@@ -37,10 +40,15 @@ final class TextureRegistry {
                 return;
             }
             // Always use the path from ctx.getMaterialPaths() if available
-            // This ensures consistency between export and glTF reference
             String path = ctx.getMaterialPaths().get(spriteKey);
             if (path != null) {
                 spriteRelativePaths.put(spriteKey, path);
+                return;
+            }
+            // Repository hit via registered location
+            ResourceLocation registered = com.voxelbridge.export.texture.BlockEntityTextureManager.getRegisteredLocation(ctx, spriteKey);
+            if (registered != null && repo.get(registered) != null) {
+                spriteRelativePaths.put(spriteKey, com.voxelbridge.export.texture.BlockEntityTextureManager.getTextureFilename(spriteKey));
                 return;
             }
             // Fallback to generated filename (should not happen in normal flow)
@@ -72,21 +80,25 @@ final class TextureRegistry {
         Path png = texturesDir.resolve(safe + ".png");
         spriteRelativePaths.put(spriteKey, "textures/" + png.getFileName().toString());
         if (!Files.exists(png)) {
-            // [FIX] 优先从 Context 缓存读取 (用于处理 CTM 等动态纹理)
-            BufferedImage image = ctx.getCachedSpriteImage(spriteKey);
-            
-            // 如果缓存没有，再尝试从磁盘加载
+            ResourceLocation pngRes = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            BufferedImage image = repo.get(pngRes);
             if (image == null) {
-                ResourceLocation pngRes = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+                image = ctx.getCachedSpriteImage(spriteKey);
+            }
+            if (image == null) {
                 image = TextureLoader.readTexture(pngRes);
+                if (image != null) {
+                    repo.put(pngRes, spriteKey, image);
+                }
             }
 
-            if (image != null) {
-                try {
-                    ImageIO.write(image, "PNG", png.toFile());
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
+            if (image == null) {
+                throw new IllegalStateException("Failed to resolve texture for spriteKey=" + spriteKey);
+            }
+            try {
+                ImageIO.write(image, "PNG", png.toFile());
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
         }
     }

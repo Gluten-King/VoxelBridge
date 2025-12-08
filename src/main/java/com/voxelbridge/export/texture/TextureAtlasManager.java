@@ -5,14 +5,11 @@ import com.voxelbridge.config.ExportRuntimeConfig.AtlasMode;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.ExportContext.TexturePlacement;
 import com.voxelbridge.util.ExportLogger;
-import com.voxelbridge.export.scene.gltf.BlockEntityAtlasPacker;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 import javax.imageio.ImageIO;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -57,7 +54,7 @@ public final class TextureAtlasManager {
 
         // Force occupy the first slot (index 0)
         ExportContext.TintAtlas atlas = ctx.getOrCreateTintAtlas(transparentKey);
-        atlas.tintToIndex.put(0xFFFFFF, 0);  // tint 0xFFFFFF → slot 0
+        atlas.tintToIndex.put(0xFFFFFF, 0);  // tint 0xFFFFFF 鈫?slot 0
         atlas.indexToTint.put(0, 0xFFFFFF);
         atlas.nextIndex.set(1);  // Next available slot starts from 1
 
@@ -263,7 +260,7 @@ public final class TextureAtlasManager {
 
         // Pack using MaxRects (no rotation)
         int atlasSize = ExportRuntimeConfig.getAtlasSize().getSize();
-        BlockEntityAtlasPacker packer = new BlockEntityAtlasPacker(atlasSize, false);
+        TextureAtlasPacker packer = new TextureAtlasPacker(atlasSize, false);
         int counter = 0;
         for (AtlasRequest req : requests) {
             String key = req.spriteKey + "#t" + req.tintIndex + "#" + counter++;
@@ -274,14 +271,14 @@ public final class TextureAtlasManager {
         Path atlasDir = outDir.resolve(atlasDirName);
         Files.createDirectories(atlasDir);
 
-        Map<String, BlockEntityAtlasPacker.Placement> packed = packer.pack(atlasDir, atlasPrefix);
-        for (Map.Entry<String, BlockEntityAtlasPacker.Placement> entry : packed.entrySet()) {
+        Map<String, TextureAtlasPacker.Placement> packed = packer.pack(atlasDir, atlasPrefix);
+        for (Map.Entry<String, TextureAtlasPacker.Placement> entry : packed.entrySet()) {
             String key = entry.getKey();
             AtlasRequest req = requestByKey.get(key);
             if (req == null) {
                 continue;
             }
-            BlockEntityAtlasPacker.Placement p = entry.getValue();
+            TextureAtlasPacker.Placement p = entry.getValue();
 
             int tileU = p.page() % 10;
             int tileV = p.page() / 10;
@@ -455,6 +452,9 @@ public final class TextureAtlasManager {
     /**
      * Generate PBR atlases (normal/specular) using the same layout as the albedo atlas.
      * Missing channels are filled with default tiles.
+     *
+     * Uses PbrAtlasWriter to generate PBR channel atlases aligned to the base texture placements.
+     * Each tint variant placement gets its own PBR texture lookup.
      */
     private static void generatePbrAtlases(ExportContext ctx,
                                            Path outDir,
@@ -468,77 +468,64 @@ public final class TextureAtlasManager {
             return;
         }
 
-        Map<Integer, BufferedImage> normalPages = new java.util.HashMap<>();
-        Map<Integer, BufferedImage> specPages = new java.util.HashMap<>();
+        Path atlasDir = outDir.resolve(atlasDirName);
 
-        final int defaultNormal = 0xFF8080FF; // 128/128/255
-        final int defaultSpec = 0x00000000;   // transparent black
-
+        // Build a flat map of all placements (spriteKey#tintIndex -> placement)
+        // This allows PbrAtlasWriter to handle each tint variant independently
+        Map<String, PbrAtlasWriter.Placement> flatPlacements = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, ExportContext.TintAtlas> entry : entries.entrySet()) {
             String spriteKey = entry.getKey();
-            BufferedImage normalSrc = ctx.getCachedSpriteImage(spriteKey + "_n");
-            BufferedImage specSrc = ctx.getCachedSpriteImage(spriteKey + "_s");
-
             ExportContext.TintAtlas atlas = entry.getValue();
-            for (TexturePlacement placement : atlas.placements.values()) {
-                int udim = pageToUdim.getOrDefault(placement.page(), placement.page() + 1001);
-                // Normal
-                BufferedImage normPage = normalPages.computeIfAbsent(placement.page(), p -> createFilled(atlasSize, defaultNormal));
-                if (normalSrc != null) {
-                    BufferedImage scaled = scaleImage(normalSrc, placement.w(), placement.h());
-                    normPage.getGraphics().drawImage(scaled, placement.x(), placement.y(), null);
+            for (Map.Entry<Integer, ExportContext.TexturePlacement> placementEntry : atlas.placements.entrySet()) {
+                int tintIndex = placementEntry.getKey();
+                ExportContext.TexturePlacement placement = placementEntry.getValue();
+                // Use spriteKey for tint 0, spriteKey#tN for others (consistent with packing)
+                String key = tintIndex == 0 ? spriteKey : spriteKey + "#t" + tintIndex;
+                flatPlacements.put(key, new PbrAtlasWriter.TexturePlacementAdapter(placement));
+            }
+        }
+
+        // Generate normal map atlas
+        PbrAtlasWriter.PbrAtlasConfig normalConfig = new PbrAtlasWriter.PbrAtlasConfig(
+            atlasDir, atlasSize, basePrefix + "n_",
+            PbrTextureHelper.DEFAULT_NORMAL_COLOR, usedPages, pageToUdim
+        );
+        PbrAtlasWriter.generatePbrAtlas(normalConfig, flatPlacements, key -> {
+            // Extract base sprite key (remove #tN suffix if present)
+            String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
+            BufferedImage normalImage = ctx.getCachedSpriteImage(spriteKey + "_n");
+            if (normalImage != null) {
+                // Update material paths for normal textures (only for base key)
+                if (!key.contains("#")) {
+                    PbrAtlasWriter.Placement p = flatPlacements.get(key);
+                    int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
+                    String normalPath = atlasDirName + "/" + basePrefix + "n_" + udim + ".png";
+                    ctx.getMaterialPaths().put(spriteKey + "_n", normalPath);
                 }
-                // Specular
-                BufferedImage specPage = specPages.computeIfAbsent(placement.page(), p -> createFilled(atlasSize, defaultSpec));
-                if (specSrc != null) {
-                    BufferedImage scaled = scaleImage(specSrc, placement.w(), placement.h());
-                    specPage.getGraphics().drawImage(scaled, placement.x(), placement.y(), null);
+            }
+            return normalImage;
+        });
+
+        // Generate specular map atlas
+        PbrAtlasWriter.PbrAtlasConfig specConfig = new PbrAtlasWriter.PbrAtlasConfig(
+            atlasDir, atlasSize, basePrefix + "s_",
+            PbrTextureHelper.DEFAULT_SPECULAR_COLOR, usedPages, pageToUdim
+        );
+        PbrAtlasWriter.generatePbrAtlas(specConfig, flatPlacements, key -> {
+            // Extract base sprite key (remove #tN suffix if present)
+            String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
+            BufferedImage specImage = ctx.getCachedSpriteImage(spriteKey + "_s");
+            if (specImage != null) {
+                // Update material paths for specular textures (only for base key)
+                if (!key.contains("#")) {
+                    PbrAtlasWriter.Placement p = flatPlacements.get(key);
+                    int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
+                    String specPath = atlasDirName + "/" + basePrefix + "s_" + udim + ".png";
+                    ctx.getMaterialPaths().put(spriteKey + "_s", specPath);
                 }
-
-                String normalPath = atlasDirName + "/" + basePrefix + "n_" + udim + ".png";
-                String specPath = atlasDirName + "/" + basePrefix + "s_" + udim + ".png";
-                ctx.getMaterialPaths().put(spriteKey + "_n", normalPath);
-                ctx.getMaterialPaths().put(spriteKey + "_s", specPath);
             }
-        }
-
-        Path atlasDir = outDir.resolve(atlasDirName);
-        Files.createDirectories(atlasDir);
-        for (int page : usedPages) {
-            int udim = pageToUdim.getOrDefault(page, page + 1001);
-            // Normal
-            BufferedImage normalPage = normalPages.get(page);
-            if (normalPage != null) {
-                Path target = atlasDir.resolve(basePrefix + "n_" + udim + ".png");
-                ImageIO.write(normalPage, "png", target.toFile());
-            }
-            // Specular
-            BufferedImage specPage = specPages.get(page);
-            if (specPage != null) {
-                Path target = atlasDir.resolve(basePrefix + "s_" + udim + ".png");
-                ImageIO.write(specPage, "png", target.toFile());
-            }
-        }
-    }
-
-    private static BufferedImage createFilled(int size, int argb) {
-        BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
-        int[] row = new int[size];
-        java.util.Arrays.fill(row, argb);
-        for (int y = 0; y < size; y++) {
-            img.setRGB(0, y, size, 1, row, 0, size);
-        }
-        return img;
-    }
-
-    private static BufferedImage scaleImage(BufferedImage src, int w, int h) {
-        if (src.getWidth() == w && src.getHeight() == h) return src;
-        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = out.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        g.drawImage(src, 0, 0, w, h, null);
-        g.dispose();
-        return out;
+            return specImage;
+        });
     }
 
     private static float clamp01(float x) {
@@ -558,24 +545,30 @@ public final class TextureAtlasManager {
      * Only handles normal block textures - entity textures should not be in the atlas.
      */
     private static BufferedImage loadTextureForAtlas(ExportContext ctx, String spriteKey) {
-        // [FIX] 优先检查内存缓存（由 BlockExporter 填充的 CTM 纹理）
-        BufferedImage cached = ctx.getCachedSpriteImage(spriteKey);
+        ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+
+        BufferedImage cached = ctx.getTextureRepository().get(textureLocation);
+        if (cached == null) {
+            cached = ctx.getCachedSpriteImage(spriteKey);
+        }
         if (cached != null) {
-            ExportLogger.log(String.format("[AtlasGen][CACHE HIT] Loaded %s from sprite cache (%dx%d)",
+            ExportLogger.log(String.format("[AtlasGen][CACHE HIT] Loaded %s from cache (%dx%d)",
                 spriteKey, cached.getWidth(), cached.getHeight()));
             return cached;
         }
 
-        // 2. 回退到从磁盘读取（原版纹理）
         ExportLogger.log(String.format("[AtlasGen][CACHE MISS] %s not in cache, trying disk", spriteKey));
-        ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
         BufferedImage diskImage = TextureLoader.readTexture(textureLocation);
         if (diskImage != null) {
             ExportLogger.log(String.format("[AtlasGen][DISK HIT] Loaded %s from disk (%dx%d)",
                 spriteKey, diskImage.getWidth(), diskImage.getHeight()));
+            ctx.getTextureRepository().put(textureLocation, spriteKey, diskImage);
         } else {
             ExportLogger.log(String.format("[AtlasGen][DISK MISS] Failed to load %s from disk", spriteKey));
         }
         return diskImage;
     }
 }
+
+
+

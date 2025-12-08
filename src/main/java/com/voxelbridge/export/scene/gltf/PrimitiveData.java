@@ -44,74 +44,62 @@ final class PrimitiveData {
      */
     int[] registerQuad(String spriteKey, String overlaySpriteKey, float[] pos, float[] uv, float[] uv1In, float[] col) {
         int startVert = vertexCount;
-
-        // Reorder quad vertices into a consistent CCW order
         int[] order = sortQuadCCW(pos);
+        int spriteHash = Objects.hash(spriteKey, overlaySpriteKey);
 
-        // Use a hash of the spriteKey to prevent merging vertices from different source textures
-        // (because they will need different Atlas UV remapping later).
-        int spriteHash = java.util.Objects.hash(spriteKey, overlaySpriteKey);
+        // Stage vertices first to avoid partially writing data for degenerate/duplicate quads.
+        List<PendingVertex> pending = new ArrayList<>(4);
+        int[] verts = new int[4];
+        for (int i = 0; i < 4; i++) {
+            int oi = order[i];
+            PendingVertex pv = new PendingVertex(
+                    new VertexKey(
+                            spriteHash,
+                            quantize(pos[oi * 3]), quantize(pos[oi * 3 + 1]), quantize(pos[oi * 3 + 2]),
+                            quantizeUV(uv[oi * 2]), quantizeUV(uv[oi * 2 + 1]),
+                            quantizeUV(uv1In != null ? uv1In[oi * 2] : 0f), quantizeUV(uv1In != null ? uv1In[oi * 2 + 1] : 0f),
+                            quantizeColor(col[oi * 4]), quantizeColor(col[oi * 4 + 1]), quantizeColor(col[oi * 4 + 2]), quantizeColor(col[oi * 4 + 3])
+                    ),
+                    pos[oi * 3], pos[oi * 3 + 1], pos[oi * 3 + 2],
+                    uv[oi * 2], uv[oi * 2 + 1],
+                    uv1In != null ? uv1In[oi * 2] : 0f, uv1In != null ? uv1In[oi * 2 + 1] : 0f,
+                    col[oi * 4], col[oi * 4 + 1], col[oi * 4 + 2], col[oi * 4 + 3]
+            );
 
-        int v0 = registerVertex(
-                spriteHash,
-                pos[order[0] * 3], pos[order[0] * 3 + 1], pos[order[0] * 3 + 2],
-                uv[order[0] * 2], uv[order[0] * 2 + 1],
-                uv1In != null ? uv1In[order[0] * 2] : 0f,
-                uv1In != null ? uv1In[order[0] * 2 + 1] : 0f,
-                col[order[0] * 4], col[order[0] * 4 + 1], col[order[0] * 4 + 2], col[order[0] * 4 + 3]);
-        int v1 = registerVertex(
-                spriteHash,
-                pos[order[1] * 3], pos[order[1] * 3 + 1], pos[order[1] * 3 + 2],
-                uv[order[1] * 2], uv[order[1] * 2 + 1],
-                uv1In != null ? uv1In[order[1] * 2] : 0f,
-                uv1In != null ? uv1In[order[1] * 2 + 1] : 0f,
-                col[order[1] * 4], col[order[1] * 4 + 1], col[order[1] * 4 + 2], col[order[1] * 4 + 3]);
-        int v2 = registerVertex(
-                spriteHash,
-                pos[order[2] * 3], pos[order[2] * 3 + 1], pos[order[2] * 3 + 2],
-                uv[order[2] * 2], uv[order[2] * 2 + 1],
-                uv1In != null ? uv1In[order[2] * 2] : 0f,
-                uv1In != null ? uv1In[order[2] * 2 + 1] : 0f,
-                col[order[2] * 4], col[order[2] * 4 + 1], col[order[2] * 4 + 2], col[order[2] * 4 + 3]);
-        int v3 = registerVertex(
-                spriteHash,
-                pos[order[3] * 3], pos[order[3] * 3 + 1], pos[order[3] * 3 + 2],
-                uv[order[3] * 2], uv[order[3] * 2 + 1],
-                uv1In != null ? uv1In[order[3] * 2] : 0f,
-                uv1In != null ? uv1In[order[3] * 2 + 1] : 0f,
-                col[order[3] * 4], col[order[3] * 4 + 1], col[order[3] * 4 + 2], col[order[3] * 4 + 3]);
+            Integer existing = vertexLookup.get(pv.key());
+            if (existing != null) {
+                verts[i] = existing;
+            } else {
+                verts[i] = vertexCount + pending.size();
+                pending.add(pv);
+            }
+        }
 
-        if (v0 == v1 || v1 == v2 || v2 == v3 || v0 == v3) {
+        if (verts[0] == verts[1] || verts[1] == verts[2] || verts[2] == verts[3] || verts[0] == verts[3]) {
             return null;
         }
-        QuadKey qk = QuadKey.from(v0, v1, v2, v3);
+        QuadKey qk = QuadKey.from(verts[0], verts[1], verts[2], verts[3]);
         if (!quadKeys.add(qk)) {
             return null;
         }
 
-        // Record the range of vertices added/reused for this quad.
-        // We track the logical vertices added to the primitive.
-        // Since registerVertex might reuse existing vertices, strictly speaking "range" logic
-        // for UV remapping is tricky if vertices are reused across different logical quads.
-        // BUT, we added spriteHash to VertexKey. So vertices from different sprites WILL NOT merge.
-        // Therefore, all 4 vertices (v0..v3) returned here definitely belong to `spriteKey`.
-        // We can just append a range of length 4, or optimize if they are sequential.
-        // Actually, the vertices in `positions/uv0` list are sequential.
-        // Wait, `registerVertex` reuses indices, but the data in `positions` is only added if NEW.
-        // UV Remapping needs to iterate over the `uv0` array.
-        // So we need to track which *indices in the uv0 array* correspond to which sprite.
-        // `vertexCount` tracks the size of these arrays.
-        // If we reused a vertex, no new data was added to `uv0`.
-        // That reused vertex already belongs to a range we recorded earlier (because spriteHash matched).
-        // So we only need to record a range if we *added new vertices*.
-        int addedCount = vertexCount - startVert;
+        // Commit staged vertices
+        for (PendingVertex pv : pending) {
+            int idx = vertexCount++;
+            vertexLookup.put(pv.key(), idx);
+            positions.add(pv.px()); positions.add(pv.py()); positions.add(pv.pz());
+            uv0.add(pv.u()); uv0.add(pv.v());
+            uv1.add(pv.u1()); uv1.add(pv.v1());
+            colors.add(pv.r()); colors.add(pv.g()); colors.add(pv.b()); colors.add(pv.a());
+        }
+
+        int addedCount = pending.size();
         if (addedCount > 0) {
             if (!spriteRanges.isEmpty()) {
                 SpriteRange last = spriteRanges.get(spriteRanges.size() - 1);
-                if (last.spriteKey.equals(spriteKey) && 
+                if (last.spriteKey.equals(spriteKey) &&
                    (overlaySpriteKey == null ? last.overlaySpriteKey == null : overlaySpriteKey.equals(last.overlaySpriteKey)) &&
                    last.startVertexIndex + last.count == startVert) {
-                    // Extend previous range
                     spriteRanges.set(spriteRanges.size() - 1, new SpriteRange(last.startVertexIndex, last.count + addedCount, spriteKey, overlaySpriteKey));
                 } else {
                     spriteRanges.add(new SpriteRange(startVert, addedCount, spriteKey, overlaySpriteKey));
@@ -120,8 +108,8 @@ final class PrimitiveData {
                 spriteRanges.add(new SpriteRange(startVert, addedCount, spriteKey, overlaySpriteKey));
             }
         }
-        
-        return new int[]{v0, v1, v2, v3};
+
+        return verts;
     }
 
     int registerVertex(int spriteHash,
@@ -169,6 +157,12 @@ final class PrimitiveData {
 
     private record VertexKey(int spriteHash, int px, int py, int pz, int u, int v, int u1, int v1,
                              int r, int g, int b, int a) {}
+
+    private record PendingVertex(VertexKey key,
+                                 float px, float py, float pz,
+                                 float u, float v,
+                                 float u1, float v1,
+                                 float r, float g, float b, float a) {}
 
     private record QuadKey(int a, int b, int c, int d) {
         static QuadKey from(int v0, int v1, int v2, int v3) {

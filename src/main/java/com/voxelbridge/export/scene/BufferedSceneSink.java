@@ -23,15 +23,21 @@ public final class BufferedSceneSink implements SceneSink {
                         float[] normal,
                         float[] colors,
                         boolean doubleSided) {
+        // Clone incoming arrays to avoid upstream mutation corrupting buffered data.
+        float[] positionsCopy = positions != null ? positions.clone() : null;
+        float[] uv0Copy = uv0 != null ? uv0.clone() : null;
+        float[] uv1Copy = uv1 != null ? uv1.clone() : null;
+        float[] normalCopy = normal != null ? normal.clone() : null;
+        float[] colorsCopy = colors != null ? colors.clone() : null;
         buffer.add(new QuadRecord(
             materialGroupKey,
             spriteKey,
             overlaySpriteKey,
-            positions,
-            uv0,
-            uv1,
-            normal,
-            colors,
+            positionsCopy,
+            uv0Copy,
+            uv1Copy,
+            normalCopy,
+            colorsCopy,
             doubleSided
         ));
     }
