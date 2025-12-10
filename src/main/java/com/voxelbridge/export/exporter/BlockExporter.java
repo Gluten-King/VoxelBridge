@@ -8,6 +8,8 @@ import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
+import com.voxelbridge.export.util.GeometryUtil;
+import com.voxelbridge.export.util.ColorModeHandler;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import com.voxelbridge.modhandler.ModHandlerRegistry;
 // Fabric API imports
@@ -274,7 +276,7 @@ public final class BlockExporter {
             float[] uv0 = new float[8];
             extractVertices(quad, pos, positions, uv0, quad.getSprite(), randomOffset);
             long posHash = computePositionHash(positions);
-            float[] normal = computeFaceNormal(positions);
+            float[] normal = GeometryUtil.computeFaceNormal(positions);
             String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
             QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex);
             ctmPositionQuads.computeIfAbsent(posHash, k -> new ArrayList<>()).add(info);
@@ -411,7 +413,7 @@ public final class BlockExporter {
         float[] uv0 = new float[8];
         boolean doubleSided = state.getBlock() instanceof BushBlock;
         extractVertices(quad, pos, positions, uv0, sprite, randomOffset);
-        float[] normal = computeFaceNormal(positions);
+        float[] normal = GeometryUtil.computeFaceNormal(positions);
         long quadKey = computeQuadKey(spriteKey, positions, normal, doubleSided, uv0);
         if (!quadKeys.add(quadKey)) return;
 
@@ -425,20 +427,10 @@ public final class BlockExporter {
         // This is a base quad - output it
         int argb = computeTintColor(state, pos, quad);
 
-        float[] uv1;
-        float[] colors;
+        // Use ColorModeHandler to prepare colors
+        ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(ctx, argb, quad.getTintIndex() >= 0);
 
-        if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
-            // VertexColor模式：颜色写入COLOR_0
-            uv1 = null; // 不需要TEXCOORD_1
-            colors = computeVertexColors(argb, quad.getTintIndex() >= 0);
-        } else {
-            // ColorMap模式：使用TEXCOORD_1（现有行为）
-            uv1 = getColormapUV(argb);
-            colors = whiteColor();
-        }
-
-        sceneSink.addQuad(blockKey, spriteKey, null, positions, uv0, uv1, normal, colors, doubleSided);
+        sceneSink.addQuad(blockKey, spriteKey, null, positions, uv0, colorData.uv1, normal, colorData.colors, doubleSided);
 
         // Check if we've already processed overlays for this position
         if (!processedPositions.add(posHash)) {
@@ -449,18 +441,11 @@ public final class BlockExporter {
         List<OverlayQuadData> overlays = overlayCacheCombined.get(posHash);
         if (overlays != null && !overlays.isEmpty()) {
             for (OverlayQuadData overlay : overlays) {
-                float[] overlayUv1;
-                float[] overlayColors;
+                // Use ColorModeHandler to prepare overlay colors
+                ColorModeHandler.ColorData overlayColorData = ColorModeHandler.prepareColors(ctx, overlay.color, true);
 
-                if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
-                    overlayUv1 = null;
-                    overlayColors = computeVertexColors(overlay.color, true); // overlay总是有颜色
-                } else {
-                    overlayUv1 = overlay.colorUv;
-                    overlayColors = colors; // 重用基础quad的白色
-                }
-
-                sceneSink.addQuad(blockKey, overlay.spriteKey, "overlay", overlay.positions, overlay.uv, overlayUv1, overlay.normal, overlayColors, doubleSided);
+                sceneSink.addQuad(blockKey, overlay.spriteKey, "overlay", overlay.positions, overlay.uv,
+                    overlayColorData.uv1, overlay.normal, overlayColorData.colors, doubleSided);
             }
         }
     }
@@ -500,10 +485,6 @@ public final class BlockExporter {
             uv0[i*2] = (uu - u0) / du;
             uv0[i*2+1] = (vv - v0) / dv;
         }
-    }
-    private float[] getColormapUV(int argb) {
-        var p = com.voxelbridge.export.texture.ColorMapManager.registerColor(ctx, argb);
-        return new float[] { p.u0(), p.v0(), p.u1(), p.v0(), p.u1(), p.v1(), p.u0(), p.v1() };
     }
     private QuadInfo buildQuadInfo(String spriteKey, float[] positions, float[] normal, int originalIndex) {
         int axis = dominantAxis(normal);
@@ -862,7 +843,7 @@ public final class BlockExporter {
         overlayColorUv[6] = placement.u0(); overlayColorUv[7] = placement.v1();
 
         // Calculate normal for the overlay quad
-        float[] normal = computeFaceNormal(positions);
+        float[] normal = GeometryUtil.computeFaceNormal(positions);
 
         long posHash = computePositionHash(positions);
         Map<Long, List<OverlayQuadData>> cache = isCtmOverlay ? overlayCacheCTM : overlayCacheVanilla;
@@ -1163,52 +1144,10 @@ public final class BlockExporter {
         long seed = pos.getX() * 3129871L ^ pos.getZ() * 116129781L ^ pos.getY();
         return seed * seed * 42317861L + seed * 11L;
     }
-    private float[] computeFaceNormal(float[] positions) {
-        float ax = positions[3] - positions[0];
-        float ay = positions[4] - positions[1];
-        float az = positions[5] - positions[2];
-        float bx = positions[6] - positions[0];
-        float by = positions[7] - positions[1];
-        float bz = positions[8] - positions[2];
-        float nx = ay * bz - az * by;
-        float ny = az * bx - ax * bz;
-        float nz = ax * by - ay * bx;
-        float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-        if (len == 0f) return new float[]{0, 1, 0};
-        return new float[]{nx / len, ny / len, nz / len};
-    }
     private int computeTintColor(BlockState state, BlockPos pos, BakedQuad quad) {
         if (quad.getTintIndex() < 0) return 0xFFFFFFFF;
         int argb = Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.getTintIndex());
         return (argb == -1) ? 0xFFFFFFFF : argb;
-    }
-    private float[] whiteColor() {
-        return new float[]{1f,1f,1f,1f, 1f,1f,1f,1f, 1f,1f,1f,1f, 1f,1f,1f,1f};
-    }
-    /**
-     * 为VertexColor模式计算顶点颜色。
-     * @param argb 生物群系颜色（0xAARRGGBB格式）
-     * @param hasTint 该面是否有tint
-     * @return 16个float（RGBA * 4个顶点）
-     */
-    private float[] computeVertexColors(int argb, boolean hasTint) {
-        if (!hasTint || argb == 0xFFFFFFFF || argb == -1) {
-            return whiteColor(); // 无tint或白色tint
-        }
-
-        // 提取RGB分量（忽略alpha）
-        float r = ((argb >> 16) & 0xFF) / 255.0f;
-        float g = ((argb >> 8) & 0xFF) / 255.0f;
-        float b = (argb & 0xFF) / 255.0f;
-        float a = 1.0f; // 始终不透明
-
-        // 4个顶点使用相同颜色
-        return new float[]{
-            r, g, b, a,
-            r, g, b, a,
-            r, g, b, a,
-            r, g, b, a
-        };
     }
     private long computePositionHash(float[] positions) {
         Integer[] order = {0, 1, 2, 3};

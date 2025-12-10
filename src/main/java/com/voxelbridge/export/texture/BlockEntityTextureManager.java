@@ -3,6 +3,8 @@ package com.voxelbridge.export.texture;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityTextureResolver;
 import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.export.texture.AnimatedFrameSet;
+import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
@@ -83,6 +85,12 @@ public final class BlockEntityTextureManager {
 
         // Register the texture with the export context (same as old EntityTextureManager)
         if (texture != null) {
+            if (com.voxelbridge.config.ExportRuntimeConfig.isAnimationEnabled()) {
+                AnimatedFrameSet frames = AnimatedTextureHelper.extractAndStore(spriteKey, texture, repo);
+                if (frames != null && !frames.isEmpty()) {
+                    texture = frames.frames().get(0);
+                }
+            }
             repo.put(pngLocation, spriteKey, texture);
 
             // Register material path (EntityTextureManager line 29-30)
@@ -90,8 +98,10 @@ public final class BlockEntityTextureManager {
                 .computeIfAbsent(spriteKey, k -> "entity_textures/" + safe(textureLoc.toString()) + ".png");
 
             // Register texture info with context (EntityTextureManager line 32)
+            final BufferedImage texRef = texture;
+            final ResourceLocation locRef = pngLocation;
             ctx.getEntityTextures().computeIfAbsent(spriteKey,
-                k -> new ExportContext.EntityTexture(pngLocation, texture.getWidth(), texture.getHeight()));
+                k -> new ExportContext.EntityTexture(locRef, texRef.getWidth(), texRef.getHeight()));
 
             ExportLogger.log("[BlockEntityTex] Registered: " + spriteKey + " -> " + relativePath);
 
@@ -289,6 +299,7 @@ public final class BlockEntityTextureManager {
         for (Map.Entry<String, ResourceLocation> entry : registeredTextures.entrySet()) {
             String spriteKey = entry.getKey();
             if (spriteKey.endsWith("_n") || spriteKey.endsWith("_s")) continue;
+            if (com.voxelbridge.config.ExportRuntimeConfig.isAnimationEnabled() && repo(ctx).hasAnimation(spriteKey)) continue;
             BufferedImage image = repo(ctx).get(entry.getValue());
             if (image == null) continue;
             packer.addTexture(spriteKey, image);

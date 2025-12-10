@@ -16,6 +16,7 @@ public final class TextureRepository {
     private final Map<ResourceLocation, BufferedImage> locationCache = new ConcurrentHashMap<>();
     private final Map<String, ResourceLocation> keyToLocation = new ConcurrentHashMap<>();
     private final Map<String, BufferedImage> spriteCache = new ConcurrentHashMap<>();
+    private final Map<String, AnimatedFrameSet> animatedCache = new ConcurrentHashMap<>();
 
     public BufferedImage get(ResourceLocation loc) {
         return locationCache.get(loc);
@@ -78,6 +79,24 @@ public final class TextureRepository {
         }
     }
 
+    public void putAnimation(String spriteKey, AnimatedFrameSet frames) {
+        if (spriteKey != null && frames != null && !frames.isEmpty()) {
+            animatedCache.put(spriteKey, frames);
+        }
+    }
+
+    public AnimatedFrameSet getAnimation(String spriteKey) {
+        return spriteKey == null ? null : animatedCache.get(spriteKey);
+    }
+
+    public boolean hasAnimation(String spriteKey) {
+        return spriteKey != null && animatedCache.containsKey(spriteKey);
+    }
+
+    public Map<String, AnimatedFrameSet> getAnimatedCache() {
+        return animatedCache;
+    }
+
     public Set<String> getSpriteKeys() {
         return spriteCache.keySet();
     }
@@ -93,5 +112,6 @@ public final class TextureRepository {
         locationCache.clear();
         keyToLocation.clear();
         spriteCache.clear();
+        animatedCache.clear();
     }
 }

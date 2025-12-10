@@ -79,6 +79,8 @@ public final class ExportRuntimeConfig {
     private static int exportThreadCount = Runtime.getRuntime().availableProcessors();
     // 控制是否应用原版基于位置哈希的随机变换（草丛偏移、随机模型旋转等）
     private static boolean vanillaRandomTransformEnabled = true;
+    // 控制是否导出动画贴图序列（默认为关闭）
+    private static boolean animationEnabled = false;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -140,6 +142,14 @@ public final class ExportRuntimeConfig {
         if (mode != null) {
             colorMode = mode;
         }
+    }
+
+    public static boolean isAnimationEnabled() {
+        return animationEnabled;
+    }
+
+    public static void setAnimationEnabled(boolean enabled) {
+        animationEnabled = enabled;
     }
 
 }

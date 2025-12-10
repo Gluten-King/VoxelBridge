@@ -2,6 +2,8 @@ package com.voxelbridge.export.scene.gltf;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.texture.AnimatedFrameSet;
+import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.TextureRepository;
 import de.javagl.jgltf.impl.v2.Image;
@@ -26,6 +28,7 @@ final class TextureRegistry {
     private final Map<String, String> spriteRelativePaths = new HashMap<>();
     private final Map<String, Integer> spriteTextureIndices = new HashMap<>();
     private final TextureRepository repo;
+    private final java.util.Set<String> exportedAnimated = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
     TextureRegistry(ExportContext ctx, Path outDir) {
         this.ctx = ctx;
@@ -58,7 +61,8 @@ final class TextureRegistry {
         }
 
         // If atlas mode and placement exists, prefer atlas path (overwrites previous)
-        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
+        boolean isAnimated = ExportRuntimeConfig.isAnimationEnabled() && repo.hasAnimation(spriteKey);
+        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS && !isAnimated) {
             String path = ctx.getMaterialPaths().get(spriteKey);
             if (path != null) {
                 spriteRelativePaths.put(spriteKey, path);
@@ -86,7 +90,7 @@ final class TextureRegistry {
                 image = ctx.getCachedSpriteImage(spriteKey);
             }
             if (image == null) {
-                image = TextureLoader.readTexture(pngRes);
+                image = TextureLoader.readTexture(pngRes, ExportRuntimeConfig.isAnimationEnabled());
                 if (image != null) {
                     repo.put(pngRes, spriteKey, image);
                 }
@@ -95,10 +99,33 @@ final class TextureRegistry {
             if (image == null) {
                 throw new IllegalStateException("Failed to resolve texture for spriteKey=" + spriteKey);
             }
+            AnimatedFrameSet framesForWrite = null;
+            if (ExportRuntimeConfig.isAnimationEnabled()) {
+                framesForWrite = repo.getAnimation(spriteKey);
+                if (framesForWrite == null) {
+                    framesForWrite = AnimatedTextureHelper.extractAndStore(spriteKey, image, repo);
+                }
+                if (framesForWrite != null && !framesForWrite.isEmpty()) {
+                    image = framesForWrite.frames().get(0);
+                }
+            }
             try {
                 ImageIO.write(image, "PNG", png.toFile());
             } catch (IOException e) {
                 throw new RuntimeException(e);
+            }
+        }
+
+        // 导出动画帧序列（可选），并同步 PBR
+        if (ExportRuntimeConfig.isAnimationEnabled()) {
+            AnimatedFrameSet frames = repo.getAnimation(spriteKey);
+            if (frames == null) {
+                frames = AnimatedTextureHelper.extractAndStore(spriteKey, repo.getBySpriteKey(spriteKey), repo);
+            }
+            if (frames != null && !frames.isEmpty()) {
+                AnimatedFrameSet normalFrames = ensurePbrAnimation(spriteKey + "_n");
+                AnimatedFrameSet specFrames = ensurePbrAnimation(spriteKey + "_s");
+                exportAnimatedFrames(spriteKey, frames, normalFrames, specFrames);
             }
         }
     }
@@ -118,5 +145,54 @@ final class TextureRegistry {
             textures.add(texture);
             return textures.size() - 1;
         });
+    }
+
+    private AnimatedFrameSet ensurePbrAnimation(String spriteKey) {
+        AnimatedFrameSet set = repo.getAnimation(spriteKey);
+        if (set != null) return set;
+        BufferedImage pbrImg = repo.getBySpriteKey(spriteKey);
+        if (pbrImg != null) {
+            return AnimatedTextureHelper.extractAndStore(spriteKey, pbrImg, repo);
+        }
+        return null;
+    }
+
+    private void exportAnimatedFrames(String spriteKey,
+                                      AnimatedFrameSet baseFrames,
+                                      AnimatedFrameSet normalFrames,
+                                      AnimatedFrameSet specFrames) {
+        if (exportedAnimated.contains(spriteKey) || baseFrames == null || baseFrames.isEmpty()) {
+            return;
+        }
+        Path animDir = texturesDir.resolve("animated").resolve(safe(spriteKey));
+        try {
+            Files.createDirectories(animDir);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        int count = baseFrames.frames().size();
+        for (int i = 0; i < count; i++) {
+            String idx = String.format("%03d", i);
+            writeFrame(animDir.resolve("frame_" + idx + ".png"), baseFrames.frames().get(i));
+            if (normalFrames != null && i < normalFrames.frames().size()) {
+                writeFrame(animDir.resolve("frame_" + idx + "_n.png"), normalFrames.frames().get(i));
+            }
+            if (specFrames != null && i < specFrames.frames().size()) {
+                writeFrame(animDir.resolve("frame_" + idx + "_s.png"), specFrames.frames().get(i));
+            }
+        }
+        exportedAnimated.add(spriteKey);
+    }
+
+    private void writeFrame(Path path, BufferedImage frame) {
+        try {
+            ImageIO.write(frame, "PNG", path.toFile());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private String safe(String spriteKey) {
+        return spriteKey.replace(':', '_').replace('/', '_');
     }
 }

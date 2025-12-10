@@ -2,8 +2,9 @@ package com.voxelbridge.export.exporter;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
-import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
+import com.voxelbridge.export.util.GeometryUtil;
+import com.voxelbridge.export.util.ColorModeHandler;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
@@ -136,7 +137,7 @@ final class QuadCollector implements VertexConsumer {
         TextureAtlasSprite sprite = chooseSpriteForQuad();
         if (sprite == null) return;
 
-        float[] normal = computeFaceNormal(positions);
+        float[] normal = GeometryUtil.computeFaceNormal(positions);
 
         if (hasRegionBounds && isBoundarySideQuad(normal)) {
             resetQuadState();
@@ -144,31 +145,14 @@ final class QuadCollector implements VertexConsumer {
         }
 
         String spriteKey = SpriteKeyResolver.resolve(sprite);
-        float[] normalizedUVs = normalizeUVs(uvs, sprite);
+        float[] normalizedUVs = GeometryUtil.normalizeUVs(uvs, sprite);
 
-        float[] uv1;
-        float[] linearColors;
-
-        if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
-            // VertexColor模式：颜色写入COLOR_0
-            uv1 = null;
-            linearColors = computeVertexColorsFromArgb(quadArgb);
-        } else {
-            // ColorMap模式：使用TEXCOORD_1
-            float[] lut = ColorMapManager.remapColorUV(ctx, quadArgb);
-            float u0 = lut[0], v0 = lut[1], u1 = lut[2], v1 = lut[3];
-            float du = u1 - u0, dv = v1 - v0;
-
-            uv1 = new float[8];
-            for (int i = 0; i < 4; i++) {
-                uv1[i * 2] = u0 + normalizedUVs[i * 2] * du;
-                uv1[i * 2 + 1] = v0 + normalizedUVs[i * 2 + 1] * dv;
-            }
-            linearColors = whiteColor();
-        }
+        // Use ColorModeHandler to prepare colors
+        ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColorsWithUV(ctx, quadArgb, normalizedUVs);
 
         // Send to sink (fluids typically do not have overlays)
-        sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions.clone(), normalizedUVs, uv1, normal, linearColors, true);
+        sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent",
+                     positions.clone(), normalizedUVs, colorData.uv1, normal, colorData.colors, true);
 
         resetQuadState();
     }
@@ -180,24 +164,6 @@ final class QuadCollector implements VertexConsumer {
         useChunkOffset = false;
         quadColorCaptured = false;
         quadArgb = 0xFFFFFFFF;
-    }
-
-    private float[] normalizeUVs(float[] input, TextureAtlasSprite s) {
-        float[] out = new float[8];
-        float u0 = s.getU0(), u1 = s.getU1();
-        float v0 = s.getV0(), v1 = s.getV1();
-        float du = u1 - u0; if (du == 0) du = 1f;
-        float dv = v1 - v0; if (dv == 0) dv = 1f;
-        
-        for(int i=0; i<4; i++) {
-            float u = input[i*2];
-            float v = input[i*2+1];
-            float su = (u - u0) / du;
-            float sv = (v - v0) / dv;
-            out[i*2] = clamp01(su);
-            out[i*2+1] = clamp01(sv);
-        }
-        return out;
     }
 
     private TextureAtlasSprite chooseSpriteForQuad() {
@@ -291,38 +257,5 @@ final class QuadCollector implements VertexConsumer {
         double eps = 1e-3;
         return minX < regionMinX - eps || maxX > regionMaxX + eps ||
                minZ < regionMinZ - eps || maxZ > regionMaxZ + eps;
-    }
-
-    private float[] computeFaceNormal(float[] p) {
-        float ax=p[3]-p[0], ay=p[4]-p[1], az=p[5]-p[2];
-        float bx=p[6]-p[0], by=p[7]-p[1], bz=p[8]-p[2];
-        float nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
-        float l=(float)Math.sqrt(nx*nx+ny*ny+nz*nz);
-        if(l==0) return new float[]{0,1,0};
-        return new float[]{nx/l, ny/l, nz/l};
-    }
-    
-    private float clamp01(float v) { return v<0?0:(v>1?1:v); }
-    private float[] whiteColor() { return new float[]{1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1}; }
-
-    /**
-     * 将ARGB颜色转换为顶点颜色数组（4个顶点，相同颜色）。
-     */
-    private float[] computeVertexColorsFromArgb(int argb) {
-        if (argb == 0xFFFFFFFF || argb == -1) {
-            return whiteColor();
-        }
-
-        float r = ((argb >> 16) & 0xFF) / 255.0f;
-        float g = ((argb >> 8) & 0xFF) / 255.0f;
-        float b = (argb & 0xFF) / 255.0f;
-        float a = 1.0f;
-
-        return new float[]{
-            r, g, b, a,
-            r, g, b, a,
-            r, g, b, a,
-            r, g, b, a
-        };
     }
 }

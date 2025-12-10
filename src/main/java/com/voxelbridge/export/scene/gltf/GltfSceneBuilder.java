@@ -183,6 +183,11 @@ public final class GltfSceneBuilder implements SceneSink {
                 float[] uvs = data.uv0.toArray();
 
                 for (PrimitiveData.SpriteRange range : data.spriteRanges) {
+                    boolean animated = ExportRuntimeConfig.isAnimationEnabled() &&
+                        ctx.getTextureRepository().hasAnimation(range.spriteKey());
+                    if (animated) {
+                        continue; // keep sprite-space UVs for animated textures
+                    }
                     for (int i = 0; i < range.count(); i++) {
                         int vIdx = range.startVertexIndex() + i;
                         float u = uvs[vIdx * 2];

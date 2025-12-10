@@ -93,6 +93,8 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("e  Color mode: f" + ExportRuntimeConfig.getColorMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Vanilla random transform: f" +
                     (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  Animation export: f" +
+                    (ExportRuntimeConfig.isAnimationEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Export threads: f" + ExportRuntimeConfig.getExportThreadCount()));
             return 1;
         }));
@@ -120,6 +122,25 @@ public final class VoxelBridgeCommands {
                 .then(Commands.literal("atlas").executes(ctx -> {
                     ExportRuntimeConfig.setAtlasMode(ExportRuntimeConfig.AtlasMode.ATLAS);
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Atlas mode -> Packed atlas (UDIM 8192)"));
+                    return 1;
+                }))
+        );
+
+        root.then(Commands.literal("animation")
+                .executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Animation export is currently f"
+                            + (ExportRuntimeConfig.isAnimationEnabled() ? "on" : "off")));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge animation <on|off>"));
+                    return 1;
+                })
+                .then(Commands.literal("on").executes(ctx -> {
+                    ExportRuntimeConfig.setAnimationEnabled(true);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Animation export -> ON"));
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(ctx -> {
+                    ExportRuntimeConfig.setAnimationEnabled(false);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Animation export -> OFF"));
                     return 1;
                 }))
         );

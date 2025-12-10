@@ -4,6 +4,8 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.config.ExportRuntimeConfig.AtlasMode;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.ExportContext.TexturePlacement;
+import com.voxelbridge.export.texture.AnimatedFrameSet;
+import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.util.ExportLogger;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
@@ -127,11 +129,15 @@ public final class TextureAtlasManager {
 
         Map<String, ExportContext.TintAtlas> blockEntries = new java.util.LinkedHashMap<>();
         ctx.getAtlasBook().forEach((key, atlas) -> {
+            if (ExportRuntimeConfig.isAnimationEnabled()) {
+                ensureAnimationDetection(ctx, key);
+            }
             boolean isInCache = ctx.getCachedSpriteImage(key) != null;
             ExportLogger.log(String.format("[AtlasGen] Sprite registered: %s (inCache=%s, tints=%d)",
                 key, isInCache, atlas.nextIndex.get()));
             // Only include base/albedo sprites; skip block entities and PBR companion keys
-            if (!isBlockEntitySprite(key) && !isPbrSprite(key)) {
+            boolean isAnimated = ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(key);
+            if (!isBlockEntitySprite(key) && !isPbrSprite(key) && !isAnimated) {
                 blockEntries.put(key, atlas);
             }
         });
@@ -316,7 +322,8 @@ public final class TextureAtlasManager {
     }
 
     public static float[] remapUV(ExportContext ctx, String spriteKey, int tint, float u, float v) {
-        if (ExportRuntimeConfig.getAtlasMode() != AtlasMode.ATLAS) {
+        boolean animated = ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(spriteKey);
+        if (ExportRuntimeConfig.getAtlasMode() != AtlasMode.ATLAS || animated) {
             return new float[]{u, v};
         }
 
@@ -541,6 +548,20 @@ public final class TextureAtlasManager {
     }
 
     /**
+     * Ensures we flag animations by scanning the full texture strip (not just first frame).
+     */
+    private static void ensureAnimationDetection(ExportContext ctx, String spriteKey) {
+        if (ctx.getTextureRepository().hasAnimation(spriteKey)) {
+            return;
+        }
+        ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+        BufferedImage full = TextureLoader.readTexture(textureLocation, true);
+        if (full != null) {
+            AnimatedTextureHelper.extractAndStore(spriteKey, full, ctx.getTextureRepository());
+        }
+    }
+
+    /**
      * Loads a texture for atlas generation.
      * Only handles normal block textures - entity textures should not be in the atlas.
      */
@@ -558,8 +579,16 @@ public final class TextureAtlasManager {
         }
 
         ExportLogger.log(String.format("[AtlasGen][CACHE MISS] %s not in cache, trying disk", spriteKey));
-        BufferedImage diskImage = TextureLoader.readTexture(textureLocation);
+        boolean preserveAnimation = ExportRuntimeConfig.isAnimationEnabled();
+        BufferedImage diskImage = TextureLoader.readTexture(textureLocation, preserveAnimation);
         if (diskImage != null) {
+            if (preserveAnimation) {
+                AnimatedFrameSet frames = AnimatedTextureHelper.extractAndStore(spriteKey, diskImage, ctx.getTextureRepository());
+                if (frames != null && !frames.isEmpty()) {
+                    // Use第一帧参与后续流程
+                    diskImage = frames.frames().get(0);
+                }
+            }
             ExportLogger.log(String.format("[AtlasGen][DISK HIT] Loaded %s from disk (%dx%d)",
                 spriteKey, diskImage.getWidth(), diskImage.getHeight()));
             ctx.getTextureRepository().put(textureLocation, spriteKey, diskImage);

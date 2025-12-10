@@ -5,6 +5,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
@@ -23,6 +24,13 @@ public final class TextureLoader {
      * Loads a PNG texture, honoring resource-pack overrides and returning only the first animation frame.
      */
     public static BufferedImage readTexture(ResourceLocation png) {
+        return readTexture(png, ExportRuntimeConfig.isAnimationEnabled());
+    }
+
+    /**
+     * Loads a PNG texture with optional preservation of animation strips.
+     */
+    public static BufferedImage readTexture(ResourceLocation png, boolean preserveAnimationStrip) {
         ExportLogger.log(String.format("[TextureLoader] Resolving %s", png));
         try {
             var rm = Minecraft.getInstance().getResourceManager();
@@ -34,6 +42,9 @@ public final class TextureLoader {
             try (InputStream in = opt.get().open()) {
                 BufferedImage img = readPngNoColorConversion(in);
                 ExportLogger.log(String.format("[TextureLoader] Loaded %s (%dx%d)", png, img.getWidth(), img.getHeight()));
+                if (preserveAnimationStrip) {
+                    return img;
+                }
                 BufferedImage firstFrame = extractFirstFrame(img);
                 if (firstFrame != img) {
                     ExportLogger.log(String.format("[TextureLoader] Extracted first frame for %s -> %dx%d",
@@ -72,6 +83,9 @@ public final class TextureLoader {
         BufferedImage img = nativeImageToBufferedImage(nativeImg);
 
         // Extract first frame for animated textures
+        if (ExportRuntimeConfig.isAnimationEnabled()) {
+            return img;
+        }
         BufferedImage firstFrame = extractFirstFrame(img);
         if (firstFrame != img) {
             ExportLogger.log(String.format("[TextureLoader] Extracted first frame from sprite %s -> %dx%d",
