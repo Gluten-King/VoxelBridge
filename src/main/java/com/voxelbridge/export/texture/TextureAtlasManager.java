@@ -7,11 +7,12 @@ import com.voxelbridge.export.ExportContext.TexturePlacement;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.export.texture.PngjWriter;
+import com.voxelbridge.util.TimeLogger;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -22,6 +23,13 @@ import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Comparator;
+import java.util.stream.Collectors;
+import java.awt.image.DataBufferInt;
+import java.awt.image.SinglePixelPackedSampleModel;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 
 /**
  * TextureAtlasManager handles atlas bookkeeping and generation.
@@ -160,6 +168,7 @@ public final class TextureAtlasManager {
             return;
         }
 
+        long tIndividual = TimeLogger.now();
         for (Map.Entry<String, ExportContext.TintAtlas> entry : entries.entrySet()) {
             String spriteKey = entry.getKey();
             ExportContext.TintAtlas atlas = entry.getValue();
@@ -184,7 +193,7 @@ public final class TextureAtlasManager {
             String relativePath = subDir + safe(spriteKey) + ".png";
             Path target = outDir.resolve(relativePath);
             Files.createDirectories(target.getParent());
-            ImageIO.write(outputImage, "png", target.toFile());
+            PngjWriter.write(outputImage, target);
             atlas.atlasFile = target;
             atlas.texW = outputImage.getWidth();
             atlas.texH = outputImage.getHeight();
@@ -201,7 +210,7 @@ public final class TextureAtlasManager {
                 String normalRel = subDir + safe(spriteKey) + "_n.png";
                 Path normalTarget = outDir.resolve(normalRel);
                 Files.createDirectories(normalTarget.getParent());
-                ImageIO.write(normal, "png", normalTarget.toFile());
+                PngjWriter.write(normal, normalTarget);
                 ExportLogger.log(String.format("[AtlasGen] sprite=%s normal exported: %s", spriteKey, normalRel));
                 ctx.getMaterialPaths().put(spriteKey + "_n", normalRel);
             }
@@ -210,14 +219,16 @@ public final class TextureAtlasManager {
                 String specRel = subDir + safe(spriteKey) + "_s.png";
                 Path specTarget = outDir.resolve(specRel);
                 Files.createDirectories(specTarget.getParent());
-                ImageIO.write(spec, "png", specTarget.toFile());
+                PngjWriter.write(spec, specTarget);
                 ExportLogger.log(String.format("[AtlasGen] sprite=%s specular exported: %s", spriteKey, specRel));
                 ctx.getMaterialPaths().put(spriteKey + "_s", specRel);
             }
         }
+        TimeLogger.logDuration("individual_texture_write", TimeLogger.elapsedSince(tIndividual));
     }
 
     private record AtlasRequest(String spriteKey, int tintIndex, BufferedImage image) {}
+    private record TintTask(String spriteKey, int tintIndex, int tint, BufferedImage baseImage) {}
 
     private static void generatePackedAtlas(ExportContext ctx,
                                             Path outDir,
@@ -230,7 +241,7 @@ public final class TextureAtlasManager {
 
         ExportLogger.log(String.format("[AtlasGen] Generating packed atlas with %d sprites", entries.size()));
 
-        List<AtlasRequest> requests = new ArrayList<>();
+        List<TintTask> tintTasks = new ArrayList<>();
         Map<Integer, String> pagePathMap = new java.util.HashMap<>();
         Map<String, AtlasRequest> requestByKey = new LinkedHashMap<>();
         Map<Integer, Integer> pageToUdim = new java.util.HashMap<>();
@@ -259,12 +270,23 @@ public final class TextureAtlasManager {
             }
 
             for (int i = 0; i < tintSlots; i++) {
-                BufferedImage tinted = tintTile(base, tintBySlot[i]);
-                requests.add(new AtlasRequest(spriteKey, i, tinted));
+                tintTasks.add(new TintTask(spriteKey, i, tintBySlot[i], base));
             }
         }
 
+        // Parallel tinting to utilize multiple cores
+        long tTint = TimeLogger.now();
+        List<AtlasRequest> requests = tintTasks.parallelStream()
+            .map(task -> new AtlasRequest(task.spriteKey(), task.tintIndex(), tintTile(task.baseImage(), task.tint())))
+            .collect(Collectors.toList());
+        // Ensure deterministic order before packing
+        requests.sort(Comparator
+            .comparing((AtlasRequest r) -> r.spriteKey)
+            .thenComparingInt(r -> r.tintIndex));
+        TimeLogger.logDuration("atlas_tinting", TimeLogger.elapsedSince(tTint));
+
         // Pack using MaxRects (no rotation)
+        long tPack = TimeLogger.now();
         int atlasSize = ExportRuntimeConfig.getAtlasSize().getSize();
         TextureAtlasPacker packer = new TextureAtlasPacker(atlasSize, false);
         int counter = 0;
@@ -316,9 +338,12 @@ public final class TextureAtlasManager {
                 ctx.getMaterialPaths().put(entry.getKey(), rel);
             }
         }
+        TimeLogger.logDuration("atlas_packing_and_write", TimeLogger.elapsedSince(tPack));
 
         // Generate PBR atlases aligned to the same layout
+        long tPbr = TimeLogger.now();
         generatePbrAtlases(ctx, outDir, entries, new HashSet<>(pageToUdim.keySet()), atlasSize, atlasDirName, atlasPrefix, pageToUdim);
+        TimeLogger.logDuration("pbr_atlas_generation", TimeLogger.elapsedSince(tPbr));
     }
 
     public static float[] remapUV(ExportContext ctx, String spriteKey, int tint, float u, float v) {
@@ -423,21 +448,50 @@ public final class TextureAtlasManager {
     }
 
     private static BufferedImage tintTile(BufferedImage tile, int tint) {
-        float[] mul = TextureLoader.rgbMul(tint);
-        BufferedImage dst = new BufferedImage(tile.getWidth(), tile.getHeight(), BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < tile.getHeight(); y++) {
-            for (int x = 0; x < tile.getWidth(); x++) {
-                int argb = tile.getRGB(x, y);
+        int w = tile.getWidth();
+        int h = tile.getHeight();
+
+        BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+
+        int[] srcData;
+        int[] dstData;
+        int srcStride = w;
+        int srcOffset = 0;
+        var raster = tile.getRaster();
+        if (raster.getDataBuffer() instanceof DataBufferInt db && raster.getSampleModel() instanceof SinglePixelPackedSampleModel sm) {
+            srcData = db.getData();
+            srcStride = sm.getScanlineStride();
+            srcOffset = db.getOffset();
+        } else {
+            srcData = tile.getRGB(0, 0, w, h, null, 0, w);
+        }
+        dstData = ((DataBufferInt) dst.getRaster().getDataBuffer()).getData();
+
+        float rMul = ((tint >> 16) & 0xFF) / 255f;
+        float gMul = ((tint >> 8) & 0xFF) / 255f;
+        float bMul = (tint & 0xFF) / 255f;
+
+        int dstIdx = 0;
+        int srcRowStart = srcOffset;
+        for (int y = 0; y < h; y++) {
+            int srcIdx = srcRowStart;
+            for (int x = 0; x < w; x++, srcIdx++, dstIdx++) {
+                int argb = srcData[srcIdx];
+                if ((argb & 0xFF000000) == 0) {
+                    continue;
+                }
                 int a = (argb >>> 24) & 0xFF;
                 int r = (argb >>> 16) & 0xFF;
                 int g = (argb >>> 8) & 0xFF;
                 int b = argb & 0xFF;
-                int rr = Math.min(255, (int) (r * mul[0]));
-                int gg = Math.min(255, (int) (g * mul[1]));
-                int bb = Math.min(255, (int) (b * mul[2]));
-                dst.setRGB(x, y, (a << 24) | (rr << 16) | (gg << 8) | bb);
+                int rr = (int) (r * rMul);
+                int gg = (int) (g * gMul);
+                int bb = (int) (b * bMul);
+                dstData[dstIdx] = (a << 24) | (rr << 16) | (gg << 8) | bb;
             }
+            srcRowStart += srcStride;
         }
+
         return dst;
     }
 
@@ -486,53 +540,68 @@ public final class TextureAtlasManager {
             for (Map.Entry<Integer, ExportContext.TexturePlacement> placementEntry : atlas.placements.entrySet()) {
                 int tintIndex = placementEntry.getKey();
                 ExportContext.TexturePlacement placement = placementEntry.getValue();
-                // Use spriteKey for tint 0, spriteKey#tN for others (consistent with packing)
                 String key = tintIndex == 0 ? spriteKey : spriteKey + "#t" + tintIndex;
                 flatPlacements.put(key, new PbrAtlasWriter.TexturePlacementAdapter(placement));
             }
         }
 
-        // Generate normal map atlas
-        PbrAtlasWriter.PbrAtlasConfig normalConfig = new PbrAtlasWriter.PbrAtlasConfig(
-            atlasDir, atlasSize, basePrefix + "n_",
-            PbrTextureHelper.DEFAULT_NORMAL_COLOR, usedPages, pageToUdim
-        );
-        PbrAtlasWriter.generatePbrAtlas(normalConfig, flatPlacements, key -> {
-            // Extract base sprite key (remove #tN suffix if present)
-            String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
-            BufferedImage normalImage = ctx.getCachedSpriteImage(spriteKey + "_n");
-            if (normalImage != null) {
-                // Update material paths for normal textures (only for base key)
-                if (!key.contains("#")) {
-                    PbrAtlasWriter.Placement p = flatPlacements.get(key);
-                    int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
-                    String normalPath = atlasDirName + "/" + basePrefix + "n_" + udim + ".png";
-                    ctx.getMaterialPaths().put(spriteKey + "_n", normalPath);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> futureNormal = executor.submit(() -> {
+                try {
+                    PbrAtlasWriter.PbrAtlasConfig normalConfig = new PbrAtlasWriter.PbrAtlasConfig(
+                        atlasDir, atlasSize, basePrefix + "n_",
+                        PbrTextureHelper.DEFAULT_NORMAL_COLOR, usedPages, pageToUdim
+                    );
+                    PbrAtlasWriter.generatePbrAtlas(normalConfig, flatPlacements, key -> {
+                        String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
+                        BufferedImage normalImage = ctx.getCachedSpriteImage(spriteKey + "_n");
+                        if (normalImage != null && !key.contains("#")) {
+                            PbrAtlasWriter.Placement p = flatPlacements.get(key);
+                            int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
+                            String normalPath = atlasDirName + "/" + basePrefix + "n_" + udim + ".png";
+                            ctx.getMaterialPaths().put(spriteKey + "_n", normalPath);
+                        }
+                        return normalImage;
+                    });
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
                 }
-            }
-            return normalImage;
-        });
+            });
 
-        // Generate specular map atlas
-        PbrAtlasWriter.PbrAtlasConfig specConfig = new PbrAtlasWriter.PbrAtlasConfig(
-            atlasDir, atlasSize, basePrefix + "s_",
-            PbrTextureHelper.DEFAULT_SPECULAR_COLOR, usedPages, pageToUdim
-        );
-        PbrAtlasWriter.generatePbrAtlas(specConfig, flatPlacements, key -> {
-            // Extract base sprite key (remove #tN suffix if present)
-            String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
-            BufferedImage specImage = ctx.getCachedSpriteImage(spriteKey + "_s");
-            if (specImage != null) {
-                // Update material paths for specular textures (only for base key)
-                if (!key.contains("#")) {
-                    PbrAtlasWriter.Placement p = flatPlacements.get(key);
-                    int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
-                    String specPath = atlasDirName + "/" + basePrefix + "s_" + udim + ".png";
-                    ctx.getMaterialPaths().put(spriteKey + "_s", specPath);
+            Future<?> futureSpec = executor.submit(() -> {
+                try {
+                    PbrAtlasWriter.PbrAtlasConfig specConfig = new PbrAtlasWriter.PbrAtlasConfig(
+                        atlasDir, atlasSize, basePrefix + "s_",
+                        PbrTextureHelper.DEFAULT_SPECULAR_COLOR, usedPages, pageToUdim
+                    );
+                    PbrAtlasWriter.generatePbrAtlas(specConfig, flatPlacements, key -> {
+                        String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
+                        BufferedImage specImage = ctx.getCachedSpriteImage(spriteKey + "_s");
+                        if (specImage != null && !key.contains("#")) {
+                            PbrAtlasWriter.Placement p = flatPlacements.get(key);
+                            int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
+                            String specPath = atlasDirName + "/" + basePrefix + "s_" + udim + ".png";
+                            ctx.getMaterialPaths().put(spriteKey + "_s", specPath);
+                        }
+                        return specImage;
+                    });
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
                 }
+            });
+
+            futureNormal.get();
+            futureSpec.get();
+        } catch (Exception e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (cause instanceof IOException io) {
+                throw io;
             }
-            return specImage;
-        });
+            throw new IOException("PBR atlas generation failed", cause);
+        } finally {
+            executor.shutdown();
+        }
     }
 
     private static float clamp01(float x) {

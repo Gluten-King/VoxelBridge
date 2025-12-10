@@ -57,22 +57,30 @@ public final class GeometryUtil {
         };
     }
 
+    private static float srgbToLinearComponent(int c) {
+        float v = c / 255.0f;
+        if (v <= 0.04045f) {
+            return v / 12.92f;
+        }
+        return (float) Math.pow((v + 0.055f) / 1.055f, 2.4f);
+    }
+
     /**
      * Computes vertex colors from ARGB tint color.
      *
      * @param argb ARGB color in 0xAARRGGBB format
      * @param hasTint whether the quad has tint enabled
-     * @return 16 floats representing RGBA for 4 vertices (same color for all)
+     * @return 16 floats representing RGBA for 4 vertices (same color for all), linear space
      */
     public static float[] computeVertexColors(int argb, boolean hasTint) {
         if (!hasTint || argb == 0xFFFFFFFF || argb == -1) {
             return whiteColor(); // No tint or white tint
         }
 
-        // Extract RGB components (ignore alpha)
-        float r = ((argb >> 16) & 0xFF) / 255.0f;
-        float g = ((argb >> 8) & 0xFF) / 255.0f;
-        float b = (argb & 0xFF) / 255.0f;
+        // Extract RGB components (ignore alpha) and convert sRGB -> linear
+        float r = srgbToLinearComponent((argb >> 16) & 0xFF);
+        float g = srgbToLinearComponent((argb >> 8) & 0xFF);
+        float b = srgbToLinearComponent(argb & 0xFF);
         float a = 1.0f; // Always opaque
 
         // All 4 vertices use the same color

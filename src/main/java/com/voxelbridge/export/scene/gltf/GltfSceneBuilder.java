@@ -224,9 +224,9 @@ public final class GltfSceneBuilder implements SceneSink {
                 uv1Acc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
             }
 
-            // 当颜色数据非全白时添加COLOR_0属性
+            // 始终写入 COLOR_0，保持顶点颜色存在（无 tint 则为纯白）
             int colorAcc = -1;
-            if (!data.colors.isEmpty() && hasNonWhiteColors(data)) {
+            if (!data.colors.isEmpty()) {
                 int off = chunk.writeFloatArray(data.colors.toArray());
                 int view = addView(gltf, 0, off, data.colors.size() * 4, 34962);
                 colorAcc = addAccessor(gltf, view, data.vertexCount, "VEC4", 5126, null, null);

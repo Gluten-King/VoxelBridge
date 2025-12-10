@@ -1,8 +1,8 @@
 package com.voxelbridge.export.texture;
 
 import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.export.texture.PngjWriter;
 
-import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -180,7 +180,7 @@ public final class PbrAtlasWriter {
 
             BufferedImage page = pages.get(pageIndex);
             if (page != null) {
-                ImageIO.write(page, "png", outputPath.toFile());
+                PngjWriter.write(page, outputPath);
                 ExportLogger.log(String.format("[PbrAtlasWriter] Wrote %s", filename));
             }
         }

@@ -1,6 +1,5 @@
 package com.voxelbridge.export.texture;
 
-import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -10,6 +9,9 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
+
+import com.voxelbridge.export.texture.PngjWriter;
 
 /**
  * Generic texture atlas packer using the MaxRects (Maximum Rectangles) algorithm.
@@ -129,13 +131,17 @@ public final class TextureAtlasPacker {
         }
 
         // Write atlas pages to disk
-        for (int i = 0; i < pages.size(); i++) {
+        IntStream.range(0, pages.size()).parallel().forEach(i -> {
             int udim = 1001 + (i % 10) + (i / 10) * 10;
             String filename = prefix + udim + ".png";
             Path outputPath = outputDir.resolve(filename);
-            ImageIO.write(pages.get(i).image, "png", outputPath.toFile());
-            System.out.println("[TextureAtlasPacker] Wrote atlas page: " + filename);
-        }
+            try {
+                PngjWriter.write(pages.get(i).image, outputPath);
+                System.out.println("[TextureAtlasPacker] Wrote atlas page: " + filename);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
 
         return placements;
     }

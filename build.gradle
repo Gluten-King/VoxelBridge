@@ -21,6 +21,7 @@ repositories {
     maven {
         url "https://maven.su5ed.dev/releases"
     }
+    mavenCentral()
 }
 
 base {
@@ -88,10 +89,12 @@ dependencies {
     implementation "de.javagl:jgltf-model:${jgltfVersion}"
     implementation "de.javagl:jgltf-impl-v1:${jgltfVersion}"
     implementation "de.javagl:jgltf-impl-v2:${jgltfVersion}"
+    implementation "ar.com.hjg:pngj:2.1.0"
 
     shaded "de.javagl:jgltf-model:${jgltfVersion}"
     shaded "de.javagl:jgltf-impl-v1:${jgltfVersion}"
     shaded "de.javagl:jgltf-impl-v2:${jgltfVersion}"
+    shaded "ar.com.hjg:pngj:2.1.0"
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
@@ -145,6 +148,7 @@ tasks.named('shadowJar') {
     archiveClassifier.set('')
     configurations = [project.configurations.shaded]
     relocate 'de.javagl.jgltf', 'com.voxelbridge.shadow.jgltf'
+    relocate 'ar.com.hjg.pngj', 'com.voxelbridge.shadow.pngj'
     mergeServiceFiles()
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

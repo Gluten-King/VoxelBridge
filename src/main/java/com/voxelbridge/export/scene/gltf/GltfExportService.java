@@ -9,6 +9,7 @@ import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.BlockEntityDebugLogger;
 import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.TimeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -85,6 +86,7 @@ public final class GltfExportService {
 
         // Initialize logging
         ExportLogger.initialize(outDir);
+        TimeLogger.initialize(outDir);
         ExportLogger.log("[GLTF] Starting glTF export with format-agnostic sampler");
         BlockEntityDebugLogger.initialize(outDir);
 
@@ -97,34 +99,51 @@ public final class GltfExportService {
         // Create glTF-specific scene sink
         SceneSink sceneSink = new GltfSceneBuilder(ctx, gltfDir);
 
+        long tTotal = TimeLogger.now();
         // Sample region geometry using streaming sampler (format-agnostic)
+        long tSampling = TimeLogger.now();
         StreamingRegionSampler.sampleRegion(level, pos1, pos2, sceneSink, ctx);
+        TimeLogger.logDuration("block_sampling", TimeLogger.elapsedSince(tSampling));
 
         // Write glTF output
         SceneWriteRequest request = new SceneWriteRequest(baseName, gltfDir);
         // Generate atlases if needed (place under gltf dir)
         if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
+            long tAtlas = TimeLogger.now();
             TextureAtlasManager.generateAllAtlases(ctx, gltfDir);
+            TimeLogger.logDuration("texture_atlas_generation", TimeLogger.elapsedSince(tAtlas));
             // Pack BlockEntity textures into atlas (ATLAS mode)
             ExportLogger.log("[GLTF] Packing BlockEntity textures into atlas");
+            long tBerAtlas = TimeLogger.now();
             com.voxelbridge.export.texture.BlockEntityTextureManager.packIntoAtlas(ctx, gltfDir);
+            TimeLogger.logDuration("blockentity_texture_atlas", TimeLogger.elapsedSince(tBerAtlas));
         } else {
             // Export BlockEntity textures as individual files (INDIVIDUAL mode)
+            long tBerExport = TimeLogger.now();
             com.voxelbridge.export.texture.BlockEntityTextureManager.exportTextures(ctx, gltfDir);
+            TimeLogger.logDuration("blockentity_texture_export", TimeLogger.elapsedSince(tBerExport));
         }
         Path output;
         try {
+            long tSceneWrite = TimeLogger.now();
             output = sceneSink.write(request);
+            TimeLogger.logDuration("geometry_write", TimeLogger.elapsedSince(tSceneWrite));
+            TimeLogger.logDuration("total_export", TimeLogger.elapsedSince(tTotal));
             ExportLogger.log("[GLTF] Export complete: " + output);
             System.out.println(banner);
             System.out.println("[VoxelBridge][GLTF] *** EXPORT COMPLETED SUCCESSFULLY ***");
             System.out.println("[VoxelBridge][GLTF] Output: " + output);
             System.out.println(banner);
             return output;
+        } catch (Exception e) {
+            ExportLogger.log("[GLTF][ERROR] Export failed: " + e);
+            e.printStackTrace();
+            throw e;
         } finally {
             BlockEntityDebugLogger.close();
             ExportLogger.close();
             BlockExporter.closeCTMDebugLog();
+            TimeLogger.close();
         }
     }
 }

@@ -271,7 +271,6 @@ public final class BlockEntityRenderer {
             public VertexConsumer addVertex(float x, float y, float z) {
                 if (vertices.size() < 4) {
                     vertices.add(new Vertex(x, y, z));
-                    com.voxelbridge.util.ExportLogger.log("[VertexCollector] addVertex: (" + x + "," + y + "," + z + ") - now have " + vertices.size() + " vertices");
                 }
                 return this;
             }
@@ -291,7 +290,6 @@ public final class BlockEntityRenderer {
                     Vertex last = vertices.get(vertices.size() - 1);
                     last.u = u;
                     last.v = v;
-                    com.voxelbridge.util.ExportLogger.log("[VertexCollector] setUv called: u=" + u + ", v=" + v + " for vertex " + (vertices.size() - 1));
                 }
                 return this;
             }
