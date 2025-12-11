@@ -75,6 +75,8 @@ public final class BlockExporter {
     private final Map<Long, List<OverlayQuadData>> overlayCacheCTM = new HashMap<>();
     // Combined overlay view (vanilla + CTM) for UV mapping on base quads
     private final Map<Long, List<OverlayQuadData>> overlayCacheCombined = new HashMap<>();
+    // Track overlay quads' original hashes to skip double emission when cached under a different hash
+    private final Set<Long> overlayOriginalHashes = new HashSet<>();
     private volatile boolean missingNeighborDetected = false;
     // Track if current block uses CTM/connected textures (for face culling decisions)
     private boolean currentBlockIsCTM = false;
@@ -86,6 +88,8 @@ public final class BlockExporter {
     private static final float SIZE_EPS = 1e-4f;
     private static final float UNIT_SIZE = 1.0f;
     private static final float UNIT_EPS = 1e-3f;
+    // Only treat dirt path top overlays when the face sits near the upper surface (avoid bottom faces being treated as overlays)
+    private static final float DIRT_PATH_TOP_MIN_HEIGHT = 15f / 16f - 0.001f;
     private static final float OVERLAY_ZFIGHT_OFFSET = 3e-4f;  // Increased by 2x for better multi-layer separation and float precision
     private static PrintWriter ctmDebugLog = null;
     private static int sampledBlockCount = 0;
@@ -115,8 +119,10 @@ public final class BlockExporter {
         final int axis; // 0=X,1=Y,2=Z, -1 = not axis-aligned
         final float planeCoord;
         final float minU, maxU, minV, maxV;
+        final float minX, maxX, minZ, maxZ;
         final int originalIndex; // Index in the original quads list (for render order)
-        QuadInfo(String sprite, float[] normal, int axis, float planeCoord, float minU, float maxU, float minV, float maxV, int originalIndex) {
+        QuadInfo(String sprite, float[] normal, int axis, float planeCoord, float minU, float maxU, float minV, float maxV,
+                 float minX, float maxX, float minZ, float maxZ, int originalIndex) {
             this.sprite = sprite;
             this.normal = normal;
             this.axis = axis;
@@ -125,6 +131,10 @@ public final class BlockExporter {
             this.maxU = maxU;
             this.minV = minV;
             this.maxV = maxV;
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minZ = minZ;
+            this.maxZ = maxZ;
             this.originalIndex = originalIndex;
         }
     }
@@ -191,6 +201,7 @@ public final class BlockExporter {
         overlayCacheVanilla.clear();
         overlayCacheCTM.clear();
         overlayCacheCombined.clear();
+        overlayOriginalHashes.clear();
         currentBlockIsCTM = false; // Reset for each block
         if (state.isAir()) return;
         // 原版位置哈希随机偏移（草/蕨等），可开关
@@ -281,6 +292,48 @@ public final class BlockExporter {
             QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex);
             ctmPositionQuads.computeIfAbsent(posHash, k -> new ArrayList<>()).add(info);
             quadIndex++;
+        }
+        if (state.is(Blocks.DIRT_PATH)) {
+            Map<Long, List<QuadInfo>> footprintGroups = new HashMap<>();
+            for (List<QuadInfo> list : ctmPositionQuads.values()) {
+                for (QuadInfo info : list) {
+                    if (info.axis == 1) { // top/bottom faces
+                        double baseY = pos.getY() + offsetY + (randomOffset != null ? randomOffset.y : 0);
+                        float localY = (float) (info.planeCoord - baseY);
+                        // Only treat faces that are near the top surface as overlay candidates
+                        if (localY + PLANE_EPS < DIRT_PATH_TOP_MIN_HEIGHT) continue;
+                        long fpHash = computeFootprintHash(info);
+                        footprintGroups.computeIfAbsent(fpHash, k -> new ArrayList<>()).add(info);
+                    }
+                }
+            }
+            for (List<QuadInfo> group : footprintGroups.values()) {
+                if (group.size() < 2) continue;
+                QuadInfo baseInfo = null;
+                for (QuadInfo info : group) {
+                    if (baseInfo == null || info.planeCoord < baseInfo.planeCoord) {
+                        baseInfo = info;
+                    }
+                }
+                if (baseInfo == null) continue;
+                long baseHash;
+                try {
+                    BakedQuad baseQuad = quads.get(baseInfo.originalIndex);
+                    float[] basePos = new float[12];
+                    extractVertices(baseQuad, pos, basePos, new float[8], baseQuad.getSprite(), randomOffset);
+                    baseHash = computePositionHash(basePos);
+                } catch (Throwable t) { continue; }
+                int overlayIdx = 0;
+                for (QuadInfo info : group) {
+                    if (info == baseInfo) continue;
+                    if (info.planeCoord <= baseInfo.planeCoord + PLANE_EPS) continue;
+                    BakedQuad overlayQuad;
+                    try {
+                        overlayQuad = quads.get(info.originalIndex);
+                    } catch (Throwable t) { continue; }
+                    cacheOverlayQuadWithBaseHash(state, pos, overlayQuad, true, overlayIdx++, randomOffset, baseHash);
+                }
+            }
         }
         // PASS 1b: Analyze each position and cache overlays (position-based detection)
         for (Map.Entry<Long, List<QuadInfo>> entry : ctmPositionQuads.entrySet()) {
@@ -487,9 +540,20 @@ public final class BlockExporter {
         }
     }
     private QuadInfo buildQuadInfo(String spriteKey, float[] positions, float[] normal, int originalIndex) {
+        float minX = Float.POSITIVE_INFINITY, maxX = Float.NEGATIVE_INFINITY;
+        float minZ = Float.POSITIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
+        for (int i = 0; i < 4; i++) {
+            int base = i * 3;
+            float x = positions[base];
+            float z = positions[base + 2];
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        }
         int axis = dominantAxis(normal);
         if (axis < 0) {
-            return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, originalIndex);
+            return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex);
         }
         float plane = positions[axis];
         float minU = Float.POSITIVE_INFINITY, maxU = Float.NEGATIVE_INFINITY;
@@ -498,7 +562,7 @@ public final class BlockExporter {
             int base = i * 3;
             float coord = positions[base + axis];
             if (Math.abs(coord - plane) > PLANE_EPS) {
-                return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, originalIndex);
+                return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex);
             }
             float u, v;
             switch (axis) {
@@ -515,7 +579,7 @@ public final class BlockExporter {
                     v = positions[base + 1];
                 }
                 default -> {
-                    return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, originalIndex);
+                    return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex);
                 }
             }
             if (u < minU) minU = u;
@@ -523,7 +587,7 @@ public final class BlockExporter {
             if (v < minV) minV = v;
             if (v > maxV) maxV = v;
         }
-        return new QuadInfo(spriteKey, normal, axis, plane, minU, maxU, minV, maxV, originalIndex);
+        return new QuadInfo(spriteKey, normal, axis, plane, minU, maxU, minV, maxV, minX, maxX, minZ, maxZ, originalIndex);
     }
     private int dominantAxis(float[] normal) {
         if (normal == null || normal.length < 3) return -1;
@@ -692,6 +756,7 @@ public final class BlockExporter {
      * Used to skip rendering overlay quads in PASS 2 (they'll be output after their base quad).
      */
     private boolean isQuadCachedAsOverlay(long posHash, String spriteKey) {
+        if (overlayOriginalHashes.contains(posHash)) return true;
         // Check vanilla overlays
         List<OverlayQuadData> vanillaList = overlayCacheVanilla.get(posHash);
         if (vanillaList != null) {
@@ -757,6 +822,12 @@ public final class BlockExporter {
         return true;
     }
     private void cacheOverlayQuad(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset) {
+        cacheOverlayQuadInternal(state, pos, quad, isCtmOverlay, overlayIndex, randomOffset, null, false);
+    }
+    private void cacheOverlayQuadWithBaseHash(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, Long forcedBaseHash) {
+        cacheOverlayQuadInternal(state, pos, quad, isCtmOverlay, overlayIndex, randomOffset, forcedBaseHash, true);
+    }
+    private void cacheOverlayQuadInternal(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, Long forcedBaseHash, boolean recordOriginal) {
         var sprite = quad.getSprite();
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
@@ -822,6 +893,18 @@ public final class BlockExporter {
             uv0[i * 2 + 1] = sv;
         }
 
+        // Convert raw positions for skip detection before offset
+        float[] rawPos = new float[12];
+        for (int i = 0; i < 4; i++) {
+            double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
+            double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
+            double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
+            rawPos[i * 3] = (float)worldX;
+            rawPos[i * 3 + 1] = (float)worldY;
+            rawPos[i * 3 + 2] = (float)worldZ;
+        }
+        long rawHash = computePositionHash(rawPos);
+
         // Apply overlay offset in local coordinate system (0-1 range) for precision
         applyLocalOverlayOffset(localPos, overlayIndex);
 
@@ -845,7 +928,11 @@ public final class BlockExporter {
         // Calculate normal for the overlay quad
         float[] normal = GeometryUtil.computeFaceNormal(positions);
 
-        long posHash = computePositionHash(positions);
+        long overlayPosHash = computePositionHash(positions);
+        if (recordOriginal) {
+            overlayOriginalHashes.add(rawHash);
+        }
+        long posHash = (forcedBaseHash != null) ? forcedBaseHash : overlayPosHash;
         Map<Long, List<OverlayQuadData>> cache = isCtmOverlay ? overlayCacheCTM : overlayCacheVanilla;
         List<OverlayQuadData> overlayList = cache.computeIfAbsent(posHash, k -> new ArrayList<>());
         // Use the provided overlayIndex from caller (for progressive offset assignment)
@@ -1072,20 +1159,27 @@ public final class BlockExporter {
             return false;
         }
         String className = model.getClass().getName().toLowerCase();
-        if (!className.contains("continuity") && !className.contains("ctm") && !className.contains("connected")) {
-            return false;
-        }
+        boolean classHints = className.contains("continuity") || className.contains("ctm") || className.contains("connected");
+
         // Check sprite diversity (CTM uses multiple sprite variants)
         Set<String> uniqueSprites = new HashSet<>();
+        boolean ctmPathHint = false;
         for (BakedQuad quad : quads) {
             if (quad == null || quad.getSprite() == null) continue;
             String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
             if (spriteKey.contains("_overlay")) continue;
-            // Fix: CTM uses underscore format (e.g., glass_pane_5), not slash format
             String baseSprite = spriteKey.replaceAll("_\\d+$", "");
             uniqueSprites.add(baseSprite);
+            // Path-based hints for CTM (even if only one variant exists in this sample)
+            String lower = spriteKey.toLowerCase(Locale.ROOT);
+            if (lower.contains("/ctm/") || lower.contains("ctm/") || lower.contains("_ctm") || lower.contains("/connected/")) {
+                ctmPathHint = true;
+            }
         }
-        return uniqueSprites.size() > 1;
+        // Loosen detection: if the model class hints CTM OR sprites have CTM-like paths, treat as CTM even with one variant
+        if (classHints && (uniqueSprites.size() >= 1)) return true;
+        if (uniqueSprites.size() > 1) return true;
+        return ctmPathHint;
     }
     private boolean isNeighborChunksLoadedForBlock(BlockPos pos) {
         if (chunkCache == null) return true;
@@ -1195,6 +1289,14 @@ public final class BlockExporter {
                 hash = 31 * hash + Math.round(uv0[idx * 2 + 1] * 1000f);
             }
         }
+        return hash;
+    }
+    private long computeFootprintHash(QuadInfo info) {
+        long hash = 1125899906842597L;
+        hash = 31 * hash + Math.round(info.minX * 1000f);
+        hash = 31 * hash + Math.round(info.maxX * 1000f);
+        hash = 31 * hash + Math.round(info.minZ * 1000f);
+        hash = 31 * hash + Math.round(info.maxZ * 1000f);
         return hash;
     }
     public boolean hadMissingNeighborAndReset() {
