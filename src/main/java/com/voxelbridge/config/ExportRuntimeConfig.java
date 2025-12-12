@@ -74,7 +74,7 @@ public final class ExportRuntimeConfig {
 
     private static AtlasMode atlasMode = AtlasMode.ATLAS;
     private static AtlasSize atlasSize = AtlasSize.SIZE_8192;
-    private static ColorMode colorMode = ColorMode.COLORMAP;
+    private static ColorMode colorMode = ColorMode.VERTEX_COLOR;
     private static CoordinateMode coordinateMode = CoordinateMode.CENTERED;
     private static int exportThreadCount = Runtime.getRuntime().availableProcessors();
     // 控制是否应用原版基于位置哈希的随机变换（草丛偏移、随机模型旋转等）

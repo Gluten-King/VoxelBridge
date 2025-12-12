@@ -123,8 +123,8 @@ public final class GltfSceneBuilder implements SceneSink {
             // Overlay quads: "minecraft:glass_overlay" (all overlays merged)
             String primitiveKey = q.materialGroupKey;
             if (animated) {
-                // Align animated primitive naming with animated folder naming (per-sprite)
-                primitiveKey = safe(spriteKey);
+                // 保留材质组上的 emissive 等标签，动画标记追加在末尾
+                primitiveKey = safe(q.materialGroupKey);
                 if ("overlay".equals(q.overlaySpriteKey)) {
                     primitiveKey = primitiveKey + "_overlay";
                 }
@@ -133,6 +133,19 @@ public final class GltfSceneBuilder implements SceneSink {
                 if ("overlay".equals(q.overlaySpriteKey)) {
                     primitiveKey = q.materialGroupKey + "_overlay";
                 }
+            }
+
+            // Re-key animated primitives by sprite to avoid splitting one animation across multiple material keys
+            if (animated) {
+                String animatedSpriteKey = spriteKey;
+                if (q.overlaySpriteKey != null && ctx.getTextureRepository().hasAnimation(q.overlaySpriteKey)) {
+                    animatedSpriteKey = q.overlaySpriteKey;
+                }
+                primitiveKey = safe(animatedSpriteKey);
+                if ("overlay".equals(q.overlaySpriteKey)) {
+                    primitiveKey = primitiveKey + "_overlay";
+                }
+                primitiveKey = primitiveKey + "_animated";
             }
 
             PrimitiveData data = primitiveMap.computeIfAbsent(primitiveKey, k -> new PrimitiveData(q.materialGroupKey));
@@ -330,9 +343,14 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     private float[] remapUV(String spriteKey, float u, float v) {
-        // Check if this is a block entity texture
-        if (spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:") || spriteKey.startsWith("base:")) {
-            // Try direct lookup first
+        boolean isBlockEntity = spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:") || spriteKey.startsWith("base:");
+        if (isBlockEntity) {
+            // Prefer unified atlas placement; fallback to legacy block-entity map if missing
+            float[] atlasUv = TextureAtlasManager.remapUV(ctx, spriteKey, 0xFFFFFF, u, v);
+            if (ctx.getAtlasBook().containsKey(spriteKey) || atlasUv[0] != u || atlasUv[1] != v) {
+                return atlasUv;
+            }
+
             ExportContext.BlockEntityAtlasPlacement p = ctx.getBlockEntityAtlasPlacements().get(spriteKey);
 
             // If not found, try alternate prefix formats
@@ -347,8 +365,8 @@ public final class GltfSceneBuilder implements SceneSink {
             if (p != null) {
                 // Successfully found placement - remap to atlas space
                 return new float[] {
-                    p.u0() + u * (p.u1() - p.u0()),
-                    p.v0() + v * (p.v1() - p.v0())
+                    p.u0() + (float) ((double) u * (p.u1() - p.u0())),
+                    p.v0() + (float) ((double) v * (p.v1() - p.v0()))
                 };
             } else {
                 // Placement not found - log warning and return original UV

@@ -274,6 +274,8 @@ public final class BlockExporter {
         if (lightLevel > 0) {
             blockKey = blockKey + "_emissive";
         }
+        // Map sprite->material for later animation naming/unification
+        ctx.registerSpriteMaterial(blockKey, blockKey);
         // PASS 1: Identify and cache all overlays (vanilla + CTM)
         Map<Long, List<QuadInfo>> ctmPositionQuads = new HashMap<>();
         // Collect geometric info for all quads (needed for CTM detection)
@@ -482,6 +484,8 @@ public final class BlockExporter {
 
         // Use ColorModeHandler to prepare colors
         ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(ctx, argb, quad.getTintIndex() >= 0);
+
+        ctx.registerSpriteMaterial(spriteKey, blockKey);
 
         sceneSink.addQuad(blockKey, spriteKey, null, positions, uv0, colorData.uv1, normal, colorData.colors, doubleSided);
 

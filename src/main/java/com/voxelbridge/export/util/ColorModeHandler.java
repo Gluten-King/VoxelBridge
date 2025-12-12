@@ -47,7 +47,8 @@ public final class ColorModeHandler {
             );
         } else {
             // ColorMap mode: use TEXCOORD_1
-            float[] colorUv = getColormapUV(ctx, argb);
+            // 无 tint 时强制映射到预留白槽，避免生成额外 LUT 条目
+            float[] colorUv = getColormapUV(ctx, hasTint ? argb : 0xFFFFFFFF);
             return new ColorData(
                 colorUv,
                 GeometryUtil.whiteColor()

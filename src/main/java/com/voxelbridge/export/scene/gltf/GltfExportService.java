@@ -112,11 +112,7 @@ public final class GltfExportService {
             long tAtlas = TimeLogger.now();
             TextureAtlasManager.generateAllAtlases(ctx, gltfDir);
             TimeLogger.logDuration("texture_atlas_generation", TimeLogger.elapsedSince(tAtlas));
-            // Pack BlockEntity textures into atlas (ATLAS mode)
-            ExportLogger.log("[GLTF] Packing BlockEntity textures into atlas");
-            long tBerAtlas = TimeLogger.now();
-            com.voxelbridge.export.texture.BlockEntityTextureManager.packIntoAtlas(ctx, gltfDir);
-            TimeLogger.logDuration("blockentity_texture_atlas", TimeLogger.elapsedSince(tBerAtlas));
+            ExportLogger.log("[GLTF] BlockEntity textures merged into main atlas (legacy packer skipped)");
         } else {
             // Export BlockEntity textures as individual files (INDIVIDUAL mode)
             long tBerExport = TimeLogger.now();

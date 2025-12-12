@@ -3,6 +3,7 @@ package com.voxelbridge.export.texture;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.config.ExportRuntimeConfig.AtlasMode;
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.ExportContext.BlockEntityAtlasPlacement;
 import com.voxelbridge.export.ExportContext.TexturePlacement;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
@@ -157,9 +158,9 @@ public final class TextureAtlasManager {
             boolean isInCache = ctx.getCachedSpriteImage(key) != null;
             ExportLogger.log(String.format("[AtlasGen] Sprite registered: %s (inCache=%s, tints=%d)",
                 key, isInCache, atlas.nextIndex.get()));
-            // Only include base/albedo sprites; skip block entities and PBR companion keys
+            // Only include base/albedo sprites; skip PBR companion keys
             boolean isAnimated = ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(key);
-            if (!isBlockEntitySprite(key) && !isPbrSprite(key) && !isAnimated) {
+            if (!isPbrSprite(key) && !isAnimated) {
                 blockEntries.put(key, atlas);
             }
         });
@@ -324,11 +325,15 @@ public final class TextureAtlasManager {
 
             int tileU = p.page() % 10;
             int tileV = p.page() / 10;
-            float u0 = tileU + (float) p.x() / atlasSize;
-            // Keep UDIM vertical flip consistent with previous behavior
-            float v0 = -tileV + (float) p.y() / atlasSize;
-            float u1 = tileU + (float) (p.x() + p.width()) / atlasSize;
-            float v1 = -tileV + (float) (p.y() + p.height()) / atlasSize;
+            // Double precision here to maximize UV accuracy before storage
+            double u0d = tileU + (double) p.x() / atlasSize;
+            double v0d = -tileV + (double) p.y() / atlasSize; // Keep UDIM vertical flip consistent
+            double u1d = tileU + (double) (p.x() + p.width()) / atlasSize;
+            double v1d = -tileV + (double) (p.y() + p.height()) / atlasSize;
+            float u0 = (float) u0d;
+            float v0 = (float) v0d;
+            float u1 = (float) u1d;
+            float v1 = (float) v1d;
 
             ExportContext.TintAtlas atlas = ctx.getAtlasBook().get(req.spriteKey);
             TexturePlacement placement = new TexturePlacement(
@@ -341,6 +346,15 @@ public final class TextureAtlasManager {
             atlas.cols = 1;
             pagePathMap.putIfAbsent(p.page(), atlasDirName + "/" + atlasPrefix + p.udim() + ".png");
             pageToUdim.putIfAbsent(p.page(), p.udim());
+
+            // Mirror placement to block entity atlas map for unified atlas usage
+            if (isBlockEntitySprite(req.spriteKey)) {
+                int udim = p.udim();
+                BlockEntityAtlasPlacement bePlacement = new BlockEntityAtlasPlacement(
+                    p.page(), udim, p.x(), p.y(), p.width(), p.height(), atlasSize
+                );
+                ctx.getBlockEntityAtlasPlacements().put(req.spriteKey, bePlacement);
+            }
         }
 
         // Record material paths per sprite (use first placement page)
@@ -366,10 +380,6 @@ public final class TextureAtlasManager {
             return new float[]{u, v};
         }
 
-        if (isBlockEntitySprite(spriteKey)) {
-            return new float[]{u, v};
-        }
-
         int normalizedTint = sanitizeTintValue(tint);
         int tintIndex = getTintIndex(ctx, spriteKey, normalizedTint);
         ExportContext.TintAtlas atlas = ctx.getAtlasBook().get(spriteKey);
@@ -391,9 +401,9 @@ public final class TextureAtlasManager {
             return new float[]{u, v};
         }
 
-        float uu = placement.u0() + u * (placement.u1() - placement.u0());
-        float vv = placement.v0() + v * (placement.v1() - placement.v0());
-        return new float[]{uu, vv};
+        double uu = placement.u0() + (double) u * (placement.u1() - placement.u0());
+        double vv = placement.v0() + (double) v * (placement.v1() - placement.v0());
+        return new float[]{(float) uu, (float) vv};
     }
 
     private static int sanitizeTintValue(int tint) {
@@ -654,9 +664,9 @@ public final class TextureAtlasManager {
             }
 
             // Export animation frames
-            Path spriteDir = animDir.resolve(primitiveFolderName(spriteKey));
+            String baseName = primitiveBaseName(ctx, spriteKey);
+            Path spriteDir = animDir.resolve(baseName);
             Files.createDirectories(spriteDir);
-            String baseName = spriteDir.getFileName().toString();
 
             int frameCount = frames.frames().size();
             for (int i = 0; i < frameCount; i++) {
@@ -699,7 +709,7 @@ public final class TextureAtlasManager {
             }
 
             // Export original .mcmeta if available (expected for all animated textures)
-            copyOriginalMcmeta(ctx, spriteKey, spriteDir);
+            copyOriginalMcmeta(ctx, spriteKey, spriteDir, baseName);
 
             exportCount++;
             com.voxelbridge.util.ExportLogger.logAnimation(String.format(
@@ -740,8 +750,7 @@ public final class TextureAtlasManager {
     }
 
     /**
-     * Loads a texture for atlas generation.
-     * Only handles normal block textures - entity textures should not be in the atlas.
+     * Loads a texture for atlas generation (block + block entity).
      */
     private static BufferedImage loadTextureForAtlas(ExportContext ctx, String spriteKey) {
         ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
@@ -768,21 +777,25 @@ public final class TextureAtlasManager {
         return diskImage;
     }
 
-    private static String primitiveFolderName(String spriteKey) {
+    private static String primitiveBaseName(ExportContext ctx, String spriteKey) {
         if (spriteKey == null) {
             return "unknown";
         }
-        String base = spriteKey;
-        if (base.endsWith("_animated")) {
-            base = base.substring(0, base.length() - "_animated".length());
+        // Align animation export folder/file naming with glTF animated primitive key
+        String base = safe(spriteKey);
+
+        // Overlay suffix if sprite itself is an overlay variant
+        boolean overlay = spriteKey.endsWith("_overlay") || spriteKey.contains("/overlay") || spriteKey.contains(":overlay");
+        if (overlay && !base.endsWith("_overlay")) {
+            base = base + "_overlay";
         }
-        if (base.endsWith("_emissive")) {
-            base = base.substring(0, base.length() - "_emissive".length());
+        if (!base.endsWith("_animated")) {
+            base = base + "_animated";
         }
-        return safe(base);
+        return base;
     }
 
-    private static void copyOriginalMcmeta(ExportContext ctx, String spriteKey, Path spriteDir) {
+    private static void copyOriginalMcmeta(ExportContext ctx, String spriteKey, Path spriteDir, String baseName) {
         try {
             ResourceLocation pngLoc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
             if (pngLoc == null) {
@@ -797,8 +810,7 @@ public final class TextureAtlasManager {
                 return;
             }
             var res = resOpt.get();
-            String fileName = Path.of(mcmetaLoc.getPath()).getFileName().toString();
-            Path target = spriteDir.resolve(fileName);
+            Path target = spriteDir.resolve(baseName + ".mcmeta");
             try (var in = res.open()) {
                 Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }

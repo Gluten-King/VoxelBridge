@@ -5,6 +5,7 @@ import com.voxelbridge.export.exporter.blockentity.BlockEntityTextureResolver;
 import com.voxelbridge.util.ExportLogger;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
+import com.voxelbridge.export.texture.TextureAtlasManager;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
@@ -15,7 +16,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.Map;
-import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 
@@ -54,6 +54,8 @@ public final class BlockEntityTextureManager {
         ctx.getMaterialPaths().putIfAbsent(spriteKey, handle.relativePath());
         ctx.getEntityTextures().putIfAbsent(spriteKey,
             new ExportContext.EntityTexture(loc, image.getWidth(), image.getHeight()));
+        // Register into main atlas (merged atlas path)
+        TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
 
         ExportLogger.log("[BlockEntityTex] Registered generated texture: " + spriteKey + " -> " + loc);
         return spriteKey;
@@ -104,6 +106,8 @@ public final class BlockEntityTextureManager {
                 k -> new ExportContext.EntityTexture(locRef, texRef.getWidth(), texRef.getHeight()));
 
             ExportLogger.log("[BlockEntityTex] Registered: " + spriteKey + " -> " + relativePath);
+            // Register into shared atlas flow (default tint)
+            TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
 
             // PBR companions (_n/_s) if present in RP
             var pbr = com.voxelbridge.export.texture.PbrTextureHelper.ensurePbrCached(ctx, spriteKey, textureRes.sprite());
@@ -275,118 +279,6 @@ public final class BlockEntityTextureManager {
         path = path + ".png";
         String namespace = location.getNamespace();
         return ResourceLocation.fromNamespaceAndPath(namespace != null ? namespace : "minecraft", path);
-    }
-
-    /**
-     * Packs all registered BlockEntity textures into an atlas (ATLAS mode only).
-     * This must be called after exportTextures() and before glTF write.
-     */
-    public static void packIntoAtlas(ExportContext ctx, Path outDir) throws java.io.IOException {
-        Map<String, ResourceLocation> registeredTextures = repo(ctx).getRegisteredTextures();
-        if (registeredTextures.isEmpty()) {
-            ExportLogger.log("[BlockEntityTex] No textures to pack into atlas");
-            return;
-        }
-
-        ExportLogger.log("[BlockEntityTex] Packing " + registeredTextures.size() + " textures into atlas");
-
-        int atlasSize = com.voxelbridge.config.ExportRuntimeConfig.getAtlasSize().getSize();
-        Path atlasDir = outDir.resolve("textures/blockentity_atlas");
-        java.nio.file.Files.createDirectories(atlasDir);
-
-        // Pack base channel to determine placements
-        TextureAtlasPacker packer = new TextureAtlasPacker(atlasSize, false);
-        for (Map.Entry<String, ResourceLocation> entry : registeredTextures.entrySet()) {
-            String spriteKey = entry.getKey();
-            if (spriteKey.endsWith("_n") || spriteKey.endsWith("_s")) continue;
-            if (com.voxelbridge.config.ExportRuntimeConfig.isAnimationEnabled() && repo(ctx).hasAnimation(spriteKey)) continue;
-            BufferedImage image = repo(ctx).get(entry.getValue());
-            if (image == null) continue;
-            packer.addTexture(spriteKey, image);
-        }
-        Map<String, TextureAtlasPacker.Placement> basePlacements =
-            packer.pack(atlasDir, "blockentity_atlas_");
-
-        // Record base placements and material paths
-        Map<Integer, Integer> pageToUdim = new java.util.HashMap<>();
-        for (Map.Entry<String, TextureAtlasPacker.Placement> entry : basePlacements.entrySet()) {
-            String spriteKey = entry.getKey();
-            var p = entry.getValue();
-            pageToUdim.putIfAbsent(p.page(), p.udim());
-            ExportContext.BlockEntityAtlasPlacement placement = new ExportContext.BlockEntityAtlasPlacement(
-                p.page(), p.udim(), p.x(), p.y(), p.width(), p.height(), atlasSize
-            );
-            ctx.getBlockEntityAtlasPlacements().put(spriteKey, placement);
-            String atlasPath = "textures/blockentity_atlas/blockentity_atlas_" + p.udim() + ".png";
-            ctx.getMaterialPaths().put(spriteKey, atlasPath);
-        }
-
-        // Generate PBR channels aligned to base placements using PbrAtlasWriter
-        Set<Integer> usedPages = new java.util.HashSet<>(pageToUdim.keySet());
-
-        // Generate normal map atlas
-        PbrAtlasWriter.PbrAtlasConfig normalConfig = new PbrAtlasWriter.PbrAtlasConfig(
-            atlasDir, atlasSize, "blockentity_atlas_n_",
-            PbrTextureHelper.DEFAULT_NORMAL_COLOR, usedPages, pageToUdim
-        );
-        Map<String, PbrAtlasWriter.Placement> normalPlacements = adaptPlacements(basePlacements);
-        PbrAtlasWriter.generatePbrAtlas(normalConfig, normalPlacements, spriteKey -> {
-            String normalKey = spriteKey + "_n";
-            ResourceLocation loc = registeredTextures.get(normalKey);
-            BufferedImage img = loc != null ? repo(ctx).get(loc) : null;
-            if (img != null) {
-                // Update material paths for normal textures
-                int page = basePlacements.get(spriteKey).page();
-                int udim = pageToUdim.getOrDefault(page, page + 1001);
-                String normalPath = "textures/blockentity_atlas/blockentity_atlas_n_" + udim + ".png";
-                ctx.getMaterialPaths().put(normalKey, normalPath);
-                ctx.getEntityTextures().putIfAbsent(normalKey,
-                    new ExportContext.EntityTexture(loc, img.getWidth(), img.getHeight()));
-                ctx.getBlockEntityAtlasPlacements().put(normalKey,
-                    new ExportContext.BlockEntityAtlasPlacement(page, udim,
-                        basePlacements.get(spriteKey).x(), basePlacements.get(spriteKey).y(),
-                        basePlacements.get(spriteKey).width(), basePlacements.get(spriteKey).height(), atlasSize));
-            }
-            return img;
-        });
-
-        // Generate specular map atlas
-        PbrAtlasWriter.PbrAtlasConfig specConfig = new PbrAtlasWriter.PbrAtlasConfig(
-            atlasDir, atlasSize, "blockentity_atlas_s_",
-            PbrTextureHelper.DEFAULT_SPECULAR_COLOR, usedPages, pageToUdim
-        );
-        Map<String, PbrAtlasWriter.Placement> specPlacements = adaptPlacements(basePlacements);
-        PbrAtlasWriter.generatePbrAtlas(specConfig, specPlacements, spriteKey -> {
-            String specKey = spriteKey + "_s";
-            ResourceLocation loc = registeredTextures.get(specKey);
-            BufferedImage img = loc != null ? repo(ctx).get(loc) : null;
-            if (img != null) {
-                // Update material paths for specular textures
-                int page = basePlacements.get(spriteKey).page();
-                int udim = pageToUdim.getOrDefault(page, page + 1001);
-                String specPath = "textures/blockentity_atlas/blockentity_atlas_s_" + udim + ".png";
-                ctx.getMaterialPaths().put(specKey, specPath);
-                ctx.getEntityTextures().putIfAbsent(specKey,
-                    new ExportContext.EntityTexture(loc, img.getWidth(), img.getHeight()));
-                ctx.getBlockEntityAtlasPlacements().put(specKey,
-                    new ExportContext.BlockEntityAtlasPlacement(page, udim,
-                        basePlacements.get(spriteKey).x(), basePlacements.get(spriteKey).y(),
-                        basePlacements.get(spriteKey).width(), basePlacements.get(spriteKey).height(), atlasSize));
-            }
-            return img;
-        });
-    }
-
-    /**
-     * Adapts TextureAtlasPacker.Placement to PbrAtlasWriter.Placement interface.
-     */
-    private static Map<String, PbrAtlasWriter.Placement> adaptPlacements(
-            Map<String, TextureAtlasPacker.Placement> placements) {
-        Map<String, PbrAtlasWriter.Placement> adapted = new java.util.LinkedHashMap<>();
-        for (Map.Entry<String, TextureAtlasPacker.Placement> entry : placements.entrySet()) {
-            adapted.put(entry.getKey(), new PbrAtlasWriter.PackerPlacementAdapter(entry.getValue()));
-        }
-        return adapted;
     }
 
     /**

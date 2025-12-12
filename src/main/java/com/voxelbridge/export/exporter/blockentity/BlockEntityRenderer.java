@@ -3,6 +3,9 @@ package com.voxelbridge.export.exporter.blockentity;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.util.BlockEntityDebugLogger;
+import com.voxelbridge.config.ExportRuntimeConfig;
+import com.voxelbridge.export.util.ColorModeHandler;
+import com.voxelbridge.export.util.GeometryUtil;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
@@ -432,7 +435,19 @@ public final class BlockEntityRenderer {
                         // (keep original isAtlasTexture, u0, u1, v0, v1 values from textureRes)
 
                         fillUvs(vertices, uv0, isAtlasTexture, u0, u1, v0, v1);
-                        parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, EMPTY_UV, NORMAL_UP, colors,
+
+                        float[] uv1 = EMPTY_UV;
+                        if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+                            // keep vertex colors, uv1 empty
+                        } else {
+                            int argb = toArgb(colors);
+                            boolean hasTint = !isWhite(colors);
+                            ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(parent.ctx, argb, hasTint);
+                            uv1 = colorData.uv1 != null ? colorData.uv1 : EMPTY_UV;
+                            System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
+                        }
+
+                        parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, uv1, NORMAL_UP, colors,
                             com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver.isDoubleSided(renderType));
                         return;
                     }
@@ -467,8 +482,25 @@ public final class BlockEntityRenderer {
                 // to avoid double transformation. Do NOT remap UVs here.
                 // Keep UVs in sprite space (0-1) for now, consistent with BlockExporter and FluidExporter.
 
+                // Color/colormap handling to mirror BlockExporter behavior:
+                // - ColorMap mode: always provide TEXCOORD_1; no tint -> white slot.
+                // - VertexColor mode: keep per-vertex colors (already in 'colors').
+                float[] uv1 = EMPTY_UV;
+                if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+                    // colors already populated from vertex data; keep uv1 empty
+                } else {
+                    // Derive a single ARGB from the first vertex color (linear -> srgb approximation)
+                    int argb = toArgb(colors);
+                    boolean hasTint = !isWhite(colors);
+                    ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(parent.ctx, argb, hasTint);
+                    uv1 = colorData.uv1 != null ? colorData.uv1 : EMPTY_UV;
+                    // Force colors to white in colormap mode
+                    System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
+                }
+
                 // Send quad to scene sink using the BlockEntity type as group key (block entities typically don't have overlays)
-                parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, EMPTY_UV, NORMAL_UP, colors,
+                parent.ctx.registerSpriteMaterial(spriteKey, materialGroupKey);
+                parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, uv1, NORMAL_UP, colors,
                     com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver.isDoubleSided(renderType));
             }
 
@@ -508,6 +540,25 @@ public final class BlockEntityRenderer {
                 float wrapped = v % 1f;
                 if (wrapped < 0f) wrapped += 1f;
                 return wrapped;
+            }
+
+            private int toArgb(float[] colors) {
+                // colors length >=4; clamp to [0,1] then convert to 0xAARRGGBB with alpha=1
+                float r = colors.length >= 1 ? colors[0] : 1f;
+                float g = colors.length >= 2 ? colors[1] : 1f;
+                float b = colors.length >= 3 ? colors[2] : 1f;
+                int ri = (int) (Math.max(0f, Math.min(1f, r)) * 255f + 0.5f);
+                int gi = (int) (Math.max(0f, Math.min(1f, g)) * 255f + 0.5f);
+                int bi = (int) (Math.max(0f, Math.min(1f, b)) * 255f + 0.5f);
+                return 0xFF000000 | (ri << 16) | (gi << 8) | bi;
+            }
+
+            private boolean isWhite(float[] colors) {
+                if (colors == null || colors.length < 3) return true;
+                float eps = 1e-3f;
+                return Math.abs(colors[0] - 1f) < eps &&
+                       Math.abs(colors[1] - 1f) < eps &&
+                       Math.abs(colors[2] - 1f) < eps;
             }
 
             private float computeQuadArea(List<Vertex> verts) {

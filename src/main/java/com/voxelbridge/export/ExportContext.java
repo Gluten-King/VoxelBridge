@@ -29,6 +29,7 @@ public final class ExportContext {
     private final Map<String, TintAtlas> atlasBook = new ConcurrentHashMap<>();
     private final Map<String, String> materialNames = new ConcurrentHashMap<>();
     private final Map<String, String> materialPaths = new ConcurrentHashMap<>();
+    private final Map<String, String> spriteToMaterial = new ConcurrentHashMap<>();
     private final Map<Integer, TexturePlacement> colorMap = new ConcurrentHashMap<>();
     private final AtomicInteger nextColorSlot = new AtomicInteger(0); // Will be set to 1 after white is reserved in slot 0
     private final Set<Long> consumedBlocks = ConcurrentHashMap.newKeySet();
@@ -63,6 +64,16 @@ public final class ExportContext {
 
     public Map<String, String> getMaterialPaths() {
         return materialPaths;
+    }
+
+    public Map<String, String> getSpriteToMaterial() {
+        return spriteToMaterial;
+    }
+
+    public void registerSpriteMaterial(String spriteKey, String materialKey) {
+        if (spriteKey != null && materialKey != null) {
+            spriteToMaterial.putIfAbsent(spriteKey, materialKey);
+        }
     }
 
     public Map<Integer, TexturePlacement> getColorMap() {
@@ -200,25 +211,23 @@ public final class ExportContext {
      */
     public static record BlockEntityAtlasPlacement(int page, int udim, int x, int y, int width, int height, int atlasSize) {
         public float u0() {
-            int tileU = page % 10;
-            return tileU + (float) x / atlasSize;
+            double tileU = page % 10;
+            return (float) (tileU + (double) x / atlasSize);
         }
         public float v0() {
-            int tileV = page / 10;
+            double tileV = page / 10;
             // Fix UDIM V coordinate: negate tileV to compensate for coordinate flip elsewhere
-            return -tileV + (float) y / atlasSize;
+            return (float) (-tileV + (double) y / atlasSize);
         }
         public float u1() {
-            int tileU = page % 10;
-            return tileU + (float) (x + width) / atlasSize;
+            double tileU = page % 10;
+            return (float) (tileU + (double) (x + width) / atlasSize);
         }
         public float v1() {
-            int tileV = page / 10;
+            double tileV = page / 10;
             // Fix UDIM V coordinate: negate tileV to compensate for coordinate flip elsewhere
-            return -tileV + (float) (y + height) / atlasSize;
+            return (float) (-tileV + (double) (y + height) / atlasSize);
         }
     }
 }
-
-
 
