@@ -145,6 +145,8 @@ final class QuadCollector implements VertexConsumer {
         }
 
         String spriteKey = SpriteKeyResolver.resolve(sprite);
+        // Register sprite so animation scan/export (e.g., water_still) is whitelisted
+        com.voxelbridge.export.texture.TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
         float[] normalizedUVs = GeometryUtil.normalizeUVs(uvs, sprite);
 
         // Use ColorModeHandler to prepare colors
