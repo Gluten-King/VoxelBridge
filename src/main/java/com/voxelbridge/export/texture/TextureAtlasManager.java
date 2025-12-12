@@ -9,6 +9,8 @@ import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.util.ExportLogger;
 import com.voxelbridge.export.texture.PngjWriter;
 import com.voxelbridge.util.TimeLogger;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -126,6 +128,18 @@ public final class TextureAtlasManager {
         ExportLogger.log("[AtlasGen] ===== ATLAS GENERATION START =====");
         ExportLogger.log(String.format("[AtlasGen] Atlas mode: %s", atlasMode));
         ExportLogger.log(String.format("[AtlasGen] Total sprites in atlasBook: %d", ctx.getAtlasBook().size()));
+
+        // Phase 0: Animation scanning limited to current export set (if enabled)
+        java.util.Set<String> animationWhitelist = new java.util.HashSet<>();
+        animationWhitelist.addAll(ctx.getAtlasBook().keySet());
+        animationWhitelist.addAll(ctx.getCachedSpriteKeys());
+        if (ExportRuntimeConfig.isAnimationEnabled()) {
+            ExportLogger.log("[AtlasGen] Starting animation scan (whitelisted to export set)...");
+            AnimatedTextureHelper.scanAllAnimations(ctx, animationWhitelist);
+
+            // Phase 0.5: Export detected animations within whitelist
+            exportAllDetectedAnimations(ctx, outDir, animationWhitelist);
+        }
 
         // Auto-register any cached sprites (including CTM/PBR companions) that are not yet in atlasBook
         for (String cachedKey : ctx.getCachedSpriteKeys()) {
@@ -617,17 +631,112 @@ public final class TextureAtlasManager {
     }
 
     /**
+     * Export all animations detected by scanAllAnimations().
+     * This ensures animations like campfire_fire are exported even if not in atlasBook.
+     */
+    private static void exportAllDetectedAnimations(ExportContext ctx, Path outDir, java.util.Set<String> whitelist) throws IOException {
+        TextureRepository repo = ctx.getTextureRepository();
+        Path animDir = outDir.resolve("textures").resolve("animated");
+        Files.createDirectories(animDir);
+
+        int exportCount = 0;
+        for (String spriteKey : repo.getAnimatedCache().keySet()) {
+            // Skip exporting standalone PBR variants; they will be embedded with the base sprite
+            if (spriteKey.endsWith("_n") || spriteKey.endsWith("_s")) {
+                continue;
+            }
+            if (whitelist != null && !whitelist.isEmpty() && !whitelist.contains(spriteKey)) {
+                continue; // Skip animations outside the export set
+            }
+            AnimatedFrameSet frames = repo.getAnimation(spriteKey);
+            if (frames == null || frames.isEmpty()) {
+                continue; // Skip empty markers
+            }
+
+            // Export animation frames
+            Path spriteDir = animDir.resolve(primitiveFolderName(spriteKey));
+            Files.createDirectories(spriteDir);
+            String baseName = spriteDir.getFileName().toString();
+
+            int frameCount = frames.frames().size();
+            for (int i = 0; i < frameCount; i++) {
+                String idx = String.format("%03d", i);
+                Path framePath = spriteDir.resolve(baseName + "_" + idx + ".png");
+                try {
+                    javax.imageio.ImageIO.write(frames.frames().get(i), "PNG", framePath.toFile());
+                } catch (IOException e) {
+                    ExportLogger.log("[Animation][ERROR] Failed to write frame " + framePath + ": " + e.getMessage());
+                }
+            }
+
+            // Export PBR frames if available
+            AnimatedFrameSet normalFrames = repo.getAnimation(spriteKey + "_n");
+            if (normalFrames != null && !normalFrames.isEmpty()) {
+                for (int i = 0; i < frameCount; i++) {
+                    String idx = String.format("%03d", i);
+                    int normalIdx = i % normalFrames.frames().size();
+                    Path framePath = spriteDir.resolve(baseName + "_" + idx + "_n.png");
+                    try {
+                        javax.imageio.ImageIO.write(normalFrames.frames().get(normalIdx), "PNG", framePath.toFile());
+                    } catch (IOException e) {
+                        ExportLogger.log("[Animation][ERROR] Failed to write normal frame " + framePath);
+                    }
+                }
+            }
+
+            AnimatedFrameSet specFrames = repo.getAnimation(spriteKey + "_s");
+            if (specFrames != null && !specFrames.isEmpty()) {
+                for (int i = 0; i < frameCount; i++) {
+                    String idx = String.format("%03d", i);
+                    int specIdx = i % specFrames.frames().size();
+                    Path framePath = spriteDir.resolve(baseName + "_" + idx + "_s.png");
+                    try {
+                        javax.imageio.ImageIO.write(specFrames.frames().get(specIdx), "PNG", framePath.toFile());
+                    } catch (IOException e) {
+                        ExportLogger.log("[Animation][ERROR] Failed to write spec frame " + framePath);
+                    }
+                }
+            }
+
+            // Export original .mcmeta if available (expected for all animated textures)
+            copyOriginalMcmeta(ctx, spriteKey, spriteDir);
+
+            exportCount++;
+            com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+                "[Animation] Exported %s: %d frames to %s",
+                spriteKey, frameCount, spriteDir.getFileName()
+            ));
+        }
+
+        com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+            "[Animation] ===== EXPORT COMPLETE: %d animations exported =====", exportCount
+        ));
+    }
+
+    /**
      * Ensures we flag animations by scanning the full texture strip (not just first frame).
      */
     private static void ensureAnimationDetection(ExportContext ctx, String spriteKey) {
         if (ctx.getTextureRepository().hasAnimation(spriteKey)) {
             return;
         }
-        ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
-        BufferedImage full = TextureLoader.readTexture(textureLocation, true);
-        if (full != null) {
-            AnimatedTextureHelper.extractAndStore(spriteKey, full, ctx.getTextureRepository());
+        // Try atlas sprite first to leverage SpriteContents metadata
+        try {
+            TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            ResourceLocation spriteLoc = ResourceLocation.parse(spriteKey);
+            TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
+            if (sprite != null) {
+                AnimatedTextureHelper.extractFromSprite(spriteKey, sprite, ctx.getTextureRepository());
+                if (ctx.getTextureRepository().hasAnimation(spriteKey)) {
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            ExportLogger.log("[Animation][WARN] Atlas probe failed for " + spriteKey + ": " + e.getMessage());
         }
+        ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+        // Prefer metadata-driven detection to catch animations even when frame strips are square
+        AnimatedTextureHelper.detectFromMetadata(spriteKey, textureLocation, ctx.getTextureRepository());
     }
 
     /**
@@ -648,16 +757,8 @@ public final class TextureAtlasManager {
         }
 
         ExportLogger.log(String.format("[AtlasGen][CACHE MISS] %s not in cache, trying disk", spriteKey));
-        boolean preserveAnimation = ExportRuntimeConfig.isAnimationEnabled();
-        BufferedImage diskImage = TextureLoader.readTexture(textureLocation, preserveAnimation);
+        BufferedImage diskImage = TextureLoader.readTexture(textureLocation, ExportRuntimeConfig.isAnimationEnabled());
         if (diskImage != null) {
-            if (preserveAnimation) {
-                AnimatedFrameSet frames = AnimatedTextureHelper.extractAndStore(spriteKey, diskImage, ctx.getTextureRepository());
-                if (frames != null && !frames.isEmpty()) {
-                    // Use第一帧参与后续流程
-                    diskImage = frames.frames().get(0);
-                }
-            }
             ExportLogger.log(String.format("[AtlasGen][DISK HIT] Loaded %s from disk (%dx%d)",
                 spriteKey, diskImage.getWidth(), diskImage.getHeight()));
             ctx.getTextureRepository().put(textureLocation, spriteKey, diskImage);
@@ -666,7 +767,44 @@ public final class TextureAtlasManager {
         }
         return diskImage;
     }
+
+    private static String primitiveFolderName(String spriteKey) {
+        if (spriteKey == null) {
+            return "unknown";
+        }
+        String base = spriteKey;
+        if (base.endsWith("_animated")) {
+            base = base.substring(0, base.length() - "_animated".length());
+        }
+        if (base.endsWith("_emissive")) {
+            base = base.substring(0, base.length() - "_emissive".length());
+        }
+        return safe(base);
+    }
+
+    private static void copyOriginalMcmeta(ExportContext ctx, String spriteKey, Path spriteDir) {
+        try {
+            ResourceLocation pngLoc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            if (pngLoc == null) {
+                return;
+            }
+            ResourceLocation mcmetaLoc = ResourceLocation.fromNamespaceAndPath(
+                pngLoc.getNamespace(),
+                pngLoc.getPath() + ".mcmeta"
+            );
+            var resOpt = ctx.getMc().getResourceManager().getResource(mcmetaLoc);
+            if (resOpt.isEmpty()) {
+                return;
+            }
+            var res = resOpt.get();
+            String fileName = Path.of(mcmetaLoc.getPath()).getFileName().toString();
+            Path target = spriteDir.resolve(fileName);
+            try (var in = res.open()) {
+                Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            ExportLogger.log(String.format("[Animation] Copied original mcmeta for %s -> %s", spriteKey, target.getFileName()));
+        } catch (Exception e) {
+            ExportLogger.log(String.format("[Animation][WARN] Failed to copy mcmeta for %s: %s", spriteKey, e.getMessage()));
+        }
+    }
 }
-
-
-

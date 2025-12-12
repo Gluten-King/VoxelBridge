@@ -88,6 +88,10 @@ public final class GltfSceneBuilder implements SceneSink {
         return merged;
     }
 
+    private static String safe(String key) {
+        return key == null ? "unknown" : key.replace(':', '_').replace('/', '_');
+    }
+
     private void clearBuffers() {
         synchronized (allBuffers) {
             for (List<GltfQuadRecord> list : allBuffers) {
@@ -110,13 +114,25 @@ public final class GltfSceneBuilder implements SceneSink {
         // 2. Sort quads into Primitives based on MaterialGroup only (ignore atlas pages)
         for (GltfQuadRecord q : quads) {
             String spriteKey = q.spriteKey;
+            boolean animated = ExportRuntimeConfig.isAnimationEnabled() &&
+                    (ctx.getTextureRepository().hasAnimation(spriteKey) ||
+                     (q.overlaySpriteKey != null && ctx.getTextureRepository().hasAnimation(q.overlaySpriteKey)));
 
             // Create a unique key for the GLTF Primitive
             // Base quads: "minecraft:glass"
             // Overlay quads: "minecraft:glass_overlay" (all overlays merged)
             String primitiveKey = q.materialGroupKey;
-            if ("overlay".equals(q.overlaySpriteKey)) {
-                primitiveKey = q.materialGroupKey + "_overlay";
+            if (animated) {
+                // Align animated primitive naming with animated folder naming (per-sprite)
+                primitiveKey = safe(spriteKey);
+                if ("overlay".equals(q.overlaySpriteKey)) {
+                    primitiveKey = primitiveKey + "_overlay";
+                }
+                primitiveKey = primitiveKey + "_animated";
+            } else {
+                if ("overlay".equals(q.overlaySpriteKey)) {
+                    primitiveKey = q.materialGroupKey + "_overlay";
+                }
             }
 
             PrimitiveData data = primitiveMap.computeIfAbsent(primitiveKey, k -> new PrimitiveData(q.materialGroupKey));

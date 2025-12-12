@@ -80,7 +80,8 @@ public final class TextureRepository {
     }
 
     public void putAnimation(String spriteKey, AnimatedFrameSet frames) {
-        if (spriteKey != null && frames != null && !frames.isEmpty()) {
+        // Accept empty frames as markers (indicates animation exists but frames couldn't be extracted)
+        if (spriteKey != null && frames != null) {
             animatedCache.put(spriteKey, frames);
         }
     }

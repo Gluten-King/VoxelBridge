@@ -10,19 +10,37 @@ import java.util.List;
  */
 public final class AnimatedFrameSet {
     private final List<BufferedImage> frames;
-    private final int defaultFrameTime;
+    private final AnimationMetadata metadata;
 
+    /**
+     * Backward-compatible constructor for simple animations with uniform timing
+     */
     public AnimatedFrameSet(List<BufferedImage> frames, int defaultFrameTime) {
+        this(frames, new AnimationMetadata(defaultFrameTime));
+    }
+
+    /**
+     * New constructor with full metadata support
+     */
+    public AnimatedFrameSet(List<BufferedImage> frames, AnimationMetadata metadata) {
         this.frames = frames == null ? List.of() : List.copyOf(frames);
-        this.defaultFrameTime = Math.max(1, defaultFrameTime);
+        this.metadata = metadata != null ? metadata : new AnimationMetadata(1);
     }
 
     public List<BufferedImage> frames() {
         return Collections.unmodifiableList(frames);
     }
 
+    public AnimationMetadata metadata() {
+        return metadata;
+    }
+
+    /**
+     * @deprecated Use {@link #metadata()}.defaultFrameTime() instead
+     */
+    @Deprecated
     public int defaultFrameTime() {
-        return defaultFrameTime;
+        return metadata.defaultFrameTime();
     }
 
     public boolean isEmpty() {

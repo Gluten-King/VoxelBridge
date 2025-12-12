@@ -123,9 +123,8 @@ final class TextureRegistry {
                 frames = AnimatedTextureHelper.extractAndStore(spriteKey, repo.getBySpriteKey(spriteKey), repo);
             }
             if (frames != null && !frames.isEmpty()) {
-                AnimatedFrameSet normalFrames = ensurePbrAnimation(spriteKey + "_n");
-                AnimatedFrameSet specFrames = ensurePbrAnimation(spriteKey + "_s");
-                exportAnimatedFrames(spriteKey, frames, normalFrames, specFrames);
+                // Animated frames are exported centrally in TextureAtlasManager.exportAllDetectedAnimations.
+                // Avoid duplicate exports here.
             }
         }
     }
@@ -155,41 +154,6 @@ final class TextureRegistry {
             return AnimatedTextureHelper.extractAndStore(spriteKey, pbrImg, repo);
         }
         return null;
-    }
-
-    private void exportAnimatedFrames(String spriteKey,
-                                      AnimatedFrameSet baseFrames,
-                                      AnimatedFrameSet normalFrames,
-                                      AnimatedFrameSet specFrames) {
-        if (exportedAnimated.contains(spriteKey) || baseFrames == null || baseFrames.isEmpty()) {
-            return;
-        }
-        Path animDir = texturesDir.resolve("animated").resolve(safe(spriteKey));
-        try {
-            Files.createDirectories(animDir);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        int count = baseFrames.frames().size();
-        for (int i = 0; i < count; i++) {
-            String idx = String.format("%03d", i);
-            writeFrame(animDir.resolve("frame_" + idx + ".png"), baseFrames.frames().get(i));
-            if (normalFrames != null && i < normalFrames.frames().size()) {
-                writeFrame(animDir.resolve("frame_" + idx + "_n.png"), normalFrames.frames().get(i));
-            }
-            if (specFrames != null && i < specFrames.frames().size()) {
-                writeFrame(animDir.resolve("frame_" + idx + "_s.png"), specFrames.frames().get(i));
-            }
-        }
-        exportedAnimated.add(spriteKey);
-    }
-
-    private void writeFrame(Path path, BufferedImage frame) {
-        try {
-            ImageIO.write(frame, "PNG", path.toFile());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
     }
 
     private String safe(String spriteKey) {
