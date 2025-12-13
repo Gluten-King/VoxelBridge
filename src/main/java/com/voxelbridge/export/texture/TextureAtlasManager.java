@@ -136,6 +136,23 @@ public final class TextureAtlasManager {
         animationWhitelist.addAll(ctx.getCachedSpriteKeys());
         if (ExportRuntimeConfig.isAnimationEnabled()) {
             ExportLogger.log("[AtlasGen] Starting animation scan (whitelisted to export set)...");
+
+            // ✅ 新增日志：输出 whitelist 统计（输出到 animation-detection.log）
+            ExportLogger.logAnimation(String.format("[Animation] Whitelist built: %d sprites", animationWhitelist.size()));
+            ExportLogger.logAnimation("[Animation] AtlasBook entries: " + ctx.getAtlasBook().size());
+            ExportLogger.logAnimation("[Animation] CachedSprite entries: " + ctx.getCachedSpriteKeys().size());
+
+            // ✅ 新增日志：输出包含特定关键词的 sprite（便于查找 mod）
+            int modCount = 0;
+            for (String key : animationWhitelist) {
+                // 输出所有非 minecraft 命名空间的 sprite（即 mod sprite）
+                if (!key.startsWith("minecraft:")) {
+                    ExportLogger.logAnimation("[Animation] Whitelist mod sprite: " + key);
+                    modCount++;
+                }
+            }
+            ExportLogger.logAnimation("[Animation] Total mod sprites in whitelist: " + modCount);
+
             AnimatedTextureHelper.scanAllAnimations(ctx, animationWhitelist);
 
             // Phase 0.5: Export detected animations within whitelist
@@ -649,6 +666,20 @@ public final class TextureAtlasManager {
         Path animDir = outDir.resolve("textures").resolve("animated");
         Files.createDirectories(animDir);
 
+        // ✅ 新增日志：输出动画导出统计
+        ExportLogger.logAnimation("[Animation] Starting animation export...");
+        ExportLogger.logAnimation("[Animation] Total animations in repository: " + repo.getAnimatedCache().size());
+
+        if (whitelist != null && !whitelist.isEmpty()) {
+            int whitelistedCount = 0;
+            for (String key : repo.getAnimatedCache().keySet()) {
+                if (whitelist.contains(key)) {
+                    whitelistedCount++;
+                }
+            }
+            ExportLogger.logAnimation("[Animation] Whitelisted animations: " + whitelistedCount);
+        }
+
         int exportCount = 0;
         for (String spriteKey : repo.getAnimatedCache().keySet()) {
             // Skip exporting standalone PBR variants; they will be embedded with the base sprite
@@ -675,7 +706,7 @@ public final class TextureAtlasManager {
                 try {
                     javax.imageio.ImageIO.write(frames.frames().get(i), "PNG", framePath.toFile());
                 } catch (IOException e) {
-                    ExportLogger.log("[Animation][ERROR] Failed to write frame " + framePath + ": " + e.getMessage());
+                    ExportLogger.logAnimation("[Animation][ERROR] Failed to write frame " + framePath + ": " + e.getMessage());
                 }
             }
 
@@ -689,7 +720,7 @@ public final class TextureAtlasManager {
                     try {
                         javax.imageio.ImageIO.write(normalFrames.frames().get(normalIdx), "PNG", framePath.toFile());
                     } catch (IOException e) {
-                        ExportLogger.log("[Animation][ERROR] Failed to write normal frame " + framePath);
+                        ExportLogger.logAnimation("[Animation][ERROR] Failed to write normal frame " + framePath);
                     }
                 }
             }
@@ -703,7 +734,7 @@ public final class TextureAtlasManager {
                     try {
                         javax.imageio.ImageIO.write(specFrames.frames().get(specIdx), "PNG", framePath.toFile());
                     } catch (IOException e) {
-                        ExportLogger.log("[Animation][ERROR] Failed to write spec frame " + framePath);
+                        ExportLogger.logAnimation("[Animation][ERROR] Failed to write spec frame " + framePath);
                     }
                 }
             }
@@ -717,6 +748,9 @@ public final class TextureAtlasManager {
                 spriteKey, frameCount, spriteDir.getFileName()
             ));
         }
+
+        // ✅ 新增日志：输出导出成功统计
+        ExportLogger.logAnimation(String.format("[Animation] Export completed: %d animations", exportCount));
 
         com.voxelbridge.util.ExportLogger.logAnimation(String.format(
             "[Animation] ===== EXPORT COMPLETE: %d animations exported =====", exportCount
@@ -742,7 +776,7 @@ public final class TextureAtlasManager {
                 }
             }
         } catch (Exception e) {
-            ExportLogger.log("[Animation][WARN] Atlas probe failed for " + spriteKey + ": " + e.getMessage());
+            ExportLogger.logAnimation("[Animation][WARN] Atlas probe failed for " + spriteKey + ": " + e.getMessage());
         }
         ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
         // Prefer metadata-driven detection to catch animations even when frame strips are square
@@ -814,9 +848,9 @@ public final class TextureAtlasManager {
             try (var in = res.open()) {
                 Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
-            ExportLogger.log(String.format("[Animation] Copied original mcmeta for %s -> %s", spriteKey, target.getFileName()));
+            ExportLogger.logAnimation(String.format("[Animation] Copied original mcmeta for %s -> %s", spriteKey, target.getFileName()));
         } catch (Exception e) {
-            ExportLogger.log(String.format("[Animation][WARN] Failed to copy mcmeta for %s: %s", spriteKey, e.getMessage()));
+            ExportLogger.logAnimation(String.format("[Animation][WARN] Failed to copy mcmeta for %s: %s", spriteKey, e.getMessage()));
         }
     }
 }

@@ -41,16 +41,18 @@ public final class AnimatedTextureHelper {
             var metaOpt = res.metadata().getSection(AnimationMetadataSection.SERIALIZER);
             AnimationMetadataSection meta = metaOpt.orElse(null);
             if (meta == null) {
-                return null; // No .mcmeta animation section - NOT an animation
-            }
-            BufferedImage full = TextureLoader.readTexture(png, true);
-            if (full != null) {
-                // STRICT: Only use .mcmeta-based splitting
+                // ✅ 新增日志：记录 .mcmeta 缺失或读取失败
+            ExportLogger.logAnimation("[Animation][WARN] No animation metadata for: " + png);
+            return null; // No .mcmeta animation section - NOT an animation
+        }
+        BufferedImage full = TextureLoader.readTexture(png, true);
+        if (full != null) {
+            // STRICT: Only use .mcmeta-based splitting
                 return splitWithMetadata(spriteKey, full, meta, repo);
             }
             return null;
         } catch (Exception e) {
-            ExportLogger.log("[Animation][WARN] Failed to read metadata for " + png + ": " + e.getMessage());
+            ExportLogger.logAnimation("[Animation][WARN] Failed to read metadata for " + png + ": " + e.getMessage());
             return null;
         }
     }
@@ -110,6 +112,12 @@ public final class AnimatedTextureHelper {
         }
 
         if (frameW <= 0 || frameH <= 0 || img.getWidth() % frameW != 0 || img.getHeight() % frameH != 0 || totalFrames <= 1) {
+            // ✅ 新增日志：记录帧尺寸计算失败的详细信息
+            ExportLogger.logAnimation(String.format(
+                "[Animation][WARN] Invalid frame dimensions for %s: " +
+                "frameW=%d, frameH=%d, imgW=%d, imgH=%d, totalFrames=%d",
+                spriteKey, frameW, frameH, img.getWidth(), img.getHeight(), totalFrames
+            ));
             return null; // Invalid .mcmeta description (not animated or mismatched grid)
         }
 
@@ -150,7 +158,7 @@ public final class AnimatedTextureHelper {
                 }
                 frames.add(frame);
             } catch (Exception e) {
-                ExportLogger.log("[Animation][WARN] Failed to slice meta frame " + idx + ": " + e.getMessage());
+                ExportLogger.logAnimation("[Animation][WARN] Failed to slice meta frame " + idx + ": " + e.getMessage());
             }
         }
         if (frames.isEmpty()) {
@@ -162,7 +170,7 @@ public final class AnimatedTextureHelper {
         try {
             interpolate = meta.isInterpolatedFrames();
         } catch (NoSuchMethodError e) {
-            ExportLogger.log("[Animation][DEBUG] AnimationMetadataSection.isInterpolatedFrames() not available, using false");
+            ExportLogger.logAnimation("[Animation][DEBUG] AnimationMetadataSection.isInterpolatedFrames() not available, using false");
         }
 
         AnimationMetadata animMetadata = new AnimationMetadata(
@@ -175,7 +183,12 @@ public final class AnimatedTextureHelper {
 
         AnimatedFrameSet set = new AnimatedFrameSet(frames, animMetadata);
         repo.putAnimation(spriteKey, set);
-        ExportLogger.log(String.format("[Animation] Meta-sliced %s -> %d frames (%dx%d, %d timings captured)",
+        // ✅ 新增日志：记录动画检测成功
+        ExportLogger.logAnimation(String.format(
+            "[Animation][INFO] Detected animation: %s (%d frames, %dx%d)",
+            spriteKey, frames.size(), frameW, frameH
+        ));
+        ExportLogger.logAnimation(String.format("[Animation] Meta-sliced %s -> %d frames (%dx%d, %d timings captured)",
             spriteKey, frames.size(), frameW, frameH, frameTimings.size()));
         return set;
     }
@@ -209,7 +222,7 @@ public final class AnimatedTextureHelper {
             }
             return null;
         } catch (Exception e) {
-            ExportLogger.log("[Animation][WARN] Failed to extract from sprite: " + spriteKey + " - " + e.getMessage());
+            ExportLogger.logAnimation("[Animation][WARN] Failed to extract from sprite: " + spriteKey + " - " + e.getMessage());
             return null;
         }
     }
@@ -224,39 +237,60 @@ public final class AnimatedTextureHelper {
 
         com.voxelbridge.util.ExportLogger.logAnimation("[Animation] ===== ANIMATION SCAN START =====");
 
-        // Step 1: Scan TextureAtlas (fast, 95% coverage)
-        try {
-            net.minecraft.client.renderer.texture.TextureAtlas blockAtlas =
-                ctx.getMc().getModelManager().getAtlas(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS);
-            int atlasCount = scanAtlasAnimations(blockAtlas, repo, whitelist);
-            totalFound += atlasCount;
-            com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Atlas scan: %d animations found", atlasCount));
-        } catch (Exception e) {
-            com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] Atlas scan failed: " + e.getMessage());
-            e.printStackTrace();
-        }
-
-        // Step 2: File system fallback for non-atlas textures
-        try {
-            net.minecraft.server.packs.resources.ResourceManager rm =
-                net.minecraft.client.Minecraft.getInstance().getResourceManager();
-            String[] additionalPaths = {
-                "textures/block/",      // Block textures (campfire, lava, water, etc.)
-                "textures/entity/",     // Entity textures
-                "textures/particle/",   // Particle effects
-                "textures/painting/",   // Paintings
-                "textures/mob_effect/", // Potion effects
-                "textures/item/"        // Item textures (clock, compass)
-            };
-
-            for (String path : additionalPaths) {
-                int pathCount = scanPathForMetadata(rm, "minecraft", path, repo, whitelist);
-                totalFound += pathCount;
-                com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Path '%s': %d animations found", path, pathCount));
+        if (whitelist != null && !whitelist.isEmpty()) {
+            // Whitelist-only scan: probe exactly the sprites used by the current export.
+            int whitelistFound = 0;
+            for (String key : whitelist) {
+                if (repo.hasAnimation(key)) continue;
+                if (key.endsWith("_n") || key.endsWith("_s")) continue; // skip PBR companions
+                ResourceLocation pngLoc = TextureLoader.spriteKeyToTexturePNG(key);
+                if (pngLoc == null) continue;
+                AnimatedFrameSet frames = detectFromMetadata(key, pngLoc, repo);
+                if (frames != null) {
+                    whitelistFound++;
+                    com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+                        "[Animation][WHITELIST] %s (%d frames)", key, frames.frames().size()
+                    ));
+                } else {
+                    com.voxelbridge.util.ExportLogger.logAnimation("[Animation][WHITELIST][MISS] No animation metadata for: " + pngLoc);
+                }
             }
-        } catch (Exception e) {
-            com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] File scan failed: " + e.getMessage());
-            e.printStackTrace();
+            totalFound += whitelistFound;
+            com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Whitelist scan complete: %d animations found", whitelistFound));
+        } else {
+            // Fallback path: broader scan (atlas + standard paths) if no whitelist available.
+            try {
+                net.minecraft.client.renderer.texture.TextureAtlas blockAtlas =
+                    ctx.getMc().getModelManager().getAtlas(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS);
+                int atlasCount = scanAtlasAnimations(blockAtlas, repo, whitelist);
+                totalFound += atlasCount;
+                com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Atlas scan: %d animations found", atlasCount));
+            } catch (Exception e) {
+                com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] Atlas scan failed: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            try {
+                net.minecraft.server.packs.resources.ResourceManager rm =
+                    net.minecraft.client.Minecraft.getInstance().getResourceManager();
+                String[] additionalPaths = {
+                    "textures/block/",
+                    "textures/entity/",
+                    "textures/particle/",
+                    "textures/painting/",
+                    "textures/mob_effect/",
+                    "textures/item/"
+                };
+
+                for (String path : additionalPaths) {
+                    int pathCount = scanPathForMetadata(rm, null, path, repo, whitelist);
+                    totalFound += pathCount;
+                    com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Path '%s': %d animations found", path, pathCount));
+                }
+            } catch (Exception e) {
+                com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] File scan failed: " + e.getMessage());
+                e.printStackTrace();
+            }
         }
 
         com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] ===== SCAN COMPLETE: %d total animations =====", totalFound));
@@ -301,8 +335,8 @@ public final class AnimatedTextureHelper {
 
             for (ResourceLocation pngLoc : resources.keySet()) {
                 try {
-                    // Only process files from the specified namespace
-                    if (!namespace.equals(pngLoc.getNamespace())) {
+                    // Only process files from the specified namespace (if provided)
+                    if (namespace != null && !namespace.equals(pngLoc.getNamespace())) {
                         continue;
                     }
 
@@ -315,6 +349,10 @@ public final class AnimatedTextureHelper {
                     if (rm.getResource(metaLoc).isPresent()) {
                         String spriteKey = pngLocToSpriteKey(pngLoc);
                         if (whitelist != null && !whitelist.isEmpty() && !whitelist.contains(spriteKey)) {
+                            // ✅ 新增日志：记录被 whitelist 排除的 sprite
+                            if (!spriteKey.startsWith("minecraft:")) {
+                                ExportLogger.logAnimation("[Animation][DEBUG] Excluded by whitelist: " + spriteKey);
+                            }
                             continue; // Skip sprites outside the export whitelist
                         }
                         // Record every discovered .mcmeta for debugging

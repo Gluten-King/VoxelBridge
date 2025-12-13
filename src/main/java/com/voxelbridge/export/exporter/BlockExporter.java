@@ -77,6 +77,8 @@ public final class BlockExporter {
     private final Map<Long, List<OverlayQuadData>> overlayCacheCombined = new HashMap<>();
     // Track overlay quads' original hashes to skip double emission when cached under a different hash
     private final Set<Long> overlayOriginalHashes = new HashSet<>();
+    // Track which sprites have already had their PBR textures loaded (deduplication)
+    private final Set<String> pbrLoadedSprites = new HashSet<>();
     private volatile boolean missingNeighborDetected = false;
     // Track if current block uses CTM/connected textures (for face culling decisions)
     private boolean currentBlockIsCTM = false;
@@ -121,8 +123,9 @@ public final class BlockExporter {
         final float minU, maxU, minV, maxV;
         final float minX, maxX, minZ, maxZ;
         final int originalIndex; // Index in the original quads list (for render order)
+        final long posHash; // Position hash to avoid redundant vertex extraction
         QuadInfo(String sprite, float[] normal, int axis, float planeCoord, float minU, float maxU, float minV, float maxV,
-                 float minX, float maxX, float minZ, float maxZ, int originalIndex) {
+                 float minX, float maxX, float minZ, float maxZ, int originalIndex, long posHash) {
             this.sprite = sprite;
             this.normal = normal;
             this.axis = axis;
@@ -136,6 +139,7 @@ public final class BlockExporter {
             this.minZ = minZ;
             this.maxZ = maxZ;
             this.originalIndex = originalIndex;
+            this.posHash = posHash;
         }
     }
     public BlockExporter(ExportContext ctx, SceneSink sceneSink, Level level) {
@@ -291,7 +295,7 @@ public final class BlockExporter {
             long posHash = computePositionHash(positions);
             float[] normal = GeometryUtil.computeFaceNormal(positions);
             String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
-            QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex);
+            QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex, posHash);
             ctmPositionQuads.computeIfAbsent(posHash, k -> new ArrayList<>()).add(info);
             quadIndex++;
         }
@@ -318,13 +322,8 @@ public final class BlockExporter {
                     }
                 }
                 if (baseInfo == null) continue;
-                long baseHash;
-                try {
-                    BakedQuad baseQuad = quads.get(baseInfo.originalIndex);
-                    float[] basePos = new float[12];
-                    extractVertices(baseQuad, pos, basePos, new float[8], baseQuad.getSprite(), randomOffset);
-                    baseHash = computePositionHash(basePos);
-                } catch (Throwable t) { continue; }
+                // Use the pre-computed position hash instead of re-extracting vertices
+                long baseHash = baseInfo.posHash;
                 int overlayIdx = 0;
                 for (QuadInfo info : group) {
                     if (info == baseInfo) continue;
@@ -452,7 +451,11 @@ public final class BlockExporter {
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
         // Try to load PBR companion textures for individual export (normal/specular)
-        ensurePbrTexturesCached(sprite, spriteKey);
+        // Only load once per unique sprite to avoid redundant I/O operations
+        if (!pbrLoadedSprites.contains(spriteKey)) {
+            ensurePbrTexturesCached(sprite, spriteKey);
+            pbrLoadedSprites.add(spriteKey);
+        }
         // Handle dynamic textures (CTM, numbered sprites)
         boolean isDynamic = spriteKey.matches(".*\\d+$") || !ctx.getMaterialPaths().containsKey(spriteKey);
         if (isDynamic) {
@@ -543,7 +546,7 @@ public final class BlockExporter {
             uv0[i*2+1] = (vv - v0) / dv;
         }
     }
-    private QuadInfo buildQuadInfo(String spriteKey, float[] positions, float[] normal, int originalIndex) {
+    private QuadInfo buildQuadInfo(String spriteKey, float[] positions, float[] normal, int originalIndex, long posHash) {
         float minX = Float.POSITIVE_INFINITY, maxX = Float.NEGATIVE_INFINITY;
         float minZ = Float.POSITIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < 4; i++) {
@@ -557,7 +560,7 @@ public final class BlockExporter {
         }
         int axis = dominantAxis(normal);
         if (axis < 0) {
-            return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex);
+            return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
         }
         float plane = positions[axis];
         float minU = Float.POSITIVE_INFINITY, maxU = Float.NEGATIVE_INFINITY;
@@ -566,7 +569,7 @@ public final class BlockExporter {
             int base = i * 3;
             float coord = positions[base + axis];
             if (Math.abs(coord - plane) > PLANE_EPS) {
-                return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex);
+                return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
             }
             float u, v;
             switch (axis) {
@@ -583,7 +586,7 @@ public final class BlockExporter {
                     v = positions[base + 1];
                 }
                 default -> {
-                    return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex);
+                    return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
                 }
             }
             if (u < minU) minU = u;
@@ -591,7 +594,7 @@ public final class BlockExporter {
             if (v < minV) minV = v;
             if (v > maxV) maxV = v;
         }
-        return new QuadInfo(spriteKey, normal, axis, plane, minU, maxU, minV, maxV, minX, maxX, minZ, maxZ, originalIndex);
+        return new QuadInfo(spriteKey, normal, axis, plane, minU, maxU, minV, maxV, minX, maxX, minZ, maxZ, originalIndex, posHash);
     }
     private int dominantAxis(float[] normal) {
         if (normal == null || normal.length < 3) return -1;
@@ -629,7 +632,7 @@ public final class BlockExporter {
         return true;
     }
     private boolean isOverlayGeometry(float[] positions, float[] normal) {
-        QuadInfo info = buildQuadInfo("overlay_check", positions, normal, -1);
+        QuadInfo info = buildQuadInfo("overlay_check", positions, normal, -1, 0L);
         if (info.axis < 0) return false;
         float sizeU = info.maxU - info.minU;
         float sizeV = info.maxV - info.minV;
