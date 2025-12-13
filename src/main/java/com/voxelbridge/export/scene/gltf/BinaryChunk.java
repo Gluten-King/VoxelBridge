@@ -13,7 +13,8 @@ import java.nio.file.StandardOpenOption;
  * binary chunk in heap memory.
  */
 final class BinaryChunk {
-    private static final int DEFAULT_BUFFER_SIZE = 8192;
+    // Larger direct buffer to reduce write syscalls during streaming writes
+    private static final int DEFAULT_BUFFER_SIZE = 128 * 1024;
 
     private final FileChannel channel;
     private final ByteBuffer scratch;

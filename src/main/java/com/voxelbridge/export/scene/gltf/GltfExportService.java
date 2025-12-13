@@ -19,6 +19,8 @@ import net.neoforged.api.distmarker.OnlyIn;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * glTF-specific export service that orchestrates:
@@ -32,6 +34,12 @@ import java.nio.file.Path;
  */
 @OnlyIn(Dist.CLIENT)
 public final class GltfExportService {
+
+    private static final ExecutorService WRITE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "VoxelBridge-GltfWriter");
+        t.setDaemon(true);
+        return t;
+    });
 
     private GltfExportService() {}
 
@@ -119,40 +127,42 @@ public final class GltfExportService {
             com.voxelbridge.export.texture.BlockEntityTextureManager.exportTextures(ctx, gltfDir);
             TimeLogger.logDuration("blockentity_texture_export", TimeLogger.elapsedSince(tBerExport));
         }
-        Path output;
-        try {
-            TimeLogger.logMemory("before_geometry_write");
-            long tSceneWrite = TimeLogger.now();
-            output = sceneSink.write(request);
-            TimeLogger.logDuration("geometry_write", TimeLogger.elapsedSince(tSceneWrite));
-            TimeLogger.logMemory("after_geometry_write");
-            TimeLogger.logDuration("total_export", TimeLogger.elapsedSince(tTotal));
-            ExportLogger.log("[GLTF] Export complete: " + output);
-            System.out.println(banner);
-            System.out.println("[VoxelBridge][GLTF] *** EXPORT COMPLETED SUCCESSFULLY ***");
-            System.out.println("[VoxelBridge][GLTF] Output: " + output);
-            System.out.println(banner);
-            return output;
-        } catch (OutOfMemoryError e) {
-            // Capture OOM diagnostics to timelog
-            Runtime rt = Runtime.getRuntime();
-            long used = rt.totalMemory() - rt.freeMemory();
-            long max = rt.maxMemory();
-            System.err.println("[VoxelBridge][CRASH] OutOfMemoryError during geometry_write");
-            System.err.println("[VoxelBridge][CRASH] Heap used: " + (used / 1024 / 1024) + " MB");
-            System.err.println("[VoxelBridge][CRASH] Heap max: " + (max / 1024 / 1024) + " MB");
-            System.err.println("[VoxelBridge][CRASH] Usage: " + ((used * 100) / max) + "%");
-            TimeLogger.logMemory("oom_crash");
-            throw e;
-        } catch (Exception e) {
-            ExportLogger.log("[GLTF][ERROR] Export failed: " + e);
-            e.printStackTrace();
-            throw e;
-        } finally {
-            BlockEntityDebugLogger.close();
-            ExportLogger.close();
-            BlockExporter.closeCTMDebugLog();
-            TimeLogger.close();
-        }
+        // Offload write to background thread to avoid blocking game/render thread
+        WRITE_EXECUTOR.submit(() -> {
+            try {
+                TimeLogger.logMemory("before_geometry_write");
+                long tSceneWrite = TimeLogger.now();
+                Path output = sceneSink.write(request);
+                TimeLogger.logDuration("geometry_write", TimeLogger.elapsedSince(tSceneWrite));
+                TimeLogger.logMemory("after_geometry_write");
+                TimeLogger.logDuration("total_export", TimeLogger.elapsedSince(tTotal));
+                ExportLogger.log("[GLTF] Export complete: " + output);
+                System.out.println(banner);
+                System.out.println("[VoxelBridge][GLTF] *** EXPORT COMPLETED SUCCESSFULLY ***");
+                System.out.println("[VoxelBridge][GLTF] Output: " + output);
+                System.out.println(banner);
+            } catch (OutOfMemoryError e) {
+                Runtime rt = Runtime.getRuntime();
+                long used = rt.totalMemory() - rt.freeMemory();
+                long max = rt.maxMemory();
+                System.err.println("[VoxelBridge][CRASH] OutOfMemoryError during geometry_write");
+                System.err.println("[VoxelBridge][CRASH] Heap used: " + (used / 1024 / 1024) + " MB");
+                System.err.println("[VoxelBridge][CRASH] Heap max: " + (max / 1024 / 1024) + " MB");
+                System.err.println("[VoxelBridge][CRASH] Usage: " + ((used * 100) / max) + "%");
+                TimeLogger.logMemory("oom_crash");
+                e.printStackTrace();
+            } catch (Exception e) {
+                ExportLogger.log("[GLTF][ERROR] Export failed: " + e);
+                e.printStackTrace();
+            } finally {
+                BlockEntityDebugLogger.close();
+                ExportLogger.close();
+                BlockExporter.closeCTMDebugLog();
+                TimeLogger.close();
+            }
+        });
+
+        // Return target glTF path immediately; actual write completes asynchronously
+        return request.outputDir().resolve(request.baseName() + ".gltf");
     }
 }

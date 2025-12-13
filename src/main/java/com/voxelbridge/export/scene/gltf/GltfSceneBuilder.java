@@ -17,6 +17,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.Arrays;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Collects mesh data grouped per Material Group (Block) and writes glTF.
@@ -195,14 +200,14 @@ public final class GltfSceneBuilder implements SceneSink {
         buffer.setUri(binPath.getFileName().toString());
         gltf.addBuffers(buffer);
 
-        BinaryChunk chunk = new BinaryChunk(binPath);
-        try {
         List<Material> materials = new ArrayList<>();
         List<Mesh> meshes = new ArrayList<>();
         List<Node> nodes = new ArrayList<>();
         List<Texture> textures = new ArrayList<>();
         List<Image> images = new ArrayList<>();
         List<Sampler> samplers = new ArrayList<>();
+        BinaryChunk chunk = new BinaryChunk(binPath);
+        try {
         
         // Setup Sampler
         Sampler sampler = new Sampler();
@@ -216,99 +221,67 @@ public final class GltfSceneBuilder implements SceneSink {
         // Register Colormap Textures
         List<Integer> colorMapIndices = registerColorMapTextures(request.outputDir(), textures, images, 0);
 
-        // Map to track created textures/materials to avoid duplication
-        // Key: primitiveKey (e.g. "glass#0"), Value: Material Index
-        Map<String, Integer> materialIndices = new HashMap<>();
-
-        // OPTIMIZATION: Process primitiveMap in batches to reduce peak memory usage
-        // Instead of keeping all PrimitiveData in memory, process and release in batches
-        final int BATCH_SIZE = 10; // Process 10 material groups at a time
+        // 并行处理 raw -> 编码片段，按原顺序写入，减少主线程长时间阻塞
         List<String> allKeys = new ArrayList<>(primitiveMap.keySet());
-        int totalPrimitives = allKeys.size();
-        int processedCount = 0;
+        ExecutorService exec = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
+        List<Future<EncodedPrimitive>> futures = new ArrayList<>();
+        for (int i = 0; i < allKeys.size(); i++) {
+            final int order = i;
+            final String primitiveKey = allKeys.get(i);
+            final PrimitiveData data = primitiveMap.get(primitiveKey);
+            futures.add(exec.submit(() -> encodePrimitive(primitiveKey, data, order)));
+        }
+        exec.shutdown();
 
         TimeLogger.logMemory("before_primitive_processing");
 
-        for (int batchStart = 0; batchStart < totalPrimitives; batchStart += BATCH_SIZE) {
-            int batchEnd = Math.min(batchStart + BATCH_SIZE, totalPrimitives);
-            TimeLogger.logMemory("batch_" + (batchStart / BATCH_SIZE) + "_start");
-
-            for (int i = batchStart; i < batchEnd; i++) {
-                String primitiveKey = allKeys.get(i);
-                PrimitiveData data = primitiveMap.get(primitiveKey);
-            
-            if (data.vertexCount == 0) continue;
-            if (data.spriteRanges.isEmpty()) {
-                ExportLogger.log(String.format("[GLTF][WARN] primitive '%s' has no sprite ranges; skipping to avoid invalid UV remap", primitiveKey));
-                continue;
+        int processedCount = 0;
+        for (Future<EncodedPrimitive> f : futures) {
+            EncodedPrimitive ep;
+            try {
+                ep = f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while encoding primitives", e);
+            } catch (ExecutionException e) {
+                throw new IOException("Failed to encode primitive", e.getCause());
             }
+            if (ep == null || ep.vertexCount == 0 || ep.spriteRanges.isEmpty()) continue;
 
-            // 4. Remap UVs using SpriteRanges
-            if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
-                float[] uvs = data.uv0.toArray();
-
-                for (PrimitiveData.SpriteRange range : data.spriteRanges) {
-                    boolean animated = ExportRuntimeConfig.isAnimationEnabled() &&
-                        ctx.getTextureRepository().hasAnimation(range.spriteKey());
-                    if (animated) {
-                        continue; // keep sprite-space UVs for animated textures
-                    }
-                    for (int j = 0; j < range.count(); j++) {
-                        int vIdx = range.startVertexIndex() + j;
-                        float u = uvs[vIdx * 2];
-                        float v = uvs[vIdx * 2 + 1];
-
-                        // Remap base UV
-                        float[] newUV = remapUV(range.spriteKey(), u, v);
-                        uvs[vIdx * 2] = newUV[0];
-                        uvs[vIdx * 2 + 1] = newUV[1];
-                    }
-                }
-                data.uv0.clear();
-                data.uv0.addAll(uvs);
-
-            }
-
-            // 5. Write Buffers and Accessors (OPTIMIZED: use direct array refs)
-            int posOffset = chunk.writeFloatArray(data.positions.getArrayDirect(), data.positions.size());
-            int posView = addView(gltf, 0, posOffset, data.positions.size() * 4, 34962);
-            int posAcc = addAccessor(gltf, posView, data.vertexCount, "VEC3", 5126, data.positionMin(), data.positionMax());
+            int posOffset = chunk.writeFloatArray(ep.positions, ep.positions.length);
+            int posView = addView(gltf, 0, posOffset, ep.positions.length * 4, 34962);
+            int posAcc = addAccessor(gltf, posView, ep.vertexCount, "VEC3", 5126, ep.positionMin, ep.positionMax);
 
             int texAcc = -1;
-            if (!data.uv0.isEmpty()) {
-                int off = chunk.writeFloatArray(data.uv0.getArrayDirect(), data.uv0.size());
-                int view = addView(gltf, 0, off, data.uv0.size() * 4, 34962);
-                texAcc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
+            if (ep.uv0.length > 0) {
+                int off = chunk.writeFloatArray(ep.uv0, ep.uv0.length);
+                int view = addView(gltf, 0, off, ep.uv0.length * 4, 34962);
+                texAcc = addAccessor(gltf, view, ep.vertexCount, "VEC2", 5126, null, null);
             }
 
-            // 只在UV1数据存在且非全零时创建TEXCOORD_1访问器
             int uv1Acc = -1;
-            if (!data.uv1.isEmpty() && hasNonZeroUV1(data)) {
-                int off = chunk.writeFloatArray(data.uv1.getArrayDirect(), data.uv1.size());
-                int view = addView(gltf, 0, off, data.uv1.size() * 4, 34962);
-                uv1Acc = addAccessor(gltf, view, data.vertexCount, "VEC2", 5126, null, null);
+            if (ep.hasNonZeroUV1) {
+                int off = chunk.writeFloatArray(ep.uv1, ep.uv1.length);
+                int view = addView(gltf, 0, off, ep.uv1.length * 4, 34962);
+                uv1Acc = addAccessor(gltf, view, ep.vertexCount, "VEC2", 5126, null, null);
             }
 
-            // 始终写入 COLOR_0，保持顶点颜色存在（无 tint 则为纯白）
             int colorAcc = -1;
-            if (!data.colors.isEmpty()) {
-                int off = chunk.writeFloatArray(data.colors.getArrayDirect(), data.colors.size());
-                int view = addView(gltf, 0, off, data.colors.size() * 4, 34962);
-                colorAcc = addAccessor(gltf, view, data.vertexCount, "VEC4", 5126, null, null);
+            if (ep.hasColors) {
+                int off = chunk.writeFloatArray(ep.colors, ep.colors.length);
+                int view = addView(gltf, 0, off, ep.colors.length * 4, 34962);
+                colorAcc = addAccessor(gltf, view, ep.vertexCount, "VEC4", 5126, null, null);
             }
 
-            int idxOffset = chunk.writeIntArray(data.indices.getArrayDirect(), data.indices.size());
-            int idxView = addView(gltf, 0, idxOffset, data.indices.size() * 4, 34963);
-            int idxAcc = addAccessor(gltf, idxView, data.indices.size(), "SCALAR", 5125, null, null);
+            int idxOffset = chunk.writeIntArray(ep.indices, ep.indices.length);
+            int idxView = addView(gltf, 0, idxOffset, ep.indices.length * 4, 34963);
+            int idxAcc = addAccessor(gltf, idxView, ep.indices.length, "SCALAR", 5125, null, null);
 
-            // 6. Create Material
-            // We use the first sprite in the primitive to determine the texture (Page).
-            // Since we grouped by Page, all sprites in this primitive should share the same Page/Texture.
-            String sampleSprite = data.spriteRanges.get(0).spriteKey();
+            String sampleSprite = ep.spriteRanges.get(0).spriteKey();
             int textureIndex = textureRegistry.ensureSpriteTexture(sampleSprite, textures, images);
             
             Material material = new Material();
-            material.setName(data.materialGroupKey); // "minecraft:glass"
+            material.setName(ep.materialGroupKey);
             MaterialPbrMetallicRoughness pbr = new MaterialPbrMetallicRoughness();
             TextureInfo texInfo = new TextureInfo();
             texInfo.setIndex(textureIndex);
@@ -316,9 +289,8 @@ public final class GltfSceneBuilder implements SceneSink {
             pbr.setMetallicFactor(0.0f);
             pbr.setRoughnessFactor(1.0f);
             material.setPbrMetallicRoughness(pbr);
-            material.setDoubleSided(data.doubleSided);
+            material.setDoubleSided(ep.doubleSided);
 
-            // Extensions for Colormap / Overlay
             Map<String, Object> extras = new HashMap<>();
             if (!colorMapIndices.isEmpty()) {
                 extras.put("voxelbridge:colormapTextures", colorMapIndices);
@@ -329,7 +301,6 @@ public final class GltfSceneBuilder implements SceneSink {
             materials.add(material);
             int matIndex = materials.size() - 1;
 
-            // 7. Create Mesh Primitive
             MeshPrimitive prim = new MeshPrimitive();
             Map<String, Integer> attrs = new LinkedHashMap<>();
             attrs.put("POSITION", posAcc);
@@ -342,31 +313,17 @@ public final class GltfSceneBuilder implements SceneSink {
             prim.setMode(4);
 
             Mesh mesh = new Mesh();
-            mesh.setName(primitiveKey);
+            mesh.setName(ep.materialGroupKey);
             mesh.setPrimitives(Collections.singletonList(prim));
             meshes.add(mesh);
 
             Node node = new Node();
-            node.setName(primitiveKey);
+            node.setName(ep.materialGroupKey);
             node.setMesh(meshes.size() - 1);
             nodes.add(node);
 
-            // OPTIMIZATION: Immediately clear PrimitiveData after writing to glTF buffer
-            // This releases the large vertexLookup HashMap and float arrays
-            // Memory savings: ~1GB for large exports (prevents accumulation of all vertices)
-            // Safe because: Atlas UV remapping is done, data is written to buffer, no longer needed
-            clearPrimitiveData(data);
-
-            // OPTIMIZATION: Remove from primitiveMap to allow GC to reclaim memory
-            primitiveMap.remove(primitiveKey);
             processedCount++;
-            }
-
-            // Force GC hint after each batch to reclaim memory
-            if (batchStart % (BATCH_SIZE * 5) == 0) {
-                System.gc();
-            }
-            TimeLogger.logMemory("batch_" + (batchStart / BATCH_SIZE) + "_end");
+            primitiveMap.remove(ep.materialGroupKey);
         }
 
         TimeLogger.logMemory("after_primitive_processing");
@@ -396,8 +353,32 @@ public final class GltfSceneBuilder implements SceneSink {
         return request.outputDir().resolve(request.baseName() + ".gltf");
         } finally {
             chunk.close();
+            // Help GC: clear large collections once we're done
+            primitiveMap.clear();
+            materials.clear();
+            meshes.clear();
+            nodes.clear();
+            textures.clear();
+            images.clear();
         }
     }
+
+    private record EncodedPrimitive(
+            String materialGroupKey,
+            List<PrimitiveData.SpriteRange> spriteRanges,
+            float[] positions,
+            float[] uv0,
+            float[] uv1,
+            float[] colors,
+            int[] indices,
+            int vertexCount,
+            boolean doubleSided,
+            float[] positionMin,
+            float[] positionMax,
+            boolean hasNonZeroUV1,
+            boolean hasColors,
+            int order
+    ) {}
 
     private float[] remapUV(String spriteKey, float u, float v) {
         boolean isBlockEntity = spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:") || spriteKey.startsWith("base:");
@@ -467,6 +448,52 @@ public final class GltfSceneBuilder implements SceneSink {
         for (int i = 0; i < values.length; i++) arr[i] = values[i];
         return arr;
     }
+
+    private EncodedPrimitive encodePrimitive(String primitiveKey, PrimitiveData data, int order) {
+        if (data == null) return null;
+        if (data.vertexCount == 0 || data.spriteRanges.isEmpty()) {
+            clearPrimitiveData(data);
+            return new EncodedPrimitive(primitiveKey, List.of(), new float[0], new float[0], new float[0], new float[0], new int[0], 0, data.doubleSided, new float[]{0,0,0}, new float[]{0,0,0}, false, false, order);
+        }
+
+        float[] positions = Arrays.copyOf(data.positions.getArrayDirect(), data.positions.size());
+        float[] uv0 = Arrays.copyOf(data.uv0.getArrayDirect(), data.uv0.size());
+        float[] uv1 = Arrays.copyOf(data.uv1.getArrayDirect(), data.uv1.size());
+        float[] colors = Arrays.copyOf(data.colors.getArrayDirect(), data.colors.size());
+        int[] indices = Arrays.copyOf(data.indices.getArrayDirect(), data.indices.size());
+        List<PrimitiveData.SpriteRange> ranges = new ArrayList<>(data.spriteRanges);
+
+        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
+            for (PrimitiveData.SpriteRange range : ranges) {
+                boolean animated = ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(range.spriteKey());
+                if (animated) continue;
+                for (int j = 0; j < range.count(); j++) {
+                    int vIdx = range.startVertexIndex() + j;
+                    float u = uv0[vIdx * 2];
+                    float v = uv0[vIdx * 2 + 1];
+                    float[] remapped = remapUV(range.spriteKey(), u, v);
+                    uv0[vIdx * 2] = remapped[0];
+                    uv0[vIdx * 2 + 1] = remapped[1];
+
+                    if (range.overlaySpriteKey() != null && uv1.length >= (vIdx * 2 + 2)) {
+                        float[] overlayRemap = remapUV(range.overlaySpriteKey(), u, v);
+                        uv1[vIdx * 2] = overlayRemap[0];
+                        uv1[vIdx * 2 + 1] = overlayRemap[1];
+                    }
+                }
+            }
+        }
+
+        boolean hasUV1 = hasNonZeroUV1(uv1);
+        boolean hasCols = colors.length > 0;
+        float[] posMin = data.positionMin();
+        float[] posMax = data.positionMax();
+        boolean doubleSided = data.doubleSided;
+
+        clearPrimitiveData(data);
+
+        return new EncodedPrimitive(primitiveKey, ranges, positions, uv0, uv1, colors, indices, data.vertexCount, doubleSided, posMin, posMax, hasUV1, hasCols, order);
+    }
     
     private List<Integer> registerColorMapTextures(Path outDir, List<Texture> textures, List<Image> images, int samplerIndex) throws IOException {
          Path dir = outDir.resolve("textures/colormap");
@@ -492,8 +519,7 @@ public final class GltfSceneBuilder implements SceneSink {
     /**
      * 检查UV1数据是否包含任何非零值。
      */
-    private boolean hasNonZeroUV1(PrimitiveData data) {
-        float[] uvs = data.uv1.toArray();
+    private boolean hasNonZeroUV1(float[] uvs) {
         for (float v : uvs) {
             if (Math.abs(v) > 1e-6f) return true;
         }
