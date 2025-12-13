@@ -93,6 +93,10 @@ public final class StreamingRegionSampler {
         AtomicBoolean keepRunning = new AtomicBoolean(true);
         AtomicInteger scanCycles = new AtomicInteger(0);
 
+        // OPTIMIZATION: Shared BlockEntityRenderBatch for all chunks
+        // Reduces main thread blocking from N chunks to 1 total flush
+        BlockEntityRenderBatch sharedBeBatch = new BlockEntityRenderBatch();
+
         Thread monitor = new Thread(() -> {
             try {
                 while (keepRunning.get()) {
@@ -132,7 +136,8 @@ public final class StreamingRegionSampler {
                                 chunk, chunkPos, level, chunkCache, sink, ctx,
                                 regionMin, regionMax,
                                 cminX, cmaxX, cminZ, cmaxZ, minY, maxY,
-                                mc, processing, playerChunk, activeDistance
+                                mc, processing, playerChunk, activeDistance,
+                                sharedBeBatch  // OPTIMIZATION: Pass shared batch
                             ));
                         }
                     }
@@ -161,6 +166,11 @@ public final class StreamingRegionSampler {
             keepRunning.set(false);
             monitor.interrupt();
             monitor.join(2000);
+
+            // OPTIMIZATION: Single flush of accumulated BlockEntity render tasks
+            // Reduces main thread blocking from N-chunks to 1 total flush
+            ExportLogger.log("[StreamingRegionSampler] Flushing accumulated BlockEntity render tasks...");
+            sharedBeBatch.flush(mc);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
@@ -184,7 +194,8 @@ public final class StreamingRegionSampler {
                                    int minX, int maxX, int minZ, int maxZ,
                                    int minY, int maxY,
                                    Minecraft mc, Set<ChunkPos> processing,
-                                   ChunkPos playerChunk, int activeDistance) {
+                                   ChunkPos playerChunk, int activeDistance,
+                                   BlockEntityRenderBatch sharedBeBatch) {
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
 
@@ -205,10 +216,13 @@ public final class StreamingRegionSampler {
 
             // ATOMIC EXPORT
             BufferedSceneSink buffer = new BufferedSceneSink();
-            BlockEntityRenderBatch beBatch = new BlockEntityRenderBatch();
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, beBatch);
+            // OPTIMIZATION: Use shared BlockEntityRenderBatch instead of per-chunk instance
+            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch);
             localSampler.setRegionBounds(regionMin, regionMax);
 
+            // OPTIMIZATION: Reuse MutableBlockPos to avoid 98,304 object allocations per chunk
+            // Memory savings: ~2.4MB temporary objects per chunk + reduced GC pressure
+            BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
             int blockCount = 0;
             for (int x = minX; x <= maxX; x++) {
                 for (int z = minZ; z <= maxZ; z++) {
@@ -217,9 +231,9 @@ public final class StreamingRegionSampler {
                             ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                             return;
                         }
-                        BlockPos pos = new BlockPos(x, y, z);
+                        mutablePos.set(x, y, z);  // Reuse instead of: new BlockPos(x, y, z)
                         try {
-                            localSampler.sampleBlock(chunk.getBlockState(pos), pos);
+                            localSampler.sampleBlock(chunk.getBlockState(mutablePos), mutablePos);
                             blockCount++;
                         } catch (Throwable t) {
                             t.printStackTrace();
@@ -230,12 +244,13 @@ public final class StreamingRegionSampler {
 
             if (localSampler.hadMissingNeighborAndReset()) {
                 ExportLogger.log("[Streaming] Chunk " + chunkPos + " incomplete (missing neighbors), retry.");
-                beBatch.clear();
+                sharedBeBatch.clear();
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                 return;
             }
 
-            beBatch.flush(mc);
+            // OPTIMIZATION: Don't flush per-chunk, accumulate in shared batch
+            // sharedBeBatch will be flushed once after all chunks complete
             if (!buffer.isEmpty()) {
                 buffer.flushTo(finalSink);
             }

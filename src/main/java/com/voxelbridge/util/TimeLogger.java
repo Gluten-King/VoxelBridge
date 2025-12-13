@@ -47,6 +47,26 @@ public final class TimeLogger {
         logLine(String.format("%s: %.3f ms", section, ms));
     }
 
+    /**
+     * Log current memory usage statistics.
+     * @param label Label for this memory snapshot (e.g., "before_atlas", "after_geometry")
+     */
+    public static void logMemory(String label) {
+        if (!ENABLED) return;
+        Runtime rt = Runtime.getRuntime();
+        long maxMemory = rt.maxMemory();
+        long totalMemory = rt.totalMemory();
+        long freeMemory = rt.freeMemory();
+        long usedMemory = totalMemory - freeMemory;
+
+        logLine(String.format("memory_%s: used=%.1f MB, total=%.1f MB, max=%.1f MB, usage=%.1f%%",
+            label,
+            usedMemory / 1024.0 / 1024.0,
+            totalMemory / 1024.0 / 1024.0,
+            maxMemory / 1024.0 / 1024.0,
+            (usedMemory * 100.0) / maxMemory));
+    }
+
     private static synchronized void logLine(String message) {
         if (ENABLED && writer != null) {
             try {

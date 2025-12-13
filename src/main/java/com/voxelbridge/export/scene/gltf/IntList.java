@@ -22,6 +22,15 @@ final class IntList {
         return Arrays.copyOf(data, size);
     }
 
+    /**
+     * OPTIMIZATION: Get direct reference to internal array (avoiding copy).
+     * WARNING: Only use when you need to write to buffer immediately and won't modify.
+     * Caller must use size() to know actual data length.
+     */
+    int[] getArrayDirect() {
+        return data;
+    }
+
     private void ensure(int needed) {
         if (needed <= data.length) return;
         data = Arrays.copyOf(data, data.length * 2);
@@ -29,5 +38,9 @@ final class IntList {
 
     boolean isEmpty() {
         return size == 0;
+    }
+
+    void clear() {
+        size = 0;
     }
 }

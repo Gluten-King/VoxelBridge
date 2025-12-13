@@ -121,9 +121,11 @@ public final class GltfExportService {
         }
         Path output;
         try {
+            TimeLogger.logMemory("before_geometry_write");
             long tSceneWrite = TimeLogger.now();
             output = sceneSink.write(request);
             TimeLogger.logDuration("geometry_write", TimeLogger.elapsedSince(tSceneWrite));
+            TimeLogger.logMemory("after_geometry_write");
             TimeLogger.logDuration("total_export", TimeLogger.elapsedSince(tTotal));
             ExportLogger.log("[GLTF] Export complete: " + output);
             System.out.println(banner);
@@ -131,6 +133,17 @@ public final class GltfExportService {
             System.out.println("[VoxelBridge][GLTF] Output: " + output);
             System.out.println(banner);
             return output;
+        } catch (OutOfMemoryError e) {
+            // Capture OOM diagnostics to timelog
+            Runtime rt = Runtime.getRuntime();
+            long used = rt.totalMemory() - rt.freeMemory();
+            long max = rt.maxMemory();
+            System.err.println("[VoxelBridge][CRASH] OutOfMemoryError during geometry_write");
+            System.err.println("[VoxelBridge][CRASH] Heap used: " + (used / 1024 / 1024) + " MB");
+            System.err.println("[VoxelBridge][CRASH] Heap max: " + (max / 1024 / 1024) + " MB");
+            System.err.println("[VoxelBridge][CRASH] Usage: " + ((used * 100) / max) + "%");
+            TimeLogger.logMemory("oom_crash");
+            throw e;
         } catch (Exception e) {
             ExportLogger.log("[GLTF][ERROR] Export failed: " + e);
             e.printStackTrace();

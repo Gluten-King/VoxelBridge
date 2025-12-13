@@ -586,7 +586,11 @@ public final class TextureAtlasManager {
             }
         }
 
-        ExecutorService executor = Executors.newFixedThreadPool(2);
+        // OPTIMIZATION: Use configured thread count instead of hardcoded 2
+        // Respects user's ExportRuntimeConfig.exportThreadCount setting
+        // Default: Runtime.getRuntime().availableProcessors()
+        int threadCount = ExportRuntimeConfig.getExportThreadCount();
+        ExecutorService executor = Executors.newFixedThreadPool(Math.max(2, threadCount));
         try {
             Future<?> futureNormal = executor.submit(() -> {
                 try {

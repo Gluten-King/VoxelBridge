@@ -14,8 +14,8 @@ import java.time.format.DateTimeFormatter;
  */
 public final class ExportLogger {
 
-    // Disabled for release builds to avoid generating large debug logs.
-    private static final boolean ENABLED = true;  // Enable for diagnostics
+    // Disabled to avoid generating large debug logs during exports
+    private static final boolean ENABLED = false;
 
     private static final DateTimeFormatter TIMESTAMP =
             DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS");

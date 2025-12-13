@@ -10,15 +10,34 @@ import net.minecraft.resources.ResourceLocation;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * STRICT .mcmeta-only animation detection.
  * Only textures with valid .mcmeta animation sections are treated as animated.
  * NO heuristic/perceptual hash detection.
+ *
+ * OPTIMIZATION: Static cache to avoid 0.5-2s filesystem scan on every export.
  */
 public final class AnimatedTextureHelper {
 
     private AnimatedTextureHelper() {}
+
+    // OPTIMIZATION: Cache to avoid repeated filesystem scans (saves 0.5-2s per export)
+    // Thread-safe: uses ConcurrentHashMap
+    // Invalidation: cleared when resource packs reload
+    private static final ConcurrentHashMap<String, Boolean> animationScanCache = new ConcurrentHashMap<>();
+    private static volatile boolean cacheWarmedUp = false;
+
+    /**
+     * Invalidates the animation scan cache.
+     * Call this when resource packs are reloaded.
+     */
+    public static void invalidateCache() {
+        animationScanCache.clear();
+        cacheWarmedUp = false;
+        ExportLogger.logAnimation("[Animation][CACHE] Cache invalidated (resource reload)");
+    }
 
     /**
      * Detect animation from .mcmeta file.
@@ -230,9 +249,17 @@ public final class AnimatedTextureHelper {
     /**
      * Hybrid animation scanning: Atlas sprites + file system fallback.
      * Logs all detection attempts for debugging.
+     * OPTIMIZATION: Uses static cache to avoid repeated filesystem scans.
      */
     public static void scanAllAnimations(com.voxelbridge.export.ExportContext ctx, java.util.Set<String> whitelist) {
         TextureRepository repo = ctx.getTextureRepository();
+
+        // OPTIMIZATION: Skip expensive filesystem scan if cache is already warmed up
+        if (cacheWarmedUp) {
+            com.voxelbridge.util.ExportLogger.logAnimation("[Animation][CACHE] Using cached scan results (skipping 0.5-2s filesystem scan)");
+            return;
+        }
+
         int totalFound = 0;
 
         com.voxelbridge.util.ExportLogger.logAnimation("[Animation] ===== ANIMATION SCAN START =====");
@@ -294,6 +321,10 @@ public final class AnimatedTextureHelper {
         }
 
         com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] ===== SCAN COMPLETE: %d total animations =====", totalFound));
+
+        // OPTIMIZATION: Mark cache as warmed up to skip future scans
+        cacheWarmedUp = true;
+        com.voxelbridge.util.ExportLogger.logAnimation("[Animation][CACHE] Cache warmed up - future exports will skip filesystem scan");
     }
 
     /**

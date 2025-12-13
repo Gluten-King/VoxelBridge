@@ -83,7 +83,7 @@ public final class BlockExporter {
     // Track if current block uses CTM/connected textures (for face culling decisions)
     private boolean currentBlockIsCTM = false;
     // CTM Debug logging
-    private static final boolean CTM_LOG_ENABLED = true;
+    private static final boolean CTM_LOG_ENABLED = false;
     private static final float AXIS_NORMAL_DOT_MIN = 0.9999f;
     private static final float AXIS_COMPONENT_EPS = 1e-3f;
     private static final float PLANE_EPS = 1e-4f;

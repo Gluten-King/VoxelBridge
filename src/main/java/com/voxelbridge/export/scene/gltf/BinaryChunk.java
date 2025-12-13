@@ -1,49 +1,114 @@
 package com.voxelbridge.export.scene.gltf;
 
-import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 /**
  * Writes float/int arrays into a contiguous binary buffer with alignment.
+ * This implementation streams directly to disk to avoid holding the whole
+ * binary chunk in heap memory.
  */
 final class BinaryChunk {
-    private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    private static final int DEFAULT_BUFFER_SIZE = 8192;
 
-    int size() {
-        return out.size();
+    private final FileChannel channel;
+    private final ByteBuffer scratch;
+    private long size = 0;
+
+    BinaryChunk(Path path) throws IOException {
+        this.channel = FileChannel.open(path,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE);
+        this.scratch = ByteBuffer.allocateDirect(DEFAULT_BUFFER_SIZE).order(ByteOrder.LITTLE_ENDIAN);
     }
 
-    int writeFloatArray(float[] values) {
+    long size() {
+        return size;
+    }
+
+    int writeFloatArray(float[] values) throws IOException {
+        return writeFloatArray(values, values.length);
+    }
+
+    /**
+     * OPTIMIZATION: Write float array with length limit (for direct array refs).
+     * @param values The float array (may contain extra capacity)
+     * @param length Actual number of floats to write
+     */
+    int writeFloatArray(float[] values, int length) throws IOException {
         int offset = align(4);
-        for (float v : values) {
-            writeInt(Float.floatToIntBits(v));
+        for (int i = 0; i < length; i++) {
+            writeInt(Float.floatToIntBits(values[i]));
         }
         return offset;
     }
 
-    int writeIntArray(int[] values) {
+    int writeIntArray(int[] values) throws IOException {
+        return writeIntArray(values, values.length);
+    }
+
+    /**
+     * OPTIMIZATION: Write int array with length limit (for direct array refs).
+     * @param values The int array (may contain extra capacity)
+     * @param length Actual number of ints to write
+     */
+    int writeIntArray(int[] values, int length) throws IOException {
         int offset = align(4);
-        for (int v : values) {
-            writeInt(v);
+        for (int i = 0; i < length; i++) {
+            writeInt(values[i]);
         }
         return offset;
     }
 
-    byte[] toByteArray() {
-        return out.toByteArray();
+    void close() throws IOException {
+        flushBuffer();
+        channel.close();
     }
 
-    private int align(int alignment) {
-        int padding = (alignment - (out.size() % alignment)) % alignment;
-        for (int i = 0; i < padding; i++) {
-            out.write(0);
+    private int align(int alignment) throws IOException {
+        int padding = (int) ((alignment - (size % alignment)) % alignment);
+        if (padding > 0) {
+            writeZeros(padding);
         }
-        return out.size();
+        return (int) size;
     }
 
-    private void writeInt(int value) {
-        out.write(value & 0xFF);
-        out.write((value >> 8) & 0xFF);
-        out.write((value >> 16) & 0xFF);
-        out.write((value >> 24) & 0xFF);
+    private void writeInt(int value) throws IOException {
+        ensureCapacity(4);
+        scratch.putInt(value);
+        size += 4;
+    }
+
+    private void writeZeros(int count) throws IOException {
+        while (count > 0) {
+            int chunk = Math.min(count, scratch.remaining());
+            for (int i = 0; i < chunk; i++) {
+                scratch.put((byte) 0);
+            }
+            size += chunk;
+            count -= chunk;
+            if (!scratch.hasRemaining()) {
+                flushBuffer();
+            }
+        }
+    }
+
+    private void ensureCapacity(int needed) throws IOException {
+        if (scratch.remaining() < needed) {
+            flushBuffer();
+        }
+    }
+
+    private void flushBuffer() throws IOException {
+        scratch.flip();
+        while (scratch.hasRemaining()) {
+            channel.write(scratch);
+        }
+        scratch.clear();
     }
 }

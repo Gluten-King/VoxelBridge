@@ -29,6 +29,15 @@ final class FloatList {
         return Arrays.copyOf(data, size);
     }
 
+    /**
+     * OPTIMIZATION: Get direct reference to internal array (avoiding copy).
+     * WARNING: Only use when you need to write to buffer immediately and won't modify.
+     * Caller must use size() to know actual data length.
+     */
+    float[] getArrayDirect() {
+        return data;
+    }
+
     float get(int idx) {
         return data[idx];
     }
