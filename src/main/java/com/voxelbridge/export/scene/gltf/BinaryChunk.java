@@ -15,7 +15,7 @@ import java.nio.file.StandardOpenOption;
  */
 final class BinaryChunk {
     // Larger direct buffer to reduce write syscalls during streaming writes
-    private static final int DEFAULT_BUFFER_SIZE = 128 * 1024;
+    private static final int DEFAULT_BUFFER_SIZE = 32 * 1024 * 1024;
 
     private final FileChannel channel;
     private final ByteBuffer scratch;
@@ -40,14 +40,29 @@ final class BinaryChunk {
 
     /**
      * OPTIMIZATION: Write float array with length limit (for direct array refs).
+     * Uses bulk operations instead of per-element writes for better performance.
      * @param values The float array (may contain extra capacity)
      * @param length Actual number of floats to write
      */
     int writeFloatArray(float[] values, int length) throws IOException {
         int offset = align(4);
-        for (int i = 0; i < length; i++) {
-            writeInt(Float.floatToIntBits(values[i]));
+        int bytesNeeded = length * 4;
+        int written = 0;
+
+        while (written < length) {
+            ensureCapacity(4);
+            int capacity = scratch.remaining() / 4;
+            int chunk = Math.min(capacity, length - written);
+
+            // Bulk write: convert floats to buffer
+            for (int i = 0; i < chunk; i++) {
+                scratch.putFloat(values[written + i]);
+            }
+
+            written += chunk;
+            size += chunk * 4;
         }
+
         return offset;
     }
 
@@ -57,14 +72,28 @@ final class BinaryChunk {
 
     /**
      * OPTIMIZATION: Write int array with length limit (for direct array refs).
+     * Uses bulk operations instead of per-element writes for better performance.
      * @param values The int array (may contain extra capacity)
      * @param length Actual number of ints to write
      */
     int writeIntArray(int[] values, int length) throws IOException {
         int offset = align(4);
-        for (int i = 0; i < length; i++) {
-            writeInt(values[i]);
+        int written = 0;
+
+        while (written < length) {
+            ensureCapacity(4);
+            int capacity = scratch.remaining() / 4;
+            int chunk = Math.min(capacity, length - written);
+
+            // Bulk write: put ints directly
+            for (int i = 0; i < chunk; i++) {
+                scratch.putInt(values[written + i]);
+            }
+
+            written += chunk;
+            size += chunk * 4;
         }
+
         return offset;
     }
 

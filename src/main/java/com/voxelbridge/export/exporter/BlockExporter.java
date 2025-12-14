@@ -51,6 +51,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Supplier;
 
 /**
  * Format-agnostic sampler for block geometry.
@@ -80,6 +81,11 @@ public final class BlockExporter {
     private final Set<Long> overlayOriginalHashes = new HashSet<>();
     // Track which sprites have already had their PBR textures loaded (deduplication)
     private final Set<String> pbrLoadedSprites = new HashSet<>();
+    // Reusable scratch buffers to cut GC pressure during dense exports
+    private final ObjectPool<float[]> positions12Pool = new ObjectPool<>(256, () -> new float[12]);
+    private final ObjectPool<float[]> uv8Pool = new ObjectPool<>(256, () -> new float[8]);
+    private final ObjectPool<int[]> int4Pool = new ObjectPool<>(128, () -> new int[4]);
+    private final ObjectPool<QuadInfo> quadInfoPool = new ObjectPool<>(256, QuadInfo::new);
     private volatile boolean missingNeighborDetected = false;
     // Track if current block uses CTM/connected textures (for face culling decisions)
     private boolean currentBlockIsCTM = false;
@@ -117,16 +123,17 @@ public final class BlockExporter {
         }
     }
     private static class QuadInfo {
-        final String sprite;
-        final float[] normal;
-        final int axis; // 0=X,1=Y,2=Z, -1 = not axis-aligned
-        final float planeCoord;
-        final float minU, maxU, minV, maxV;
-        final float minX, maxX, minZ, maxZ;
-        final int originalIndex; // Index in the original quads list (for render order)
-        final long posHash; // Position hash to avoid redundant vertex extraction
-        QuadInfo(String sprite, float[] normal, int axis, float planeCoord, float minU, float maxU, float minV, float maxV,
-                 float minX, float maxX, float minZ, float maxZ, int originalIndex, long posHash) {
+        String sprite;
+        float[] normal;
+        int axis; // 0=X,1=Y,2=Z, -1 = not axis-aligned
+        float planeCoord;
+        float minU, maxU, minV, maxV;
+        float minX, maxX, minZ, maxZ;
+        int originalIndex; // Index in the original quads list (for render order)
+        long posHash; // Position hash to avoid redundant vertex extraction
+
+        QuadInfo reset(String sprite, float[] normal, int axis, float planeCoord, float minU, float maxU, float minV, float maxV,
+                       float minX, float maxX, float minZ, float maxZ, int originalIndex, long posHash) {
             this.sprite = sprite;
             this.normal = normal;
             this.axis = axis;
@@ -141,6 +148,7 @@ public final class BlockExporter {
             this.maxZ = maxZ;
             this.originalIndex = originalIndex;
             this.posHash = posHash;
+            return this;
         }
     }
     public BlockExporter(ExportContext ctx, SceneSink sceneSink, Level level) {
@@ -284,6 +292,7 @@ public final class BlockExporter {
         // PASS 1: Identify and cache all overlays (vanilla + CTM)
         Map<Long, List<QuadInfo>> ctmPositionQuads = new HashMap<>();
         QuadInfo[] quadInfos = new QuadInfo[quads.size()];
+        List<QuadInfo> borrowedQuadInfos = new ArrayList<>(quads.size());
         // Collect geometric info for all quads (needed for CTM detection)
         int quadIndex = 0;
         for (BakedQuad quad : quads) {
@@ -291,15 +300,21 @@ public final class BlockExporter {
                 quadIndex++;
                 continue;
             }
-            float[] positions = new float[12];
-            float[] uv0 = new float[8];
-            extractVertices(quad, pos, positions, uv0, quad.getSprite(), randomOffset);
-            float[] normal = GeometryUtil.computeFaceNormal(positions);
-            String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
-            QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex);
-            quadInfos[quadIndex] = info;
-            long posHash = info.posHash;
-            ctmPositionQuads.computeIfAbsent(posHash, k -> new ArrayList<>()).add(info);
+            float[] positions = positions12Pool.acquire();
+            float[] uv0 = uv8Pool.acquire();
+            try {
+                extractVertices(quad, pos, positions, uv0, quad.getSprite(), randomOffset);
+                float[] normal = GeometryUtil.computeFaceNormal(positions);
+                String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
+                QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex);
+                quadInfos[quadIndex] = info;
+                borrowedQuadInfos.add(info);
+                long posHash = info.posHash;
+                ctmPositionQuads.computeIfAbsent(posHash, k -> new ArrayList<>()).add(info);
+            } finally {
+                positions12Pool.release(positions);
+                uv8Pool.release(uv0);
+            }
             quadIndex++;
         }
         if (state.is(Blocks.DIRT_PATH)) {
@@ -450,6 +465,9 @@ public final class BlockExporter {
             }
             processQuad(state, pos, quad, quadInfo, quadKeys, processedPositions, blockKey, randomOffset);
         }
+        for (QuadInfo info : borrowedQuadInfos) {
+            quadInfoPool.release(info);
+        }
     }
     private void processQuad(BlockState state, BlockPos pos, BakedQuad quad, QuadInfo quadInfo, Set<Long> quadKeys, Set<Long> processedPositions, String blockKey, Vec3 randomOffset) {
         TextureAtlasSprite sprite = quad.getSprite();
@@ -556,6 +574,7 @@ public final class BlockExporter {
         return buildQuadInfo(spriteKey, positions, normal, originalIndex, posHash);
     }
     private QuadInfo buildQuadInfo(String spriteKey, float[] positions, float[] normal, int originalIndex, long posHash) {
+        QuadInfo info = quadInfoPool.acquire();
         float minX = Float.POSITIVE_INFINITY, maxX = Float.NEGATIVE_INFINITY;
         float minZ = Float.POSITIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < 4; i++) {
@@ -569,7 +588,7 @@ public final class BlockExporter {
         }
         int axis = dominantAxis(normal);
         if (axis < 0) {
-            return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
+            return info.reset(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
         }
         float plane = positions[axis];
         float minU = Float.POSITIVE_INFINITY, maxU = Float.NEGATIVE_INFINITY;
@@ -578,7 +597,7 @@ public final class BlockExporter {
             int base = i * 3;
             float coord = positions[base + axis];
             if (Math.abs(coord - plane) > PLANE_EPS) {
-                return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
+                return info.reset(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
             }
             float u, v;
             switch (axis) {
@@ -595,7 +614,7 @@ public final class BlockExporter {
                     v = positions[base + 1];
                 }
                 default -> {
-                    return new QuadInfo(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
+                    return info.reset(spriteKey, normal, -1, 0f, 0f, 0f, 0f, 0f, minX, maxX, minZ, maxZ, originalIndex, posHash);
                 }
             }
             if (u < minU) minU = u;
@@ -603,7 +622,7 @@ public final class BlockExporter {
             if (v < minV) minV = v;
             if (v > maxV) maxV = v;
         }
-        return new QuadInfo(spriteKey, normal, axis, plane, minU, maxU, minV, maxV, minX, maxX, minZ, maxZ, originalIndex, posHash);
+        return info.reset(spriteKey, normal, axis, plane, minU, maxU, minV, maxV, minX, maxX, minZ, maxZ, originalIndex, posHash);
     }
     private int dominantAxis(float[] normal) {
         if (normal == null || normal.length < 3) return -1;
@@ -779,8 +798,8 @@ public final class BlockExporter {
                 }
             } catch (Exception ignore) {}
         }
-        float[] positions = new float[12];
-        float[] uv0 = new float[8];
+        float[] positions = positions12Pool.acquire();
+        float[] uv0 = uv8Pool.acquire();
         float u0 = sprite.getU0();
         float u1 = sprite.getU1();
         float v0 = sprite.getV0();
@@ -797,78 +816,89 @@ public final class BlockExporter {
         float dv = v1 - v0;
         if (du == 0) du = 1f;
         if (dv == 0) dv = 1f;
-        int[] verts;
+        int[] vertexColors = null;
+        float[] localPos = null;
+        float[] rawPos = null;
         try {
-            verts = quad.getVertices();
-        } catch (Throwable t) { return; }
-        if (verts.length < 32) return;
-        final int stride = 8;
-        int[] vertexColors = new int[4];
-        // First pass: extract local coordinates and UV/colors
-        float[] localPos = new float[12];
-        for (int i = 0; i < 4; i++) {
-            int base = i * stride;
-            float vx = Float.intBitsToFloat(verts[base]);
-            float vy = Float.intBitsToFloat(verts[base + 1]);
-            float vz = Float.intBitsToFloat(verts[base + 2]);
-            int abgr = verts[base + 3];
-            float uu = Float.intBitsToFloat(verts[base + 4]);
-            float vv = Float.intBitsToFloat(verts[base + 5]);
-            vertexColors[i] = abgr;
-            localPos[i * 3] = vx;
-            localPos[i * 3 + 1] = vy;
-            localPos[i * 3 + 2] = vz;
-            float su = (uu - u0) / du;
-            float sv = (vv - v0) / dv;
-            uv0[i * 2] = su;
-            uv0[i * 2 + 1] = sv;
+            int[] verts;
+            try {
+                verts = quad.getVertices();
+            } catch (Throwable t) { return; }
+            if (verts.length < 32) return;
+            final int stride = 8;
+            vertexColors = int4Pool.acquire();
+            // First pass: extract local coordinates and UV/colors
+            localPos = positions12Pool.acquire();
+            rawPos = positions12Pool.acquire();
+            for (int i = 0; i < 4; i++) {
+                int base = i * stride;
+                float vx = Float.intBitsToFloat(verts[base]);
+                float vy = Float.intBitsToFloat(verts[base + 1]);
+                float vz = Float.intBitsToFloat(verts[base + 2]);
+                int abgr = verts[base + 3];
+                float uu = Float.intBitsToFloat(verts[base + 4]);
+                float vv = Float.intBitsToFloat(verts[base + 5]);
+                vertexColors[i] = abgr;
+                localPos[i * 3] = vx;
+                localPos[i * 3 + 1] = vy;
+                localPos[i * 3 + 2] = vz;
+                float su = (uu - u0) / du;
+                float sv = (vv - v0) / dv;
+                uv0[i * 2] = su;
+                uv0[i * 2 + 1] = sv;
+            }
+
+            // Convert raw positions for skip detection before offset
+            for (int i = 0; i < 4; i++) {
+                double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
+                double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
+                double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
+                rawPos[i * 3] = (float)worldX;
+                rawPos[i * 3 + 1] = (float)worldY;
+                rawPos[i * 3 + 2] = (float)worldZ;
+            }
+            long rawHash = computePositionHash(rawPos);
+
+            // Apply overlay offset in local coordinate system (0-1 range) for precision
+            applyLocalOverlayOffset(localPos, overlayIndex);
+
+            // Convert to world coordinates with double precision to avoid precision loss
+            for (int i = 0; i < 4; i++) {
+                double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
+                double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
+                double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
+                positions[i * 3] = (float)worldX;
+                positions[i * 3 + 1] = (float)worldY;
+                positions[i * 3 + 2] = (float)worldZ;
+            }
+            int overlayColor = extractOverlayColor(state, pos, quad, vertexColors);
+            float[] overlayColorUv = new float[8];
+            var placement = com.voxelbridge.export.texture.ColorMapManager.registerColor(ctx, overlayColor);
+            overlayColorUv[0] = placement.u0(); overlayColorUv[1] = placement.v0();
+            overlayColorUv[2] = placement.u1(); overlayColorUv[3] = placement.v0();
+            overlayColorUv[4] = placement.u1(); overlayColorUv[5] = placement.v1();
+            overlayColorUv[6] = placement.u0(); overlayColorUv[7] = placement.v1();
+
+            // Calculate normal for the overlay quad
+            float[] normal = GeometryUtil.computeFaceNormal(positions);
+
+            long overlayPosHash = computePositionHash(positions);
+            if (recordOriginal) {
+                overlayOriginalHashes.add(rawHash);
+            }
+            long posHash = (forcedBaseHash != null) ? forcedBaseHash : overlayPosHash;
+            Map<Long, List<OverlayQuadData>> cache = isCtmOverlay ? overlayCacheCTM : overlayCacheVanilla;
+            List<OverlayQuadData> overlayList = cache.computeIfAbsent(posHash, k -> new ArrayList<>());
+            // Use the provided overlayIndex from caller (for progressive offset assignment)
+            OverlayQuadData data = new OverlayQuadData(positions.clone(), normal, uv0.clone(), overlayColorUv, spriteKey, overlayColor, isCtmOverlay, overlayIndex);
+            overlayList.add(data);
+        } finally {
+            if (vertexColors != null) int4Pool.release(vertexColors);
+            if (localPos != null) positions12Pool.release(localPos);
+            if (rawPos != null) positions12Pool.release(rawPos);
+            positions12Pool.release(positions);
+            uv8Pool.release(uv0);
         }
-
-        // Convert raw positions for skip detection before offset
-        float[] rawPos = new float[12];
-        for (int i = 0; i < 4; i++) {
-            double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
-            double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
-            double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
-            rawPos[i * 3] = (float)worldX;
-            rawPos[i * 3 + 1] = (float)worldY;
-            rawPos[i * 3 + 2] = (float)worldZ;
-        }
-        long rawHash = computePositionHash(rawPos);
-
-        // Apply overlay offset in local coordinate system (0-1 range) for precision
-        applyLocalOverlayOffset(localPos, overlayIndex);
-
-        // Convert to world coordinates with double precision to avoid precision loss
-        for (int i = 0; i < 4; i++) {
-            double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
-            double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
-            double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
-            positions[i * 3] = (float)worldX;
-            positions[i * 3 + 1] = (float)worldY;
-            positions[i * 3 + 2] = (float)worldZ;
-        }
-        int overlayColor = extractOverlayColor(state, pos, quad, vertexColors);
-        float[] overlayColorUv = new float[8];
-        var placement = com.voxelbridge.export.texture.ColorMapManager.registerColor(ctx, overlayColor);
-        overlayColorUv[0] = placement.u0(); overlayColorUv[1] = placement.v0();
-        overlayColorUv[2] = placement.u1(); overlayColorUv[3] = placement.v0();
-        overlayColorUv[4] = placement.u1(); overlayColorUv[5] = placement.v1();
-        overlayColorUv[6] = placement.u0(); overlayColorUv[7] = placement.v1();
-
-        // Calculate normal for the overlay quad
-        float[] normal = GeometryUtil.computeFaceNormal(positions);
-
-        long overlayPosHash = computePositionHash(positions);
-        if (recordOriginal) {
-            overlayOriginalHashes.add(rawHash);
-        }
-        long posHash = (forcedBaseHash != null) ? forcedBaseHash : overlayPosHash;
-        Map<Long, List<OverlayQuadData>> cache = isCtmOverlay ? overlayCacheCTM : overlayCacheVanilla;
-        List<OverlayQuadData> overlayList = cache.computeIfAbsent(posHash, k -> new ArrayList<>());
-        // Use the provided overlayIndex from caller (for progressive offset assignment)
-        OverlayQuadData data = new OverlayQuadData(positions.clone(), normal, uv0.clone(), overlayColorUv, spriteKey, overlayColor, isCtmOverlay, overlayIndex);
-        overlayList.add(data);
     }
     private int extractOverlayColor(BlockState state, BlockPos pos, BakedQuad quad, int[] vertexColors) {
         for (int i = 0; i < 4; i++) {
@@ -1232,6 +1262,26 @@ public final class BlockExporter {
         hash = 31 * hash + Math.round(info.minZ * 1000f);
         hash = 31 * hash + Math.round(info.maxZ * 1000f);
         return hash;
+    }
+    private static final class ObjectPool<T> {
+        private final ArrayDeque<T> free = new ArrayDeque<>();
+        private final int maxSize;
+        private final Supplier<T> factory;
+
+        ObjectPool(int maxSize, Supplier<T> factory) {
+            this.maxSize = maxSize;
+            this.factory = factory;
+        }
+
+        T acquire() {
+            T value = free.pollFirst();
+            return (value != null) ? value : factory.get();
+        }
+
+        void release(T value) {
+            if (value == null || free.size() >= maxSize) return;
+            free.addFirst(value);
+        }
     }
     public boolean hadMissingNeighborAndReset() {
         boolean result = missingNeighborDetected;

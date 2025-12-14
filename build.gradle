@@ -90,11 +90,13 @@ dependencies {
     implementation "de.javagl:jgltf-impl-v1:${jgltfVersion}"
     implementation "de.javagl:jgltf-impl-v2:${jgltfVersion}"
     implementation "ar.com.hjg:pngj:2.1.0"
+    implementation "net.sf.trove4j:trove4j:3.0.3"
 
     shaded "de.javagl:jgltf-model:${jgltfVersion}"
     shaded "de.javagl:jgltf-impl-v1:${jgltfVersion}"
     shaded "de.javagl:jgltf-impl-v2:${jgltfVersion}"
     shaded "ar.com.hjg:pngj:2.1.0"
+    shaded "net.sf.trove4j:trove4j:3.0.3"
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
@@ -149,6 +151,7 @@ tasks.named('shadowJar') {
     configurations = [project.configurations.shaded]
     relocate 'de.javagl.jgltf', 'com.voxelbridge.shadow.jgltf'
     relocate 'ar.com.hjg.pngj', 'com.voxelbridge.shadow.pngj'
+    relocate 'gnu.trove', 'com.voxelbridge.shadow.trove'
     mergeServiceFiles()
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

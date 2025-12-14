@@ -11,7 +11,9 @@ import java.util.List;
  */
 public final class BufferedSceneSink implements SceneSink {
 
-    private final List<QuadRecord> buffer = new ArrayList<>();
+    // OPTIMIZATION: Pre-allocate capacity based on average quads per chunk (~8000)
+    private static final int ESTIMATED_QUADS_PER_CHUNK = 8000;
+    private final List<QuadRecord> buffer = new ArrayList<>(ESTIMATED_QUADS_PER_CHUNK);
 
     @Override
     public void addQuad(String materialGroupKey,

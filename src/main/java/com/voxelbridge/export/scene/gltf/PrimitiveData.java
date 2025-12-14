@@ -1,11 +1,10 @@
 package com.voxelbridge.export.scene.gltf;
 
+import gnu.trove.map.hash.TObjectIntHashMap;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.Objects;
 
@@ -24,8 +23,11 @@ final class PrimitiveData {
     // To properly merge vertices within the same material group, we need to distinguish
     // vertices coming from different sprites (as they will have different remapped UVs).
     // The VertexKey now includes a hash of the spriteKey.
-    final Map<VertexKey, Integer> vertexLookup = new HashMap<>();
-    final Set<QuadKey> quadKeys = new HashSet<>();
+    // Using TObjectIntHashMap to reduce memory overhead compared to HashMap<VertexKey, Integer>
+    final TObjectIntHashMap<VertexKey> vertexLookup = new TObjectIntHashMap<>(10, 0.5f, -1);
+    // OPTIMIZATION: QuadKey dedup only for transparent materials (saves ~600MB for opaque materials)
+    final Set<QuadKey> quadKeys;
+    final boolean needsQuadDedup;
     int vertexCount = 0;
     boolean doubleSided = false;
     
@@ -48,6 +50,19 @@ final class PrimitiveData {
         this.uv1 = new FloatList(vertexCapacity * 2);
         this.colors = new FloatList(vertexCapacity * 4);
         this.indices = new IntList(indexCapacity);
+        // Quad dedup is only needed for transparent materials to prevent Z-fighting
+        this.needsQuadDedup = isTransparentMaterial(materialGroupKey);
+        this.quadKeys = needsQuadDedup ? new HashSet<>() : null;
+    }
+
+    private static boolean isTransparentMaterial(String materialKey) {
+        if (materialKey == null) return false;
+        String lower = materialKey.toLowerCase();
+        // Common transparent materials that benefit from quad deduplication
+        return lower.contains("glass") || lower.contains("leaves") ||
+               lower.contains("water") || lower.contains("ice") ||
+               lower.contains("slime") || lower.contains("honey") ||
+               lower.contains("portal") || lower.contains("stained_glass");
     }
 
     /**
@@ -77,8 +92,8 @@ final class PrimitiveData {
                     col[oi * 4], col[oi * 4 + 1], col[oi * 4 + 2], col[oi * 4 + 3]
             );
 
-            Integer existing = vertexLookup.get(pv.key());
-            if (existing != null) {
+            int existing = vertexLookup.get(pv.key());
+            if (existing != -1) {
                 verts[i] = existing;
             } else {
                 verts[i] = vertexCount + pending.size();
@@ -89,9 +104,12 @@ final class PrimitiveData {
         if (verts[0] == verts[1] || verts[1] == verts[2] || verts[2] == verts[3] || verts[0] == verts[3]) {
             return null;
         }
-        QuadKey qk = QuadKey.from(verts[0], verts[1], verts[2], verts[3]);
-        if (!quadKeys.add(qk)) {
-            return null;
+        // OPTIMIZATION: Only perform quad dedup for transparent materials
+        if (needsQuadDedup) {
+            QuadKey qk = QuadKey.from(verts[0], verts[1], verts[2], verts[3]);
+            if (!quadKeys.add(qk)) {
+                return null;
+            }
         }
 
         // Commit staged vertices
@@ -134,9 +152,9 @@ final class PrimitiveData {
                 quantizeUV(u), quantizeUV(v),
                 quantizeUV(u1), quantizeUV(v1),
                 quantizeColor(r), quantizeColor(g), quantizeColor(b), quantizeColor(a));
-                
-        Integer existing = vertexLookup.get(key);
-        if (existing != null) {
+
+        int existing = vertexLookup.get(key);
+        if (existing != -1) {
             return existing;
         }
         int idx = vertexCount++;
@@ -160,6 +178,25 @@ final class PrimitiveData {
         int max = 0;
         for (int value : indices.toArray()) max = Math.max(max, value);
         return max;
+    }
+
+    /**
+     * Release internal data structures to help GC.
+     * Call this after the data has been merged/written and is no longer needed.
+     */
+    void releaseMemory() {
+        positions.clear();
+        uv0.clear();
+        uv1.clear();
+        colors.clear();
+        indices.clear();
+        vertexLookup.clear();
+        if (quadKeys != null) {
+            quadKeys.clear();
+        }
+        spriteRanges.clear();
+        vertexCount = 0;
+        doubleSided = false;
     }
 
     private int quantize(float v) { return Math.round(v * 10000f); }

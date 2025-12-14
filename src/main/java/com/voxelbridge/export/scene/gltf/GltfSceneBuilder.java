@@ -78,7 +78,8 @@ public final class GltfSceneBuilder implements SceneSink {
 
         String primitiveKey = resolvePrimitiveKey(materialGroupKey, spriteKey, overlaySpriteKey);
         Map<String, PrimitiveData> map = threadLocalBuffer.get();
-        PrimitiveData data = map.computeIfAbsent(primitiveKey, k -> new PrimitiveData(materialGroupKey));
+        // Pre-allocate capacity for ~512 quads per primitive to reduce reallocation overhead
+        PrimitiveData data = map.computeIfAbsent(primitiveKey, k -> new PrimitiveData(materialGroupKey, 512));
         int[] verts = data.registerQuad(spriteKey, overlaySpriteKey, positions, uv0, normalizedUv1, colors);
         if (verts != null) {
             data.doubleSided |= doubleSided;
@@ -115,7 +116,16 @@ public final class GltfSceneBuilder implements SceneSink {
         synchronized (allBuffers) {
             for (Map<String, PrimitiveData> buffer : allBuffers) {
                 for (Map.Entry<String, PrimitiveData> entry : buffer.entrySet()) {
-                    primitiveMap.merge(entry.getKey(), entry.getValue(), this::mergePrimitiveData);
+                    PrimitiveData source = entry.getValue();
+                    PrimitiveData existing = primitiveMap.get(entry.getKey());
+                    if (existing == null) {
+                        // First occurrence: keep the instance so data remains intact for encoding
+                        primitiveMap.put(entry.getKey(), source);
+                    } else {
+                        primitiveMap.put(entry.getKey(), mergePrimitiveData(existing, source));
+                        // OPTIMIZATION: Only release the temporary source instance when it's not retained
+                        source.releaseMemory();
+                    }
                 }
                 buffer.clear();
             }
@@ -262,7 +272,8 @@ public final class GltfSceneBuilder implements SceneSink {
         long totalColorBytes = 0;
         long totalIndexBytes = 0;
         int processedCount = 0;
-        for (Future<EncodedPrimitive> f : futures) {
+        for (int idx = 0; idx < futures.size(); idx++) {
+            Future<EncodedPrimitive> f = futures.get(idx);
             EncodedPrimitive ep;
             try {
                 ep = f.get();
@@ -272,6 +283,14 @@ public final class GltfSceneBuilder implements SceneSink {
             } catch (ExecutionException e) {
                 throw new IOException("Failed to encode primitive", e.getCause());
             }
+
+            // OPTIMIZATION: Release source PrimitiveData immediately after encoding is complete
+            String primitiveKey = allKeys.get(idx);
+            PrimitiveData sourceData = primitiveMap.get(primitiveKey);
+            if (sourceData != null) {
+                sourceData.releaseMemory();
+            }
+
             if (ep == null || ep.vertexCount() == 0 || ep.spriteRanges().isEmpty()) continue;
 
             int posOffset = chunk.writeFloatArray(ep.positions(), ep.positionsLength());
@@ -539,6 +558,8 @@ public final class GltfSceneBuilder implements SceneSink {
         int[] indices = data.indices.getArrayDirect();
         int indicesLength = data.indices.size();
         List<PrimitiveData.SpriteRange> ranges = new ArrayList<>(data.spriteRanges);
+        int vertexCount = data.vertexCount;
+        boolean doubleSided = data.doubleSided;
 
         if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
             for (PrimitiveData.SpriteRange range : ranges) {
@@ -565,7 +586,6 @@ public final class GltfSceneBuilder implements SceneSink {
         boolean hasCols = colorsLength > 0;
         float[] posMin = data.positionMin();
         float[] posMax = data.positionMax();
-        boolean doubleSided = data.doubleSided;
 
         clearPrimitiveData(data);
 
@@ -582,7 +602,7 @@ public final class GltfSceneBuilder implements SceneSink {
             colorsLength,
             indices,
             indicesLength,
-            data.vertexCount,
+            vertexCount,
             doubleSided,
             posMin,
             posMax,
@@ -632,14 +652,9 @@ public final class GltfSceneBuilder implements SceneSink {
      * Designed to be compatible with future streaming architectures.
      */
     private void clearPrimitiveData(PrimitiveData data) {
-        data.positions.clear();
-        data.uv0.clear();
-        data.uv1.clear();
-        data.colors.clear();
-        data.indices.clear();
-        data.vertexLookup.clear();  // Releases the large HashMap
-        data.quadKeys.clear();
-        data.spriteRanges.clear();
+        if (data == null) return;
+        // Use PrimitiveData's own release method so null-safe fields stay consistent
+        data.releaseMemory();
     }
 
 }

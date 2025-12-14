@@ -113,6 +113,10 @@ public final class GltfExportService {
         StreamingRegionSampler.sampleRegion(level, pos1, pos2, sceneSink, ctx);
         TimeLogger.logDuration("block_sampling", TimeLogger.elapsedSince(tSampling));
 
+        // OPTIMIZATION: Suggest GC between sampling and atlas generation to reduce peak memory
+        System.gc();
+        try { Thread.sleep(100); } catch (InterruptedException e) { /* ignore */ }
+
         // Write glTF output
         SceneWriteRequest request = new SceneWriteRequest(baseName, gltfDir);
         // Generate atlases if needed (place under gltf dir)
@@ -127,6 +131,11 @@ public final class GltfExportService {
             com.voxelbridge.export.texture.BlockEntityTextureManager.exportTextures(ctx, gltfDir);
             TimeLogger.logDuration("blockentity_texture_export", TimeLogger.elapsedSince(tBerExport));
         }
+
+        // OPTIMIZATION: Suggest GC between texture generation and geometry write
+        System.gc();
+        try { Thread.sleep(100); } catch (InterruptedException e) { /* ignore */ }
+
         // Offload write to background thread to avoid blocking game/render thread
         WRITE_EXECUTOR.submit(() -> {
             try {
