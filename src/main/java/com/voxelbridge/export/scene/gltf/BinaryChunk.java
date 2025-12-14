@@ -1,5 +1,6 @@
 package com.voxelbridge.export.scene.gltf;
 
+import com.voxelbridge.util.TimeLogger;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -19,6 +20,7 @@ final class BinaryChunk {
     private final FileChannel channel;
     private final ByteBuffer scratch;
     private long size = 0;
+    private long flushCount = 0;
 
     BinaryChunk(Path path) throws IOException {
         this.channel = FileChannel.open(path,
@@ -69,6 +71,8 @@ final class BinaryChunk {
     void close() throws IOException {
         flushBuffer();
         channel.close();
+        TimeLogger.logStat("binary_flush_count", flushCount);
+        TimeLogger.logSize("binary_buffer_size", DEFAULT_BUFFER_SIZE);
     }
 
     private int align(int alignment) throws IOException {
@@ -111,5 +115,6 @@ final class BinaryChunk {
             channel.write(scratch);
         }
         scratch.clear();
+        flushCount++;
     }
 }

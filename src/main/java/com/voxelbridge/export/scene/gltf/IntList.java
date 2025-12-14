@@ -6,8 +6,18 @@ import java.util.Arrays;
  * Minimal growable int array used during mesh accumulation.
  */
 final class IntList {
-    private int[] data = new int[256];
+    private static final int DEFAULT_CAPACITY = 256;
+    private int[] data;
     private int size = 0;
+
+    IntList() {
+        this(DEFAULT_CAPACITY);
+    }
+
+    IntList(int initialCapacity) {
+        int capacity = initialCapacity > 0 ? initialCapacity : DEFAULT_CAPACITY;
+        this.data = new int[capacity];
+    }
 
     void add(int value) {
         ensure(size + 1);

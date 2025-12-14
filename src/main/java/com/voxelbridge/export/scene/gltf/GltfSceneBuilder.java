@@ -17,7 +17,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,23 +32,20 @@ public final class GltfSceneBuilder implements SceneSink {
     private final Path texturesDir;
     private final TextureRegistry textureRegistry;
     
-    // Thread-local buffers to avoid global locks during sampling
-    private final List<List<GltfQuadRecord>> allBuffers = Collections.synchronizedList(new ArrayList<>());
-    private final ThreadLocal<List<GltfQuadRecord>> threadLocalBuffer = ThreadLocal.withInitial(() -> {
-        List<GltfQuadRecord> list = new ArrayList<>();
-        allBuffers.add(list);
-        return list;
+    // Thread-local primitive aggregation to avoid large intermediate buffers
+    private final List<Map<String, PrimitiveData>> allBuffers = Collections.synchronizedList(new ArrayList<>());
+    private final ThreadLocal<Map<String, PrimitiveData>> threadLocalBuffer = ThreadLocal.withInitial(() -> {
+        Map<String, PrimitiveData> map = new LinkedHashMap<>();
+        allBuffers.add(map);
+        return map;
     });
+    private final AtomicLong quadCounter = new AtomicLong(0);
 
     public GltfSceneBuilder(ExportContext ctx, Path outDir) {
         this.ctx = ctx;
         this.texturesDir = outDir.resolve("textures");
         this.textureRegistry = new TextureRegistry(ctx, outDir);
     }
-
-    private record GltfQuadRecord(String materialGroupKey, String spriteKey, String overlaySpriteKey,
-                                 float[] positions, float[] uv0, float[] uv1,
-                                 float[] normal, float[] colors, boolean doubleSided) {}
 
     @Override
     public void addQuad(String materialGroupKey,
@@ -68,21 +65,40 @@ public final class GltfSceneBuilder implements SceneSink {
             TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
         }
 
-        // 标准化null uv1为空数组，保持存储一致性
-        float[] normalizedUv1 = (uv1 != null) ? uv1 : new float[8];
-        threadLocalBuffer.get().add(new GltfQuadRecord(materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, normalizedUv1, normal, colors, doubleSided));
+        // Register overlay sprite if present
+        if (overlaySpriteKey != null && !"overlay".equals(overlaySpriteKey)) {
+            TextureAtlasManager.registerTint(ctx, overlaySpriteKey, 0xFFFFFF);
+        }
+
+        // Normalize UV1: overlay uses UV1 channel (colormap), otherwise UV1 is zeroed
+        float[] normalizedUv1 = uv1;
+        if (!"overlay".equals(overlaySpriteKey)) {
+            normalizedUv1 = new float[uv0.length];
+        }
+
+        String primitiveKey = resolvePrimitiveKey(materialGroupKey, spriteKey, overlaySpriteKey);
+        Map<String, PrimitiveData> map = threadLocalBuffer.get();
+        PrimitiveData data = map.computeIfAbsent(primitiveKey, k -> new PrimitiveData(materialGroupKey));
+        int[] verts = data.registerQuad(spriteKey, overlaySpriteKey, positions, uv0, normalizedUv1, colors);
+        if (verts != null) {
+            data.doubleSided |= doubleSided;
+            data.addTriangle(verts[0], verts[1], verts[2]);
+            data.addTriangle(verts[0], verts[2], verts[3]);
+        }
+        quadCounter.incrementAndGet();
     }
 
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
         TimeLogger.logMemory("before_quad_processing");
+        long tBuildPrimitive = TimeLogger.now();
 
         // OPTIMIZATION: Build primitiveMap directly from thread-local buffers
         // instead of merging all quads first (saves 2-3GB memory spike)
         Map<String, PrimitiveData> primitiveMap = buildPrimitiveMapStreaming();
-
+        TimeLogger.logDuration("quad_to_primitive_build", TimeLogger.elapsedSince(tBuildPrimitive));
         TimeLogger.logMemory("after_quad_processing");
-
+        TimeLogger.logStat("primitive_count", primitiveMap.size());
         try {
             return writeInternal(request, primitiveMap);
         } finally {
@@ -96,75 +112,77 @@ public final class GltfSceneBuilder implements SceneSink {
      */
     private Map<String, PrimitiveData> buildPrimitiveMapStreaming() {
         Map<String, PrimitiveData> primitiveMap = new LinkedHashMap<>();
-
         synchronized (allBuffers) {
-            int totalBuffers = allBuffers.size();
-            int processedBuffers = 0;
-
-            for (List<GltfQuadRecord> buffer : allBuffers) {
-                // Process quads from this buffer
-                for (GltfQuadRecord q : buffer) {
-                    String spriteKey = q.spriteKey;
-                    boolean animated = ExportRuntimeConfig.isAnimationEnabled() &&
-                            (ctx.getTextureRepository().hasAnimation(spriteKey) ||
-                             (q.overlaySpriteKey != null && ctx.getTextureRepository().hasAnimation(q.overlaySpriteKey)));
-
-                    String primitiveKey = q.materialGroupKey;
-                    if (animated) {
-                        primitiveKey = safe(q.materialGroupKey);
-                        if ("overlay".equals(q.overlaySpriteKey)) {
-                            primitiveKey = primitiveKey + "_overlay";
-                        }
-                        primitiveKey = primitiveKey + "_animated";
-                    } else {
-                        if ("overlay".equals(q.overlaySpriteKey)) {
-                            primitiveKey = q.materialGroupKey + "_overlay";
-                        }
-                    }
-
-                    if (animated) {
-                        String animatedSpriteKey = spriteKey;
-                        if (q.overlaySpriteKey != null && ctx.getTextureRepository().hasAnimation(q.overlaySpriteKey)) {
-                            animatedSpriteKey = q.overlaySpriteKey;
-                        }
-                        primitiveKey = safe(animatedSpriteKey);
-                        if ("overlay".equals(q.overlaySpriteKey)) {
-                            primitiveKey = primitiveKey + "_overlay";
-                        }
-                        primitiveKey = primitiveKey + "_animated";
-                    }
-
-                    PrimitiveData data = primitiveMap.computeIfAbsent(primitiveKey, k -> new PrimitiveData(q.materialGroupKey));
-                    String overlaySpriteKey = q.overlaySpriteKey;
-                    int[] verts = data.registerQuad(spriteKey, overlaySpriteKey, q.positions, q.uv0, q.uv1, q.colors);
-                    if (verts != null) {
-                        data.doubleSided |= q.doubleSided;
-                        data.addTriangle(verts[0], verts[1], verts[2]);
-                        data.addTriangle(verts[0], verts[2], verts[3]);
-                    }
+            for (Map<String, PrimitiveData> buffer : allBuffers) {
+                for (Map.Entry<String, PrimitiveData> entry : buffer.entrySet()) {
+                    primitiveMap.merge(entry.getKey(), entry.getValue(), this::mergePrimitiveData);
                 }
-
-                // Clear buffer immediately to free memory
                 buffer.clear();
-                processedBuffers++;
-
-                if (processedBuffers % 20 == 0) {
-                    TimeLogger.logMemory("quad_buffer_" + processedBuffers);
-                }
             }
         }
+        TimeLogger.logStat("quad_count", quadCounter.get());
 
         return primitiveMap;
     }
 
-    private List<GltfQuadRecord> collectAllQuads() {
-        List<GltfQuadRecord> merged = new ArrayList<>();
-        synchronized (allBuffers) {
-            for (List<GltfQuadRecord> list : allBuffers) {
-                merged.addAll(list);
-            }
+    private PrimitiveData mergePrimitiveData(PrimitiveData target, PrimitiveData source) {
+        int baseVertex = target.vertexCount;
+        // positions (vec3)
+        float[] srcPos = source.positions.toArray();
+        for (float v : srcPos) target.positions.add(v);
+        // uv0
+        float[] srcUv0 = source.uv0.toArray();
+        for (float v : srcUv0) target.uv0.add(v);
+        // uv1
+        float[] srcUv1 = source.uv1.toArray();
+        for (float v : srcUv1) target.uv1.add(v);
+        // colors
+        float[] srcCol = source.colors.toArray();
+        for (float v : srcCol) target.colors.add(v);
+        // indices with offset
+        int[] srcIdx = source.indices.toArray();
+        for (int idx : srcIdx) target.indices.add(idx + baseVertex);
+        // sprite ranges
+        for (PrimitiveData.SpriteRange range : source.spriteRanges) {
+            target.spriteRanges.add(new PrimitiveData.SpriteRange(
+                range.startVertexIndex() + baseVertex,
+                range.count(),
+                range.spriteKey(),
+                range.overlaySpriteKey()
+            ));
         }
-        return merged;
+        target.vertexCount += source.vertexCount;
+        target.doubleSided |= source.doubleSided;
+        return target;
+    }
+
+    private String resolvePrimitiveKey(String materialGroupKey, String spriteKey, String overlaySpriteKey) {
+        boolean animated = isAnimated(spriteKey, overlaySpriteKey);
+        if (animated) {
+            String animatedSpriteKey = spriteKey;
+            if (overlaySpriteKey != null && ctx.getTextureRepository().hasAnimation(overlaySpriteKey)) {
+                animatedSpriteKey = overlaySpriteKey;
+            }
+            String key = safe(animatedSpriteKey);
+            if ("overlay".equals(overlaySpriteKey)) {
+                key = key + "_overlay";
+            }
+            return key + "_animated";
+        }
+        if ("overlay".equals(overlaySpriteKey)) {
+            return materialGroupKey + "_overlay";
+        }
+        return materialGroupKey;
+    }
+
+    private boolean isAnimated(String spriteKey, String overlaySpriteKey) {
+        if (!ExportRuntimeConfig.isAnimationEnabled()) {
+            return false;
+        }
+        if (ctx.getTextureRepository().hasAnimation(spriteKey)) {
+            return true;
+        }
+        return overlaySpriteKey != null && ctx.getTextureRepository().hasAnimation(overlaySpriteKey);
     }
 
     private static String safe(String key) {
@@ -173,11 +191,12 @@ public final class GltfSceneBuilder implements SceneSink {
 
     private void clearBuffers() {
         synchronized (allBuffers) {
-            for (List<GltfQuadRecord> list : allBuffers) {
-                list.clear();
+            for (Map<String, PrimitiveData> map : allBuffers) {
+                map.clear();
             }
             allBuffers.clear();
         }
+        quadCounter.set(0);
         threadLocalBuffer.remove();
     }
 
@@ -223,7 +242,9 @@ public final class GltfSceneBuilder implements SceneSink {
 
         // 并行处理 raw -> 编码片段，按原顺序写入，减少主线程长时间阻塞
         List<String> allKeys = new ArrayList<>(primitiveMap.keySet());
-        ExecutorService exec = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
+        int poolSize = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        ExecutorService exec = Executors.newFixedThreadPool(poolSize);
+        TimeLogger.logStat("primitive_thread_pool_size", poolSize);
         List<Future<EncodedPrimitive>> futures = new ArrayList<>();
         for (int i = 0; i < allKeys.size(); i++) {
             final int order = i;
@@ -234,7 +255,12 @@ public final class GltfSceneBuilder implements SceneSink {
         exec.shutdown();
 
         TimeLogger.logMemory("before_primitive_processing");
-
+        long tEncodeAndWrite = TimeLogger.now();
+        long totalPosBytes = 0;
+        long totalUv0Bytes = 0;
+        long totalUv1Bytes = 0;
+        long totalColorBytes = 0;
+        long totalIndexBytes = 0;
         int processedCount = 0;
         for (Future<EncodedPrimitive> f : futures) {
             EncodedPrimitive ep;
@@ -246,42 +272,47 @@ public final class GltfSceneBuilder implements SceneSink {
             } catch (ExecutionException e) {
                 throw new IOException("Failed to encode primitive", e.getCause());
             }
-            if (ep == null || ep.vertexCount == 0 || ep.spriteRanges.isEmpty()) continue;
+            if (ep == null || ep.vertexCount() == 0 || ep.spriteRanges().isEmpty()) continue;
 
-            int posOffset = chunk.writeFloatArray(ep.positions, ep.positions.length);
-            int posView = addView(gltf, 0, posOffset, ep.positions.length * 4, 34962);
-            int posAcc = addAccessor(gltf, posView, ep.vertexCount, "VEC3", 5126, ep.positionMin, ep.positionMax);
+            int posOffset = chunk.writeFloatArray(ep.positions(), ep.positionsLength());
+            int posView = addView(gltf, 0, posOffset, ep.positionsLength() * 4, 34962);
+            int posAcc = addAccessor(gltf, posView, ep.vertexCount(), "VEC3", 5126, ep.positionMin(), ep.positionMax());
+            totalPosBytes += (long) ep.positionsLength() * 4;
 
             int texAcc = -1;
-            if (ep.uv0.length > 0) {
-                int off = chunk.writeFloatArray(ep.uv0, ep.uv0.length);
-                int view = addView(gltf, 0, off, ep.uv0.length * 4, 34962);
-                texAcc = addAccessor(gltf, view, ep.vertexCount, "VEC2", 5126, null, null);
+            if (ep.uv0Length() > 0) {
+                int off = chunk.writeFloatArray(ep.uv0(), ep.uv0Length());
+                int view = addView(gltf, 0, off, ep.uv0Length() * 4, 34962);
+                texAcc = addAccessor(gltf, view, ep.vertexCount(), "VEC2", 5126, null, null);
+                totalUv0Bytes += (long) ep.uv0Length() * 4;
             }
 
             int uv1Acc = -1;
-            if (ep.hasNonZeroUV1) {
-                int off = chunk.writeFloatArray(ep.uv1, ep.uv1.length);
-                int view = addView(gltf, 0, off, ep.uv1.length * 4, 34962);
-                uv1Acc = addAccessor(gltf, view, ep.vertexCount, "VEC2", 5126, null, null);
+            if (ep.hasNonZeroUV1() && ep.uv1Length() > 0) {
+                int off = chunk.writeFloatArray(ep.uv1(), ep.uv1Length());
+                int view = addView(gltf, 0, off, ep.uv1Length() * 4, 34962);
+                uv1Acc = addAccessor(gltf, view, ep.vertexCount(), "VEC2", 5126, null, null);
+                totalUv1Bytes += (long) ep.uv1Length() * 4;
             }
 
             int colorAcc = -1;
-            if (ep.hasColors) {
-                int off = chunk.writeFloatArray(ep.colors, ep.colors.length);
-                int view = addView(gltf, 0, off, ep.colors.length * 4, 34962);
-                colorAcc = addAccessor(gltf, view, ep.vertexCount, "VEC4", 5126, null, null);
+            if (ep.hasColors() && ep.colorsLength() > 0) {
+                int off = chunk.writeFloatArray(ep.colors(), ep.colorsLength());
+                int view = addView(gltf, 0, off, ep.colorsLength() * 4, 34962);
+                colorAcc = addAccessor(gltf, view, ep.vertexCount(), "VEC4", 5126, null, null);
+                totalColorBytes += (long) ep.colorsLength() * 4;
             }
 
-            int idxOffset = chunk.writeIntArray(ep.indices, ep.indices.length);
-            int idxView = addView(gltf, 0, idxOffset, ep.indices.length * 4, 34963);
-            int idxAcc = addAccessor(gltf, idxView, ep.indices.length, "SCALAR", 5125, null, null);
+            int idxOffset = chunk.writeIntArray(ep.indices(), ep.indicesLength());
+            int idxView = addView(gltf, 0, idxOffset, ep.indicesLength() * 4, 34963);
+            int idxAcc = addAccessor(gltf, idxView, ep.indicesLength(), "SCALAR", 5125, null, null);
+            totalIndexBytes += (long) ep.indicesLength() * 4;
 
-            String sampleSprite = ep.spriteRanges.get(0).spriteKey();
+            String sampleSprite = ep.spriteRanges().get(0).spriteKey();
             int textureIndex = textureRegistry.ensureSpriteTexture(sampleSprite, textures, images);
             
             Material material = new Material();
-            material.setName(ep.materialGroupKey);
+            material.setName(ep.materialGroupKey());
             MaterialPbrMetallicRoughness pbr = new MaterialPbrMetallicRoughness();
             TextureInfo texInfo = new TextureInfo();
             texInfo.setIndex(textureIndex);
@@ -289,7 +320,7 @@ public final class GltfSceneBuilder implements SceneSink {
             pbr.setMetallicFactor(0.0f);
             pbr.setRoughnessFactor(1.0f);
             material.setPbrMetallicRoughness(pbr);
-            material.setDoubleSided(ep.doubleSided);
+            material.setDoubleSided(ep.doubleSided());
 
             Map<String, Object> extras = new HashMap<>();
             if (!colorMapIndices.isEmpty()) {
@@ -313,18 +344,32 @@ public final class GltfSceneBuilder implements SceneSink {
             prim.setMode(4);
 
             Mesh mesh = new Mesh();
-            mesh.setName(ep.materialGroupKey);
+            mesh.setName(ep.materialGroupKey());
             mesh.setPrimitives(Collections.singletonList(prim));
             meshes.add(mesh);
 
             Node node = new Node();
-            node.setName(ep.materialGroupKey);
+            node.setName(ep.materialGroupKey());
             node.setMesh(meshes.size() - 1);
             nodes.add(node);
 
             processedCount++;
-            primitiveMap.remove(ep.materialGroupKey);
+            primitiveMap.remove(ep.materialGroupKey());
         }
+        long encodeAndWriteNanos = TimeLogger.elapsedSince(tEncodeAndWrite);
+        TimeLogger.logDuration("primitive_encode_and_write", encodeAndWriteNanos);
+        TimeLogger.logStat("encoded_primitive_count", processedCount);
+        TimeLogger.logSize("positions_bytes", totalPosBytes);
+        TimeLogger.logSize("uv0_bytes", totalUv0Bytes);
+        TimeLogger.logSize("uv1_bytes", totalUv1Bytes);
+        TimeLogger.logSize("color_bytes", totalColorBytes);
+        TimeLogger.logSize("index_bytes", totalIndexBytes);
+        long totalPayload = totalPosBytes + totalUv0Bytes + totalUv1Bytes + totalColorBytes + totalIndexBytes;
+        if (encodeAndWriteNanos > 0) {
+            double throughputMbPerSec = (totalPayload / 1024.0 / 1024.0) / (encodeAndWriteNanos / 1_000_000_000.0);
+            TimeLogger.logInfo(String.format("binary_write_throughput: %.2f MB/s", throughputMbPerSec));
+        }
+        TimeLogger.logSize("bin_size_bytes", chunk.size());
 
         TimeLogger.logMemory("after_primitive_processing");
         System.out.println("[VoxelBridge] Processed " + processedCount + " primitives");
@@ -336,6 +381,11 @@ public final class GltfSceneBuilder implements SceneSink {
         gltf.setMaterials(materials);
         gltf.setTextures(textures);
         gltf.setImages(images);
+        TimeLogger.logStat("mesh_count", meshes.size());
+        TimeLogger.logStat("node_count", nodes.size());
+        TimeLogger.logStat("material_count", materials.size());
+        TimeLogger.logStat("texture_count", textures.size());
+        TimeLogger.logStat("image_count", images.size());
 
         Scene scene = new Scene();
         List<Integer> nodeIndices = new ArrayList<>();
@@ -348,8 +398,10 @@ public final class GltfSceneBuilder implements SceneSink {
 
         GltfAsset assetModel = new GltfAssetV2(gltf, null);
         GltfAssetWriter writer = new GltfAssetWriter();
+        long tJsonWrite = TimeLogger.now();
         writer.writeJson(assetModel, request.outputDir().resolve(request.baseName() + ".gltf").toFile());
-        
+        TimeLogger.logDuration("gltf_json_write", TimeLogger.elapsedSince(tJsonWrite));
+
         return request.outputDir().resolve(request.baseName() + ".gltf");
         } finally {
             chunk.close();
@@ -367,10 +419,15 @@ public final class GltfSceneBuilder implements SceneSink {
             String materialGroupKey,
             List<PrimitiveData.SpriteRange> spriteRanges,
             float[] positions,
+            int positionsLength,
             float[] uv0,
+            int uv0Length,
             float[] uv1,
+            int uv1Length,
             float[] colors,
+            int colorsLength,
             int[] indices,
+            int indicesLength,
             int vertexCount,
             boolean doubleSided,
             float[] positionMin,
@@ -453,14 +510,34 @@ public final class GltfSceneBuilder implements SceneSink {
         if (data == null) return null;
         if (data.vertexCount == 0 || data.spriteRanges.isEmpty()) {
             clearPrimitiveData(data);
-            return new EncodedPrimitive(primitiveKey, List.of(), new float[0], new float[0], new float[0], new float[0], new int[0], 0, data.doubleSided, new float[]{0,0,0}, new float[]{0,0,0}, false, false, order);
+            return new EncodedPrimitive(
+                primitiveKey,
+                List.of(),
+                new float[0], 0,
+                new float[0], 0,
+                new float[0], 0,
+                new float[0], 0,
+                new int[0], 0,
+                0,
+                data.doubleSided,
+                new float[]{0,0,0},
+                new float[]{0,0,0},
+                false,
+                false,
+                order
+            );
         }
 
-        float[] positions = Arrays.copyOf(data.positions.getArrayDirect(), data.positions.size());
-        float[] uv0 = Arrays.copyOf(data.uv0.getArrayDirect(), data.uv0.size());
-        float[] uv1 = Arrays.copyOf(data.uv1.getArrayDirect(), data.uv1.size());
-        float[] colors = Arrays.copyOf(data.colors.getArrayDirect(), data.colors.size());
-        int[] indices = Arrays.copyOf(data.indices.getArrayDirect(), data.indices.size());
+        float[] positions = data.positions.getArrayDirect();
+        int positionsLength = data.positions.size();
+        float[] uv0 = data.uv0.getArrayDirect();
+        int uv0Length = data.uv0.size();
+        float[] uv1 = data.uv1.getArrayDirect();
+        int uv1Length = data.uv1.size();
+        float[] colors = data.colors.getArrayDirect();
+        int colorsLength = data.colors.size();
+        int[] indices = data.indices.getArrayDirect();
+        int indicesLength = data.indices.size();
         List<PrimitiveData.SpriteRange> ranges = new ArrayList<>(data.spriteRanges);
 
         if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
@@ -484,15 +561,35 @@ public final class GltfSceneBuilder implements SceneSink {
             }
         }
 
-        boolean hasUV1 = hasNonZeroUV1(uv1);
-        boolean hasCols = colors.length > 0;
+        boolean hasUV1 = hasNonZeroUV1(uv1, uv1Length);
+        boolean hasCols = colorsLength > 0;
         float[] posMin = data.positionMin();
         float[] posMax = data.positionMax();
         boolean doubleSided = data.doubleSided;
 
         clearPrimitiveData(data);
 
-        return new EncodedPrimitive(primitiveKey, ranges, positions, uv0, uv1, colors, indices, data.vertexCount, doubleSided, posMin, posMax, hasUV1, hasCols, order);
+        return new EncodedPrimitive(
+            primitiveKey,
+            ranges,
+            positions,
+            positionsLength,
+            uv0,
+            uv0Length,
+            uv1,
+            uv1Length,
+            colors,
+            colorsLength,
+            indices,
+            indicesLength,
+            data.vertexCount,
+            doubleSided,
+            posMin,
+            posMax,
+            hasUV1,
+            hasCols,
+            order
+        );
     }
     
     private List<Integer> registerColorMapTextures(Path outDir, List<Texture> textures, List<Image> images, int samplerIndex) throws IOException {
@@ -519,9 +616,9 @@ public final class GltfSceneBuilder implements SceneSink {
     /**
      * 检查UV1数据是否包含任何非零值。
      */
-    private boolean hasNonZeroUV1(float[] uvs) {
-        for (float v : uvs) {
-            if (Math.abs(v) > 1e-6f) return true;
+    private boolean hasNonZeroUV1(float[] uvs, int length) {
+        for (int i = 0; i < length; i++) {
+            if (Math.abs(uvs[i]) > 1e-6f) return true;
         }
         return false;
     }
@@ -529,23 +626,6 @@ public final class GltfSceneBuilder implements SceneSink {
     /**
      * 检查颜色数据是否包含任何非白色值。
      */
-    private boolean hasNonWhiteColors(PrimitiveData data) {
-        float[] cols = data.colors.toArray();
-        for (int i = 0; i < cols.length; i += 4) {
-            float r = cols[i];
-            float g = cols[i + 1];
-            float b = cols[i + 2];
-            float a = cols[i + 3];
-            if (Math.abs(r - 1.0f) > 1e-3f ||
-                Math.abs(g - 1.0f) > 1e-3f ||
-                Math.abs(b - 1.0f) > 1e-3f ||
-                Math.abs(a - 1.0f) > 1e-3f) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /**
      * Clears PrimitiveData to release memory after writing to glTF buffer.
      * This is safe because Atlas UV remapping is complete and data has been written.

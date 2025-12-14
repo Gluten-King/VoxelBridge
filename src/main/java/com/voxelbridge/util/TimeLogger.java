@@ -48,6 +48,31 @@ public final class TimeLogger {
     }
 
     /**
+     * Log a numeric stat (e.g., counts).
+     */
+    public static void logStat(String label, long value) {
+        if (!ENABLED) return;
+        logLine(String.format("%s: %d", label, value));
+    }
+
+    /**
+     * Log a size in bytes with a human-readable MB view.
+     */
+    public static void logSize(String label, long bytes) {
+        if (!ENABLED) return;
+        double mb = bytes / 1024.0 / 1024.0;
+        logLine(String.format("%s: %.2f MB (%,d bytes)", label, mb, bytes));
+    }
+
+    /**
+     * Log a free-form informational message.
+     */
+    public static void logInfo(String message) {
+        if (!ENABLED) return;
+        logLine(message);
+    }
+
+    /**
      * Log current memory usage statistics.
      * @param label Label for this memory snapshot (e.g., "before_atlas", "after_geometry")
      */

@@ -15,11 +15,11 @@ import java.util.Objects;
  */
 final class PrimitiveData {
     final String materialGroupKey;
-    final FloatList positions = new FloatList();
-    final FloatList uv0 = new FloatList();
-    final FloatList uv1 = new FloatList();
-    final FloatList colors = new FloatList();
-    final IntList indices = new IntList();
+    final FloatList positions;
+    final FloatList uv0;
+    final FloatList uv1;
+    final FloatList colors;
+    final IntList indices;
     
     // To properly merge vertices within the same material group, we need to distinguish
     // vertices coming from different sprites (as they will have different remapped UVs).
@@ -36,7 +36,18 @@ final class PrimitiveData {
     final List<SpriteRange> spriteRanges = new ArrayList<>();
 
     PrimitiveData(String materialGroupKey) {
+        this(materialGroupKey, 0);
+    }
+
+    PrimitiveData(String materialGroupKey, int estimatedQuads) {
         this.materialGroupKey = materialGroupKey;
+        int vertexCapacity = (estimatedQuads > 0) ? estimatedQuads * 4 : 256;
+        int indexCapacity = (estimatedQuads > 0) ? estimatedQuads * 6 : 256;
+        this.positions = new FloatList(vertexCapacity * 3);
+        this.uv0 = new FloatList(vertexCapacity * 2);
+        this.uv1 = new FloatList(vertexCapacity * 2);
+        this.colors = new FloatList(vertexCapacity * 4);
+        this.indices = new IntList(indexCapacity);
     }
 
     /**

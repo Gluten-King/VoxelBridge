@@ -6,8 +6,18 @@ import java.util.Arrays;
  * Minimal growable float array used during mesh accumulation.
  */
 final class FloatList {
-    private float[] data = new float[256];
+    private static final int DEFAULT_CAPACITY = 256;
+    private float[] data;
     private int size = 0;
+
+    FloatList() {
+        this(DEFAULT_CAPACITY);
+    }
+
+    FloatList(int initialCapacity) {
+        int capacity = initialCapacity > 0 ? initialCapacity : DEFAULT_CAPACITY;
+        this.data = new float[capacity];
+    }
 
     void add(float value) {
         ensure(size + 1);

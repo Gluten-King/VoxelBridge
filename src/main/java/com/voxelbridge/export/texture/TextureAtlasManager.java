@@ -260,7 +260,7 @@ public final class TextureAtlasManager {
     }
 
     private record AtlasRequest(String spriteKey, int tintIndex, BufferedImage image) {}
-    private record TintTask(String spriteKey, int tintIndex, int tint, BufferedImage baseImage) {}
+    private record TintTask(String spriteKey, int tintIndex, int tint) {}
 
     private static void generatePackedAtlas(ExportContext ctx,
                                             Path outDir,
@@ -293,23 +293,39 @@ public final class TextureAtlasManager {
 
             ExportLogger.log(String.format("[AtlasGen] Processing sprite: %s (tintSlots=%d)", spriteKey, tintSlots));
 
-            // [FIX] Use updated loadTextureForAtlas
-            BufferedImage base = loadTextureForAtlas(ctx, spriteKey);
-
-            if (base == null) {
-                ExportLogger.log(String.format("[AtlasGen][WARN] sprite=%s missing texture, using placeholder", spriteKey));
-                base = createMissingTexture();
-            }
-
             for (int i = 0; i < tintSlots; i++) {
-                tintTasks.add(new TintTask(spriteKey, i, tintBySlot[i], base));
+                tintTasks.add(new TintTask(spriteKey, i, tintBySlot[i]));
             }
         }
+
+        Set<String> uniqueSprites = tintTasks.stream()
+            .map(TintTask::spriteKey)
+            .collect(Collectors.toSet());
+
+        Map<String, BufferedImage> preloaded = uniqueSprites.parallelStream()
+            .collect(Collectors.toConcurrentMap(
+                key -> key,
+                key -> {
+                    BufferedImage base = loadTextureForAtlas(ctx, key);
+                    if (base == null) {
+                        ExportLogger.log(String.format("[AtlasGen][WARN] sprite=%s missing texture, using placeholder", key));
+                        base = createMissingTexture();
+                    }
+                    return base;
+                },
+                (a, b) -> a
+            ));
 
         // Parallel tinting to utilize multiple cores
         long tTint = TimeLogger.now();
         List<AtlasRequest> requests = tintTasks.parallelStream()
-            .map(task -> new AtlasRequest(task.spriteKey(), task.tintIndex(), tintTile(task.baseImage(), task.tint())))
+            .map(task -> {
+                BufferedImage base = preloaded.get(task.spriteKey());
+                if (base == null) {
+                    base = createMissingTexture();
+                }
+                return new AtlasRequest(task.spriteKey(), task.tintIndex(), tintTile(base, task.tint()));
+            })
             .collect(Collectors.toList());
         // Ensure deterministic order before packing
         requests.sort(Comparator
