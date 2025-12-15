@@ -14,8 +14,8 @@ import java.time.format.DateTimeFormatter;
  */
 public final class ExportLogger {
 
-    // Disabled to avoid generating large debug logs during exports
-    private static final boolean ENABLED = false;
+    // Enabled for debugging export issues
+    private static final boolean ENABLED = true;
 
     private static final DateTimeFormatter TIMESTAMP =
             DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS");
@@ -25,22 +25,35 @@ public final class ExportLogger {
 
     private ExportLogger() {}
 
-    public static synchronized void initialize(Path outDir) throws IOException {
+    public static synchronized void initialize(Path outDir) {
         writer = null;
         animationWriter = null;
         if (ENABLED) {
-            close();
-            Path logPath = outDir.resolve("voxelbridge-debug.log");
-            writer = Files.newBufferedWriter(logPath, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            try {
+                close();
+                // 确保目录存在
+                if (!Files.exists(outDir)) {
+                    Files.createDirectories(outDir);
+                }
 
-            // Create separate animation log
-            Path animLogPath = outDir.resolve("animation-detection.log");
-            animationWriter = Files.newBufferedWriter(animLogPath, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                Path logPath = outDir.resolve("voxelbridge-debug.log");
+                writer = Files.newBufferedWriter(logPath, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
 
-            log("Export log initialized");
-            logAnimation("Animation detection log initialized");
+                // Create separate animation log
+                Path animLogPath = outDir.resolve("animation-detection.log");
+                animationWriter = Files.newBufferedWriter(animLogPath, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+
+                log("Export log initialized at: " + logPath);
+                logAnimation("Animation detection log initialized at: " + animLogPath);
+            } catch (IOException e) {
+                System.err.println("[ExportLogger][ERROR] Failed to initialize log files: " + e.getMessage());
+                e.printStackTrace();
+                // 继续运行,但只输出到控制台
+            }
+        } else {
+            System.out.println("[ExportLogger] File logging is disabled, only console output will be available");
         }
     }
 

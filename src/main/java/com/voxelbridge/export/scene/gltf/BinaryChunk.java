@@ -1,6 +1,8 @@
 package com.voxelbridge.export.scene.gltf;
 
 import com.voxelbridge.util.TimeLogger;
+import java.io.Closeable;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -13,7 +15,7 @@ import java.nio.file.StandardOpenOption;
  * This implementation streams directly to disk to avoid holding the whole
  * binary chunk in heap memory.
  */
-final class BinaryChunk {
+final class BinaryChunk implements Closeable {
     // Larger direct buffer to reduce write syscalls during streaming writes
     private static final int DEFAULT_BUFFER_SIZE = 32 * 1024 * 1024;
 
@@ -71,6 +73,37 @@ final class BinaryChunk {
     }
 
     /**
+     * Stream floats from a DataInputStream directly into the chunk without holding the full array.
+     * @param in source stream (little-endian floats)
+     * @param floatCount number of floats to read
+     * @return byte offset in the chunk where data starts
+     */
+    int writeFloatStream(DataInputStream in, int floatCount) throws IOException {
+        int offset = align(4);
+        int written = 0;
+        float[] buf = new float[8192];
+        while (written < floatCount) {
+            int need = Math.min(floatCount - written, buf.length);
+            for (int i = 0; i < need; i++) {
+                buf[i] = in.readFloat();
+            }
+            int idx = 0;
+            while (idx < need) {
+                ensureCapacity(4);
+                int capacity = scratch.remaining() / 4;
+                int chunk = Math.min(capacity, need - idx);
+                for (int i = 0; i < chunk; i++) {
+                    scratch.putFloat(buf[idx + i]);
+                }
+                idx += chunk;
+                size += chunk * 4;
+            }
+            written += need;
+        }
+        return offset;
+    }
+
+    /**
      * OPTIMIZATION: Write int array with length limit (for direct array refs).
      * Uses bulk operations instead of per-element writes for better performance.
      * @param values The int array (may contain extra capacity)
@@ -97,7 +130,8 @@ final class BinaryChunk {
         return offset;
     }
 
-    void close() throws IOException {
+    @Override
+    public void close() throws IOException {
         flushBuffer();
         channel.close();
         TimeLogger.logStat("binary_flush_count", flushCount);

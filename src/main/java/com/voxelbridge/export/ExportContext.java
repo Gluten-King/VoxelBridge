@@ -3,6 +3,7 @@ package com.voxelbridge.export;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -13,6 +14,7 @@ import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -40,6 +42,7 @@ public final class ExportContext {
     private boolean blockEntityExportEnabled = true;
     private CoordinateMode coordinateMode = CoordinateMode.CENTERED;
     private boolean vanillaRandomTransformEnabled = true;
+    private boolean discoveryMode = false;
 
     public ExportContext(Minecraft mc) {
         this.mc = mc;
@@ -183,6 +186,14 @@ public final class ExportContext {
         this.vanillaRandomTransformEnabled = enabled;
     }
 
+    public boolean isDiscoveryMode() {
+        return discoveryMode;
+    }
+
+    public void setDiscoveryMode(boolean discoveryMode) {
+        this.discoveryMode = discoveryMode;
+    }
+
     private static String safe(String s) {
         return s.replace(':', '_').replace('/', '_').replace(' ', '_');
     }
@@ -230,4 +241,3 @@ public final class ExportContext {
         }
     }
 }
-

@@ -1,0 +1,657 @@
+package com.voxelbridge.export.scene.gltf;
+
+import com.voxelbridge.config.ExportRuntimeConfig;
+import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.ExportProgressTracker;
+import com.voxelbridge.export.scene.SceneSink;
+import com.voxelbridge.export.scene.SceneWriteRequest;
+import com.voxelbridge.export.texture.ColorMapManager;
+import com.voxelbridge.export.texture.TextureAtlasManager;
+import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.ProgressNotifier;
+import com.voxelbridge.util.TimeLogger;
+import de.javagl.jgltf.impl.v2.*;
+import de.javagl.jgltf.model.io.GltfAsset;
+import de.javagl.jgltf.model.io.GltfAssetWriter;
+import de.javagl.jgltf.model.io.v2.GltfAssetV2;
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * 流式几何处理管道（重构版）
+ * 1. 接收 Quad -> 流式写入 geometry.bin + uvraw.bin
+ * 2. 采样结束 -> 生成图集 (Atlas)
+ * 3. UV重映射 -> uvraw.bin -> finaluv.bin
+ * 4. 流式组装glTF -> 从 geometry.bin + finaluv.bin 直接构建
+ */
+public final class GltfSceneBuilder implements SceneSink {
+    private final ExportContext ctx;
+    private final Path outputDir;
+    private final TextureRegistry textureRegistry;
+
+    // 流式写入器
+    private final StreamingGeometryWriter streamingWriter;
+    private final SpriteIndex spriteIndex;
+    private final GeometryIndex geometryIndex;
+
+    // 线程通信
+    private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, null, null, null, null, null, false);
+    private final BlockingQueue<QuadBatch> queue = new ArrayBlockingQueue<>(16384);
+    private final AtomicBoolean writerStarted = new AtomicBoolean(false);
+    private Thread writerThread;
+
+    // 临时四边形数据结构（写入队列）
+    private record QuadBatch(
+        String materialGroupKey,
+        String spriteKey,
+        String overlaySpriteKey,
+        float[] positions,
+        float[] uv0,
+        float[] uv1,
+        float[] colors,
+        boolean doubleSided
+    ) {}
+
+    public GltfSceneBuilder(ExportContext ctx, Path outDir) throws IOException {
+        this.ctx = ctx;
+        this.texturesDir = outDir.resolve("textures");
+        this.tempDir = outDir.resolve("temp_geometry");
+        this.textureRegistry = new TextureRegistry(ctx, outDir);
+        Files.createDirectories(this.tempDir);
+    }
+
+    @Override
+    public void addQuad(String materialGroupKey,
+                        String spriteKey,
+                        String overlaySpriteKey,
+                        float[] positions,
+                        float[] uv0,
+                        float[] uv1,
+                        float[] normal,
+                        float[] colors,
+                        boolean doubleSided) {
+        if (materialGroupKey == null || spriteKey == null) return;
+
+        // 提前启动写线程，避免采样阶段队列打满阻塞
+        startWriterThread();
+
+        // 仅在主线程或采样线程做最轻量的封装，放入队列
+        try {
+            queue.put(new QuadBatch(
+                materialGroupKey, spriteKey, overlaySpriteKey,
+                positions, uv0, uv1, colors, doubleSided
+            ));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Override
+    public Path write(SceneWriteRequest request) throws IOException {
+        // 1. 启动消费者线程（如果尚未启动），将队列数据落盘
+        startWriterThread();
+
+        // 2. 发送结束信号并等待队列排空（采样完成）
+        try {
+            queue.put(POISON_PILL);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while signaling writer thread", e);
+        }
+        try {
+            if (writerThread != null) {
+                writerThread.join();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Export interrupted during temp write phase", e);
+        }
+
+        ExportLogger.log("[GltfBuilder] Temp write phase complete. Total quads: " + quadCounter.get());
+        ExportLogger.log("[GltfBuilder] Material groups: " + tempStorages.size());
+        ExportLogger.log("[GltfBuilder] Unique sprites: " + spriteRegistry.size());
+
+        // 3. 生成图集 (Atlas)
+        // 此时我们已经通过 SpriteKeyRegistry 收集了所有用到的 Sprite
+        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
+            // 确保这些 sprite 进入了 atlasBook
+            for (String key : spriteRegistry.getAllKeys()) {
+                TextureAtlasManager.registerTint(ctx, key, 0xFFFFFF);
+            }
+        }
+        TextureAtlasManager.generateAllAtlases(ctx, request.outputDir());
+        ColorMapManager.generateColorMaps(ctx, request.outputDir());
+
+        // 4. 回读临时文件，重映射 UV，生成最终 glTF
+        return finalizeAndWrite(request);
+    }
+
+    private void startWriterThread() {
+        if (writerStarted.getAndSet(true)) return;
+
+        writerThread = new Thread(() -> {
+            try {
+                while (true) {
+                    QuadBatch batch = queue.take();
+                    if (batch == POISON_PILL) break;
+                    processBatchToTemp(batch);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                ExportLogger.log("[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
+                e.printStackTrace();
+            } finally {
+                // 关闭所有临时文件的句柄
+                for (TempStorage storage : tempStorages.values()) {
+                    try { storage.close(); } catch (IOException e) { e.printStackTrace(); }
+                }
+            }
+        }, "VoxelBridge-TempWriter");
+        writerThread.start();
+    }
+
+    private void processBatchToTemp(QuadBatch batch) throws IOException {
+        // 1. 获取/注册 Sprite ID (String -> int 映射，减少IO量)
+        int spriteId = spriteRegistry.getId(batch.spriteKey);
+        int overlaySpriteId = batch.overlaySpriteKey != null ? spriteRegistry.getId(batch.overlaySpriteKey) : -1;
+
+        // 2. 获取 Material 对应的临时存储
+        TempStorage storage = tempStorages.computeIfAbsent(batch.materialGroupKey, k -> {
+            try {
+                return new TempStorage(tempDir.resolve("mat_" + safe(k) + ".dat"));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+
+        // 3. 写入二进制数据
+        storage.writeQuad(batch, spriteId, overlaySpriteId);
+        quadCounter.incrementAndGet();
+    }
+
+    private Path finalizeAndWrite(SceneWriteRequest request) throws IOException {
+        ExportLogger.log("[GltfBuilder] Starting finalize phase (read temp -> remap -> write glTF)...");
+        TimeLogger.logMemory("before_finalize");
+
+        GlTF gltf = new GlTF();
+        Asset asset = new Asset();
+        asset.setVersion("2.0");
+        asset.setGenerator("VoxelBridge");
+        gltf.setAsset(asset);
+
+        Path binPath = request.outputDir().resolve(request.baseName() + ".bin");
+        Path uvBinPath = request.outputDir().resolve(request.baseName() + ".uv.bin");
+        
+        // Setup Buffers
+        Buffer buffer = new Buffer();
+        buffer.setUri(binPath.getFileName().toString());
+        Buffer uvBuffer = new Buffer();
+        uvBuffer.setUri(uvBinPath.getFileName().toString());
+        gltf.addBuffers(buffer);
+        gltf.addBuffers(uvBuffer);
+
+        // Setup Samplers/Materials containers
+        List<Material> materials = new ArrayList<>();
+        List<Mesh> meshes = new ArrayList<>();
+        List<Node> nodes = new ArrayList<>();
+        List<Texture> textures = new ArrayList<>();
+        List<Image> images = new ArrayList<>();
+        List<Sampler> samplers = new ArrayList<>();
+
+        Sampler sampler = new Sampler();
+        sampler.setMagFilter(9728); // NEAREST
+        sampler.setMinFilter(9728); // NEAREST
+        sampler.setWrapS(10497);
+        sampler.setWrapT(10497);
+        samplers.add(sampler);
+        gltf.setSamplers(samplers);
+
+        // Register Colormap Textures
+        List<Integer> colorMapIndices = registerColorMapTextures(request.outputDir(), textures, images, 0);
+
+        try (BinaryChunk chunk = new BinaryChunk(binPath);
+             BinaryChunk uvChunk = new BinaryChunk(uvBinPath)) {
+
+            // 对 Material 排序以保证确定性
+            List<String> sortedMaterials = new ArrayList<>(tempStorages.keySet());
+            Collections.sort(sortedMaterials);
+            int totalMaterials = sortedMaterials.size();
+            long lastNotify = System.nanoTime();
+            long lastHeartbeat = System.nanoTime();
+
+            for (String matKey : sortedMaterials) {
+                TempStorage storage = tempStorages.get(matKey);
+                
+                // 1. 创建瞬态 PrimitiveData 用于去重
+                PrimitiveData primitiveData = new PrimitiveData(matKey, storage.quadCount);
+                
+                // 2. 回读临时文件，进行 UV 重映射和去重
+                try (DataInputStream in = new DataInputStream(new BufferedInputStream(new FileInputStream(storage.path.toFile()), 65536))) {
+                    for (int i = 0; i < storage.quadCount; i++) {
+                        readAndRegisterQuad(in, primitiveData);
+                    }
+                }
+                
+                // 3. 编码并写入最终 BIN
+                writePrimitiveToGltf(matKey, primitiveData, gltf, chunk, uvChunk, materials, meshes, nodes, textures, images, colorMapIndices);
+                
+                // 4. 立即释放内存
+                primitiveData.releaseMemory();
+                
+                // 5. 删除临时文件
+                Files.deleteIfExists(storage.path);
+
+                // 6. 阶段进度通知（控制频率避免刷屏）
+                if (totalMaterials > 0) {
+                    double elapsedMs = (System.nanoTime() - lastNotify) / 1_000_000.0;
+                    boolean isLast = materials.size() == totalMaterials;
+                    if (elapsedMs > 100 || isLast) {
+                        ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE,
+                            String.format("写入glTF: %d/%d", materials.size(), totalMaterials));
+                        ProgressNotifier.showDetailed(ctx.getMc(), ExportProgressTracker.progress());
+                        lastNotify = System.nanoTime();
+                    }
+                }
+
+                // 7. 心跳：即使单个材质很大，也定期提示活跃状态
+                double heartbeatMs = (System.nanoTime() - lastHeartbeat) / 1_000_000.0;
+                if (heartbeatMs > 2000) {
+                    ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE,
+                        String.format("写入中[%d/%d]...", materials.size(), totalMaterials));
+                    ProgressNotifier.showDetailed(ctx.getMc(), ExportProgressTracker.progress());
+                    lastHeartbeat = System.nanoTime();
+                }
+            }
+
+            // Finalize glTF Object
+            Scene scene = new Scene();
+            List<Integer> nodeIndices = new ArrayList<>();
+            for (int i = 0; i < nodes.size(); i++) nodeIndices.add(i);
+            scene.setNodes(nodeIndices);
+            gltf.addScenes(scene);
+            gltf.setScene(0);
+            
+            gltf.setMeshes(meshes);
+            gltf.setMaterials(materials);
+            gltf.setNodes(nodes);
+            gltf.setTextures(textures);
+            gltf.setImages(images);
+
+            buffer.setByteLength(Math.toIntExact(chunk.size()));
+            uvBuffer.setByteLength(Math.toIntExact(uvChunk.size()));
+            
+            GltfAsset assetModel = new GltfAssetV2(gltf, null);
+            GltfAssetWriter writer = new GltfAssetWriter();
+            writer.writeJson(assetModel, request.outputDir().resolve(request.baseName() + ".gltf").toFile());
+        }
+
+        // Cleanup temp dir
+        try {
+            Files.deleteIfExists(tempDir);
+        } catch (IOException ignored) {}
+
+        return request.outputDir().resolve(request.baseName() + ".gltf");
+    }
+
+    // 从临时流中读取四边形，计算重映射 UV，注册到 PrimitiveData
+    private void readAndRegisterQuad(DataInputStream in, PrimitiveData data) throws IOException {
+        // Read raw data matching writeQuad layout
+        int spriteId = in.readInt();
+        int overlaySpriteId = in.readInt();
+        boolean doubleSided = in.readBoolean();
+
+        float[] pos = new float[12];
+        for(int k=0; k<12; k++) pos[k] = in.readFloat();
+
+        float[] uv0 = new float[8];
+        for(int k=0; k<8; k++) uv0[k] = in.readFloat();
+
+        float[] uv1 = new float[8];
+        for(int k=0; k<8; k++) uv1[k] = in.readFloat();
+
+        float[] color = new float[16];
+        for(int k=0; k<16; k++) color[k] = in.readFloat();
+
+        String spriteKey = spriteRegistry.getKey(spriteId);
+        String overlayKey = (overlaySpriteId != -1) ? spriteRegistry.getKey(overlaySpriteId) : null;
+
+        data.doubleSided |= doubleSided;
+
+        // === UV REMAPPING LOGIC ===
+        boolean atlasEnabled = ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS;
+        if (atlasEnabled) {
+            // Remap Base UV only if atlas has placement and sprite is static
+            if (!isAnimated(spriteKey) && hasAtlasPlacement(spriteKey)) {
+                for (int v = 0; v < 4; v++) {
+                    float[] remapped = remapUV(spriteKey, uv0[v * 2], uv0[v * 2 + 1]);
+                    uv0[v * 2] = remapped[0];
+                    uv0[v * 2 + 1] = remapped[1];
+                }
+            }
+            // Remap Overlay UV
+            if (overlayKey != null && !isAnimated(overlayKey) && hasAtlasPlacement(overlayKey)) {
+                // Check if UV1 is actually used (non-zero)
+                boolean hasUV1 = false;
+                for(float f : uv1) if(f != 0) { hasUV1 = true; break; }
+
+                if (hasUV1) {
+                    for (int v = 0; v < 4; v++) {
+                        float[] remapped = remapUV(overlayKey, uv1[v * 2], uv1[v * 2 + 1]);
+                        uv1[v * 2] = remapped[0];
+                        uv1[v * 2 + 1] = remapped[1];
+                    }
+                }
+            }
+        }
+
+        // Register to PrimitiveData (performs vertex deduplication) and append indices
+        int[] verts = data.registerQuad(spriteKey, overlayKey, pos, uv0, uv1, color);
+        if (verts != null) {
+            data.addTriangle(verts[0], verts[1], verts[2]);
+            data.addTriangle(verts[0], verts[2], verts[3]);
+        }
+    }
+
+    // ---- 辅助方法和内部类 ----
+
+    private void writePrimitiveToGltf(String matKey, PrimitiveData data, GlTF gltf, 
+                                     BinaryChunk chunk, BinaryChunk uvChunk,
+                                     List<Material> materials, List<Mesh> meshes, List<Node> nodes,
+                                     List<Texture> textures, List<Image> images, List<Integer> colorMapIndices) throws IOException {
+        
+        if (data.vertexCount == 0 || data.indices.size() == 0) return;
+
+        // 1. Prepare data arrays
+        float[] positions = data.positions.getArrayDirect();
+        int vertexCount = data.vertexCount;
+        
+        // 2. Write Buffers & Create Accessors
+        int posOffset = chunk.writeFloatArray(positions, vertexCount * 3);
+        int posView = addView(gltf, 0, posOffset, vertexCount * 3 * 4, 34962);
+        int posAcc = addAccessor(gltf, posView, vertexCount, "VEC3", 5126, data.positionMin(), data.positionMax());
+
+        UvAccessorResult uvAcc = writeUvThroughRawTemp(matKey, data, gltf, uvChunk, vertexCount);
+        int texAcc = uvAcc.uv0Acc();
+        int uv1Acc = uvAcc.uv1Acc();
+
+        int colorAcc = -1;
+        float[] colArr = data.colors.getArrayDirect();
+        // Check if colors are used (not all white)
+        boolean hasColors = false;
+        // In VertexColor mode we always write colors. In ColorMap mode we check.
+        if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
+            hasColors = true;
+        } else {
+             for(int i=0; i<vertexCount*4; i++) if(colArr[i] < 0.99f) { hasColors = true; break; }
+        }
+
+        if (hasColors) {
+            int off = chunk.writeFloatArray(colArr, vertexCount * 4);
+            int view = addView(gltf, 0, off, vertexCount * 4 * 4, 34962);
+            colorAcc = addAccessor(gltf, view, vertexCount, "VEC4", 5126, null, null);
+        }
+
+        int[] indices = data.indices.getArrayDirect();
+        int indicesCount = data.indices.size();
+        int idxOffset = chunk.writeIntArray(indices, indicesCount);
+        int idxView = addView(gltf, 0, idxOffset, indicesCount * 4, 34963);
+        int idxAcc = addAccessor(gltf, idxView, indicesCount, "SCALAR", 5125, null, null);
+
+        // 3. Create Material
+        // Pick the first sprite as the sample texture for the material (usually base texture)
+        String sampleSprite = data.spriteRanges.isEmpty() ? "minecraft:missingno" : data.spriteRanges.get(0).spriteKey();
+        int textureIndex = textureRegistry.ensureSpriteTexture(sampleSprite, textures, images);
+
+        Material material = new Material();
+        material.setName(matKey);
+        MaterialPbrMetallicRoughness pbr = new MaterialPbrMetallicRoughness();
+        TextureInfo texInfo = new TextureInfo();
+        texInfo.setIndex(textureIndex);
+        pbr.setBaseColorTexture(texInfo);
+        pbr.setMetallicFactor(0.0f);
+        pbr.setRoughnessFactor(1.0f);
+        material.setPbrMetallicRoughness(pbr);
+        material.setDoubleSided(data.doubleSided);
+
+        Map<String, Object> extras = new HashMap<>();
+        if (!colorMapIndices.isEmpty()) {
+            extras.put("voxelbridge:colormapTextures", colorMapIndices);
+            extras.put("voxelbridge:colormapUV", 1);
+        }
+        if (!extras.isEmpty()) material.setExtras(extras);
+        materials.add(material);
+        int matIndex = materials.size() - 1;
+
+        // 4. Create Mesh & Node
+        MeshPrimitive prim = new MeshPrimitive();
+        Map<String, Integer> attrs = new LinkedHashMap<>();
+        attrs.put("POSITION", posAcc);
+        if (texAcc >= 0) attrs.put("TEXCOORD_0", texAcc);
+        if (uv1Acc >= 0) attrs.put("TEXCOORD_1", uv1Acc);
+        if (colorAcc >= 0) attrs.put("COLOR_0", colorAcc);
+        prim.setAttributes(attrs);
+        prim.setIndices(idxAcc);
+        prim.setMaterial(matIndex);
+        prim.setMode(4); // TRIANGLES
+
+        Mesh mesh = new Mesh();
+        mesh.setName(matKey);
+        mesh.setPrimitives(Collections.singletonList(prim));
+        meshes.add(mesh);
+
+        Node node = new Node();
+        node.setName(matKey);
+        node.setMesh(meshes.size() - 1);
+        nodes.add(node);
+    }
+
+    private float[] remapUV(String spriteKey, float u, float v) {
+        boolean isBlockEntity = spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:") || spriteKey.startsWith("base:");
+        if (isBlockEntity) {
+            float[] atlasUv = TextureAtlasManager.remapUV(ctx, spriteKey, 0xFFFFFF, u, v);
+            if (ctx.getAtlasBook().containsKey(spriteKey) || atlasUv[0] != u || atlasUv[1] != v) {
+                return atlasUv;
+            }
+            ExportContext.BlockEntityAtlasPlacement p = ctx.getBlockEntityAtlasPlacements().get(spriteKey);
+            if (p != null) {
+                return new float[] {
+                    p.u0() + u * (p.u1() - p.u0()),
+                    p.v0() + v * (p.v1() - p.v0())
+                };
+            }
+            return new float[]{u, v};
+        }
+        return TextureAtlasManager.remapUV(ctx, spriteKey, 0xFFFFFF, u, v);
+    }
+
+    private boolean hasAtlasPlacement(String spriteKey) {
+        return ctx.getAtlasBook().containsKey(spriteKey)
+            || ctx.getBlockEntityAtlasPlacements().containsKey(spriteKey);
+    }
+
+    private UvAccessorResult writeUvThroughRawTemp(String matKey, PrimitiveData data, GlTF gltf, BinaryChunk uvChunk, int vertexCount) throws IOException {
+        if (data.uv0.size() == 0) return new UvAccessorResult(-1, -1);
+
+        float[] uv1Arr = data.uv1.getArrayDirect();
+        boolean hasUV1 = false;
+        for (int i = 0; i < vertexCount * 2; i++) {
+            if (Math.abs(uv1Arr[i]) > 1e-6f) { hasUV1 = true; break; }
+        }
+
+        Path rawUvPath = tempDir.resolve("rawuv_" + safe(matKey) + ".bin");
+        // 先写入 raw UV 临时文件
+        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(rawUvPath,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), 65536))) {
+            out.writeInt(vertexCount);
+            out.writeBoolean(hasUV1);
+            float[] uv0Arr = data.uv0.getArrayDirect();
+            for (int i = 0; i < vertexCount * 2; i++) out.writeFloat(uv0Arr[i]);
+            if (hasUV1) {
+                for (int i = 0; i < vertexCount * 2; i++) out.writeFloat(uv1Arr[i]);
+            }
+        }
+
+        int uv0Acc;
+        int uv1Acc = -1;
+        // 再顺序读取 rawuv 写入最终 uv.bin
+        try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(rawUvPath), 65536))) {
+            int vc = in.readInt();
+            boolean uv1Present = in.readBoolean();
+            int off0 = uvChunk.writeFloatStream(in, vc * 2);
+            int view0 = addView(gltf, 1, off0, vc * 2 * 4, 34962);
+            uv0Acc = addAccessor(gltf, view0, vc, "VEC2", 5126, null, null);
+
+            if (uv1Present) {
+                int off1 = uvChunk.writeFloatStream(in, vc * 2);
+                int view1 = addView(gltf, 1, off1, vc * 2 * 4, 34962);
+                uv1Acc = addAccessor(gltf, view1, vc, "VEC2", 5126, null, null);
+            }
+        } finally {
+            try { Files.deleteIfExists(rawUvPath); } catch (IOException ignored) {}
+        }
+
+        return new UvAccessorResult(uv0Acc, uv1Acc);
+    }
+    
+    private boolean isAnimated(String spriteKey) {
+        return ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(spriteKey);
+    }
+
+    private int addView(GlTF gltf, int bufferIndex, int byteOffset, int byteLength, int target) {
+        BufferView view = new BufferView();
+        view.setBuffer(bufferIndex);
+        view.setByteOffset(byteOffset);
+        view.setByteLength(byteLength);
+        view.setTarget(target);
+        gltf.addBufferViews(view);
+        return gltf.getBufferViews().size() - 1;
+    }
+
+    private int addAccessor(GlTF gltf, int bufferView, int count, String type, int componentType, float[] min, float[] max) {
+        Accessor accessor = new Accessor();
+        accessor.setBufferView(bufferView);
+        accessor.setComponentType(componentType);
+        accessor.setCount(count);
+        accessor.setType(type);
+        if (min != null) accessor.setMin(toNumberArray(min));
+        if (max != null) accessor.setMax(toNumberArray(max));
+        gltf.addAccessors(accessor);
+        return gltf.getAccessors().size() - 1;
+    }
+    
+    private Number[] toNumberArray(float[] arr) {
+        Number[] num = new Number[arr.length];
+        for(int i=0; i<arr.length; i++) num[i] = arr[i];
+        return num;
+    }
+
+    private static String safe(String s) {
+        return s.replace(':', '_').replace('/', '_');
+    }
+
+    private record UvAccessorResult(int uv0Acc, int uv1Acc) {}
+
+    // 重新引入 registerColorMapTextures 辅助方法
+    private List<Integer> registerColorMapTextures(Path outDir, List<Texture> textures, List<Image> images, int samplerIndex) throws IOException {
+         Path dir = outDir.resolve("textures/colormap");
+         if (!Files.exists(dir)) return Collections.emptyList();
+         List<Path> pages;
+         try (var stream = Files.list(dir)) {
+             pages = stream.filter(p -> p.getFileName().toString().startsWith("colormap_")).sorted().toList();
+         }
+         List<Integer> indices = new ArrayList<>();
+         for (Path png : pages) {
+             Image image = new Image();
+             image.setUri("textures/colormap/" + png.getFileName().toString());
+             images.add(image);
+             Texture texture = new Texture();
+             texture.setSource(images.size() - 1);
+             texture.setSampler(samplerIndex);
+             textures.add(texture);
+             indices.add(textures.size() - 1);
+         }
+         return indices;
+    }
+
+    // ================= 内部类：临时存储与索引 =================
+
+    /** 简单的 SpriteKey <-> Int 映射，用于压缩临时文件中的 Sprite 引用 */
+    private static class SpriteKeyRegistry {
+        private final Object2IntMap<String> keyToId = new Object2IntOpenHashMap<>();
+        private final List<String> idToKey = new ArrayList<>();
+
+        synchronized int getId(String key) {
+            if (keyToId.containsKey(key)) return keyToId.getInt(key);
+            int id = idToKey.size();
+            idToKey.add(key);
+            keyToId.put(key, id);
+            return id;
+        }
+
+        synchronized String getKey(int id) {
+            return idToKey.get(id);
+        }
+        
+        synchronized List<String> getAllKeys() {
+            return new ArrayList<>(idToKey);
+        }
+        
+        synchronized int size() {
+            return idToKey.size();
+        }
+    }
+
+    /** 每个 Material Group 一个临时文件管理器 */
+    private static class TempStorage {
+        final Path path;
+        final DataOutputStream out;
+        int quadCount = 0;
+
+        TempStorage(Path path) throws IOException {
+            this.path = path;
+            // 64KB 缓冲写入
+            this.out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(path.toFile()), 65536));
+        }
+
+        void writeQuad(QuadBatch b, int spriteId, int overlaySpriteId) throws IOException {
+            out.writeInt(spriteId);
+            out.writeInt(overlaySpriteId);
+            out.writeBoolean(b.doubleSided);
+            
+            // Write Pos (12 floats)
+            for(float v : b.positions) out.writeFloat(v);
+            // Write UV0 (8 floats)
+            for(float v : b.uv0) out.writeFloat(v);
+            // Write UV1 (8 floats, handle null)
+            if (b.uv1 != null) {
+                for(float v : b.uv1) out.writeFloat(v);
+            } else {
+                for(int i=0; i<8; i++) out.writeFloat(0f);
+            }
+            // Write Color (16 floats)
+            for(float v : b.colors) out.writeFloat(v);
+
+            quadCount++;
+        }
+
+        void close() throws IOException {
+            out.flush();
+            out.close();
+        }
+    }
+}

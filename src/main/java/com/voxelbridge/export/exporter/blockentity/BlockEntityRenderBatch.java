@@ -7,15 +7,19 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Collects BlockEntity render tasks per chunk and executes them in a single
  * main-thread pass to minimize context switching.
+ *
+ * Thread-safe for concurrent enqueue from multiple worker threads.
  */
 @OnlyIn(Dist.CLIENT)
 public final class BlockEntityRenderBatch {
 
-    private final List<BlockEntityRenderer.RenderTask> tasks = new ArrayList<>();
+    // Concurrent queue so worker threads can enqueue safely
+    private final ConcurrentLinkedQueue<BlockEntityRenderer.RenderTask> tasks = new ConcurrentLinkedQueue<>();
 
     public void enqueue(BlockEntityRenderer.RenderTask task) {
         if (task != null) {
@@ -35,7 +39,8 @@ public final class BlockEntityRenderBatch {
             return;
         }
         mc.executeBlocking(() -> {
-            for (BlockEntityRenderer.RenderTask task : tasks) {
+            BlockEntityRenderer.RenderTask task;
+            while ((task = tasks.poll()) != null) {
                 try {
                     task.run();
                 } catch (Exception e) {

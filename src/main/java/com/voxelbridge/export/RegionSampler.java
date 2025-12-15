@@ -66,7 +66,6 @@ public final class RegionSampler {
         int totalChunks = (maxChunkX - minChunkX + 1) * (maxChunkZ - minChunkZ + 1);
         int maxWorkerCount = Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), totalChunks));
 
-        AtomicInteger processedChunks = new AtomicInteger();
         List<Future<?>> futures = new ArrayList<>();
         ThreadFactory factory = new ThreadFactory() {
             private final AtomicInteger counter = new AtomicInteger();
@@ -113,7 +112,7 @@ public final class RegionSampler {
 
                 if (chunk == null || chunk.isEmpty()) {
                     ExportProgressTracker.markDone(chunkX, chunkZ);
-                    updateProgress(processedChunks, chunkBounds.size(), mc);
+                    updateProgress(mc);
                     return;
                 }
 
@@ -121,14 +120,16 @@ public final class RegionSampler {
                 BlockEntityRenderBatch beBatch = new BlockEntityRenderBatch();
                 BlockExporter localSampler = new BlockExporter(ctx, buffer, level, beBatch);
                 localSampler.setRegionBounds(regionMin, regionMax);
+                // OPTIMIZATION: Reuse a single MutableBlockPos to avoid per-block allocations
+                BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
 
                 for (int x = fx0; x <= fx1; x++) {
                     for (int z = fz0; z <= fz1; z++) {
                         for (int y = minY; y <= maxY; y++) {
-                            BlockPos pos = new BlockPos(x, y, z);
-                            BlockState state = level.getBlockState(pos);
+                            mutablePos.set(x, y, z);
+                            BlockState state = level.getBlockState(mutablePos);
                             try {
-                                localSampler.sampleBlock(state, pos);
+                                localSampler.sampleBlock(state, mutablePos);
                             } catch (Throwable t) {
                                 t.printStackTrace();
                             }
@@ -143,7 +144,7 @@ public final class RegionSampler {
                 }
 
                 ExportProgressTracker.markDone(chunkX, chunkZ);
-                updateProgress(processedChunks, chunkBounds.size(), mc);
+                updateProgress(mc);
             }));
         }
 
@@ -155,13 +156,16 @@ public final class RegionSampler {
             executor.shutdown();
         }
 
-        ExportLogger.log(String.format("[RegionSampler] Sampling complete - processed %d/%d chunks",
-            processedChunks.get(), chunkBounds.size()));
+        var finalProgress = ExportProgressTracker.progress();
+        ExportLogger.log(String.format("[RegionSampler] Sampling complete - processed %d/%d (failed %d)",
+            finalProgress.done(), finalProgress.total(), finalProgress.failed()));
     }
 
-    private static void updateProgress(AtomicInteger processedChunks, int total, Minecraft mc) {
-        int current = processedChunks.incrementAndGet();
-        double percent = 100.0 * current / total;
-        if (current % 10 == 0) ProgressNotifier.show(mc, percent, current, total);
+    private static void updateProgress(Minecraft mc) {
+        var progress = ExportProgressTracker.progress();
+        int completed = progress.done() + progress.failed();
+        if (completed % 5 == 0) {
+            ProgressNotifier.showDetailed(mc, progress);
+        }
     }
 }

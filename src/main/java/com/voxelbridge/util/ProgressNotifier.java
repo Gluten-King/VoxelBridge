@@ -1,6 +1,7 @@
 package com.voxelbridge.util;
 
 import com.voxelbridge.export.ExportProgressTracker;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
@@ -34,15 +35,66 @@ public final class ProgressNotifier {
             if (mc.player == null) {
                 return;
             }
-            StringBuilder text = new StringBuilder();
-            text.append(String.format("[VoxelBridge] Export: %.1f%% (%d/%d)",
-                progress.percent(), progress.done(), progress.total()));
-
-            if (progress.failed() > 0) {
-                text.append(String.format(" | Failed: %d", progress.failed()));
-            }
-
-            mc.player.displayClientMessage(Component.literal(text.toString()), true);
+            Component msg = buildRichProgress(progress);
+            mc.player.displayClientMessage(msg, true);
         });
+    }
+
+    private static Component buildRichProgress(ExportProgressTracker.Progress p) {
+        String bar = buildBar(p.percent());
+        String mem = memoryStats();
+        String eta = eta(p);
+        String stage = stageLabel(p.stage(), p.stageDetail());
+
+        // 分成两行，避免太宽被截断
+        String line1 = String.format("[VoxelBridge] %s %.1f%% %s", stage, p.percent(), bar);
+        String line2 = String.format("✔%d ▶%d ⧗%d ✖%d | 耗时%.1fs%s | %s",
+            p.done(), p.running(), p.pending(), p.failed(), p.elapsedSeconds(), eta, mem);
+
+        return Component.literal(line1)
+            .append(Component.literal("\n").withStyle(ChatFormatting.RESET))
+            .append(Component.literal(line2));
+    }
+
+    private static String buildBar(float percent) {
+        int segments = 12;
+        int filled = Math.round(percent / 100f * segments);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < segments; i++) {
+            sb.append(i < filled ? '=' : '.');
+        }
+        return "[" + sb + "]";
+    }
+
+    private static String memoryStats() {
+        Runtime rt = Runtime.getRuntime();
+        long used = rt.totalMemory() - rt.freeMemory();
+        long max = rt.maxMemory();
+        double usedMb = used / 1024.0 / 1024.0;
+        double maxMb = max / 1024.0 / 1024.0;
+        return String.format("内存%d/%dMB", Math.round(usedMb), Math.round(maxMb));
+    }
+
+    private static String eta(ExportProgressTracker.Progress p) {
+        int completed = p.done() + p.failed();
+        if (completed == 0 || p.total() == 0) return "";
+        double rate = completed / Math.max(0.1, p.elapsedSeconds());
+        int remaining = p.total() - completed;
+        double etaSec = remaining / Math.max(0.1, rate);
+        return String.format(" | 预计%.1fs", etaSec);
+    }
+
+    private static String stageLabel(ExportProgressTracker.Stage stage, String detail) {
+        String base = switch (stage) {
+            case SAMPLING -> "采样";
+            case ATLAS -> "贴图";
+            case FINALIZE -> "写入";
+            case COMPLETE -> "完成";
+            default -> "准备";
+        };
+        if (detail != null && !detail.isEmpty()) {
+            return base + " - " + detail;
+        }
+        return base;
     }
 }

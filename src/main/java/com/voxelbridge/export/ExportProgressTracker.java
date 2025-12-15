@@ -23,10 +23,22 @@ public final class ExportProgressTracker {
         FAILED   // Failed (chunk not loaded or error)
     }
 
+    public enum Stage {
+        IDLE,
+        SAMPLING,
+        ATLAS,
+        FINALIZE,
+        COMPLETE
+    }
+
     private static final Map<Long, ChunkState> chunkStates = new ConcurrentHashMap<>();
     private static final AtomicInteger completed = new AtomicInteger();
     private static final AtomicInteger failed = new AtomicInteger();
+    private static final AtomicInteger running = new AtomicInteger();
     private static volatile int total = 0;
+    private static volatile long startNanos = 0L;
+    private static volatile Stage stage = Stage.IDLE;
+    private static volatile String stageDetail = "";
 
     private ExportProgressTracker() {}
 
@@ -34,7 +46,11 @@ public final class ExportProgressTracker {
         chunkStates.clear();
         completed.set(0);
         failed.set(0);
+        running.set(0);
         total = 0;
+        startNanos = 0L;
+        stage = Stage.IDLE;
+        stageDetail = "";
     }
 
     /**
@@ -64,16 +80,30 @@ public final class ExportProgressTracker {
         chunkStates.clear();
         completed.set(0);
         failed.set(0);
+        running.set(0);
         for (Long key : chunkKeys) {
             chunkStates.put(key, ChunkState.PENDING);
         }
         total = chunkStates.size();
+        startNanos = System.nanoTime();
+        stage = Stage.SAMPLING;
+        stageDetail = "采样方块";
+    }
+
+    public static void setStage(Stage newStage, String detail) {
+        stage = newStage;
+        stageDetail = (detail != null) ? detail : "";
     }
 
     public static void markRunning(int cx, int cz) {
         long key = ChunkPos.asLong(cx, cz);
         chunkStates.putIfAbsent(key, ChunkState.PENDING);
-        chunkStates.replace(key, ChunkState.RUNNING);
+        ChunkState prev = chunkStates.put(key, ChunkState.RUNNING);
+        if (prev != ChunkState.RUNNING) {
+            if (prev == ChunkState.DONE) completed.decrementAndGet();
+            if (prev == ChunkState.FAILED) failed.decrementAndGet();
+            running.incrementAndGet();
+        }
     }
 
     public static void markDone(int cx, int cz) {
@@ -85,6 +115,9 @@ public final class ExportProgressTracker {
         chunkStates.put(key, ChunkState.DONE);
         if (prev == ChunkState.FAILED) {
             failed.decrementAndGet();
+        }
+        if (prev == ChunkState.RUNNING) {
+            running.decrementAndGet();
         }
         completed.incrementAndGet();
     }
@@ -98,6 +131,9 @@ public final class ExportProgressTracker {
         chunkStates.put(key, ChunkState.FAILED);
         if (prev == ChunkState.DONE) {
             completed.decrementAndGet();
+        }
+        if (prev == ChunkState.RUNNING) {
+            running.decrementAndGet();
         }
         failed.incrementAndGet();
     }
@@ -116,6 +152,8 @@ public final class ExportProgressTracker {
             completed.decrementAndGet();
         } else if (prev == ChunkState.FAILED) {
             failed.decrementAndGet();
+        } else if (prev == ChunkState.RUNNING) {
+            running.decrementAndGet();
         }
     }
 
@@ -131,10 +169,10 @@ public final class ExportProgressTracker {
     }
 
     public static Progress progress() {
-        return new Progress(completed.get(), failed.get(), total);
+        return new Progress(completed.get(), failed.get(), total, running.get(), startNanos, stage, stageDetail);
     }
 
-    public record Progress(int done, int failed, int total) {
+    public record Progress(int done, int failed, int total, int running, long startNanos, Stage stage, String stageDetail) {
         public float percent() {
             return total == 0 ? 0f : (done * 100f) / total;
         }
@@ -145,6 +183,11 @@ public final class ExportProgressTracker {
 
         public boolean isComplete() {
             return done + failed == total;
+        }
+
+        public double elapsedSeconds() {
+            if (startNanos == 0L) return 0d;
+            return (System.nanoTime() - startNanos) / 1_000_000_000.0;
         }
     }
 }
