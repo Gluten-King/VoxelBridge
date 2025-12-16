@@ -172,8 +172,8 @@ final class PrimitiveData {
         indices.add(c);
     }
 
-    float[] positionMin() { return positions.computeMin(); }
-    float[] positionMax() { return positions.computeMax(); }
+    float[] positionMin() { return positions.computeMin(3); }
+    float[] positionMax() { return positions.computeMax(3); }
     int maxIndex() {
         int max = 0;
         for (int value : indices.toArray()) max = Math.max(max, value);

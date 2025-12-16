@@ -12,6 +12,7 @@ import com.voxelbridge.export.util.GeometryUtil;
 import com.voxelbridge.export.util.ColorModeHandler;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import com.voxelbridge.modhandler.ModHandlerRegistry;
+import com.voxelbridge.util.ExportLogger;
 // Fabric API imports
 import net.fabricmc.fabric.api.renderer.v1.Renderer;
 import net.fabricmc.fabric.api.renderer.v1.RendererAccess;
@@ -208,6 +209,7 @@ public final class BlockExporter {
     }
     public void sampleBlock(BlockState state, BlockPos pos) {
         if (!isNeighborChunksLoadedForBlock(pos)) {
+            ExportLogger.log("[BlockExporter] Neighbor chunks missing for block at " + pos.toShortString() + ", skipping and retry later");
             missingNeighborDetected = true;
             return;
         }

@@ -25,11 +25,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 流式几何处理管道（重构版）
@@ -251,8 +247,9 @@ public final class GltfSceneBuilder implements SceneSink {
         List<Material> materials = Collections.synchronizedList(new ArrayList<>());
         List<Mesh> meshes = Collections.synchronizedList(new ArrayList<>());
         List<Node> nodes = Collections.synchronizedList(new ArrayList<>());
-        List<Texture> textures = new ArrayList<>();
-            List<Image> images = new ArrayList<>();
+        // Make texture/image lists thread-safe; material assembly runs in parallel
+        List<Texture> textures = Collections.synchronizedList(new ArrayList<>());
+            List<Image> images = Collections.synchronizedList(new ArrayList<>());
             List<Sampler> samplers = new ArrayList<>();
 
             Sampler sampler = new Sampler();
@@ -276,72 +273,44 @@ public final class GltfSceneBuilder implements SceneSink {
                 ExportLogger.log("[GltfBuilder] geometry.bin size: " + geometryChannel.size() + " bytes");
                 ExportLogger.log("[GltfBuilder] finaluv.bin size: " + uvChannel.size() + " bytes");
 
-                // OPTIMIZATION: Parallel material assembly (1.5-2x speedup on 8-core CPU)
-                // Process materials in parallel using thread pool
+                // Process materials sequentially (parallel processing causes buffer corruption)
                 List<String> materialKeys = geometryIndex.getAllMaterialKeys();
                 int totalMaterials = materialKeys.size();
-                AtomicInteger processedMaterials = new AtomicInteger(0);
+                int processedMaterials = 0;
 
-                ExportLogger.log("[GltfBuilder] Processing " + totalMaterials + " materials in parallel...");
+                ExportLogger.log("[GltfBuilder] Processing " + totalMaterials + " materials...");
 
-                // Use 4 threads for parallel assembly (good balance for 8-core CPU)
-                int parallelThreads = Math.min(4, Runtime.getRuntime().availableProcessors());
-                ExecutorService executor = Executors.newFixedThreadPool(parallelThreads);
-                List<Future<?>> futures = new ArrayList<>();
+                for (String matKey : materialKeys) {
+                    try {
+                        GeometryIndex.MaterialChunk matChunk = geometryIndex.getMaterial(matKey);
 
-                try {
-                    for (String matKey : materialKeys) {
-                        futures.add(executor.submit(() -> {
-                            try {
-                                GeometryIndex.MaterialChunk matChunk = geometryIndex.getMaterial(matKey);
-
-                                // 日志: 处理材质前的状态
-                                int processed = processedMaterials.get();
-                                if (matChunk != null && processed % 100 == 0) {
-                                    ExportLogger.log(String.format("[GltfBuilder] Processing material: %s (quads: %d)",
-                                        matKey, matChunk.quadCount()));
-                                }
-
-                                // Each thread needs its own FileChannels for thread-safe reading
-                                try (FileChannel threadGeometryChannel = FileChannel.open(geometryBin, StandardOpenOption.READ);
-                                     FileChannel threadUvChannel = FileChannel.open(finaluvBin, StandardOpenOption.READ)) {
-
-                                    // 从geometry.bin和finaluv.bin读取该material的数据
-                                    assembleMaterialPrimitive(
-                                        matKey, matChunk,
-                                        threadGeometryChannel, threadUvChannel,
-                                        gltf, chunk, uvChunk,
-                                        materials, meshes, nodes, textures, images, colorMapIndices
-                                    );
-                                }
-
-                                int completed = processedMaterials.incrementAndGet();
-
-                                // 进度提示（每10%）
-                                if (totalMaterials > 10 && completed % Math.max(1, totalMaterials / 10) == 0) {
-                                    double progress = completed * 100.0 / totalMaterials;
-                                    ExportLogger.log(String.format("[GltfAssembly] %.0f%% (%d/%d materials)",
-                                        progress, completed, totalMaterials));
-                                }
-                            } catch (Exception e) {
-                                ExportLogger.log("[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
-                                ExportLogger.log("[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
-                                e.printStackTrace();
-                                throw new RuntimeException("Failed to assemble material: " + matKey, e);
-                            }
-                        }));
-                    }
-
-                    // Wait for all materials to complete
-                    for (Future<?> future : futures) {
-                        try {
-                            future.get();
-                        } catch (Exception e) {
-                            throw new IOException("Material assembly failed", e);
+                        if (matChunk != null && processedMaterials % 100 == 0) {
+                            ExportLogger.log(String.format("[GltfBuilder] Processing material: %s (quads: %d)",
+                                matKey, matChunk.quadCount()));
                         }
+
+                        // 从geometry.bin和finaluv.bin读取该material的数据
+                        assembleMaterialPrimitive(
+                            matKey, matChunk,
+                            geometryChannel, uvChannel,
+                            gltf, chunk, uvChunk,
+                            materials, meshes, nodes, textures, images, colorMapIndices
+                        );
+
+                        processedMaterials++;
+
+                        // 进度提示（每10%）
+                        if (totalMaterials > 10 && processedMaterials % Math.max(1, totalMaterials / 10) == 0) {
+                            double progress = processedMaterials * 100.0 / totalMaterials;
+                            ExportLogger.log(String.format("[GltfAssembly] %.0f%% (%d/%d materials)",
+                                progress, processedMaterials, totalMaterials));
+                        }
+                    } catch (Exception e) {
+                        ExportLogger.log("[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
+                        ExportLogger.log("[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
+                        e.printStackTrace();
+                        throw new IOException("Failed to assemble material: " + matKey, e);
                     }
-                } finally {
-                    executor.shutdown();
                 }
 
                 ExportLogger.log("[GltfBuilder] All materials processed successfully");
@@ -440,6 +409,8 @@ public final class GltfSceneBuilder implements SceneSink {
 
         ByteBuffer geometryBatchBuffer = ByteBuffer.allocateDirect(GEOMETRY_BATCH_BYTES).order(ByteOrder.LITTLE_ENDIAN);
         ByteBuffer uvBatchBuffer = ByteBuffer.allocateDirect(UV_BATCH_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        int materialHashValue = matKey.hashCode();
+        int skippedMismatches = 0;
 
         // OPTIMIZATION: Sort quadOffsets for sequential disk reads (2-3x faster I/O)
         // Random seeks on SSD: ~50MB/s, Sequential reads: ~500MB/s
@@ -449,38 +420,53 @@ public final class GltfSceneBuilder implements SceneSink {
         // 批量读取并注册到PrimitiveData（进行去重）
         // 注意：排序后可以顺序读取，大幅提升I/O性能
         int totalQuads = sortedOffsets.size();
-        for (int batchStart = 0; batchStart < totalQuads; batchStart += BATCH_SIZE) {
-            int batchEnd = Math.min(batchStart + BATCH_SIZE, totalQuads);
-            int batchCount = batchEnd - batchStart;
+        int offsetIndex = 0;
+        while (offsetIndex < totalQuads) {
+            // Group contiguous quad offsets so we only read what belongs to this material
+            long startOffset = sortedOffsets.get(offsetIndex);
+            int rangeCount = 1;
+            while (rangeCount < BATCH_SIZE && offsetIndex + rangeCount < totalQuads) {
+                long expectedNext = startOffset + rangeCount;
+                long nextOffset = sortedOffsets.get(offsetIndex + rangeCount);
+                if (nextOffset != expectedNext) break;
+                rangeCount++;
+            }
 
-            // Calculate batch read position (first quad in batch)
-            long firstQuadOffset = sortedOffsets.get(batchStart);
-            long geometryBatchPos = firstQuadOffset * BYTES_PER_QUAD_GEOMETRY;
-            long uvBatchPos = firstQuadOffset * BYTES_PER_QUAD_UV;
+            long geometryBatchPos = startOffset * BYTES_PER_QUAD_GEOMETRY;
+            long uvBatchPos = startOffset * BYTES_PER_QUAD_UV;
 
             // Read batch into buffers
             geometryBatchBuffer.clear();
-            geometryBatchBuffer.limit(batchCount * BYTES_PER_QUAD_GEOMETRY);
+            geometryBatchBuffer.limit(rangeCount * BYTES_PER_QUAD_GEOMETRY);
             geometryChannel.position(geometryBatchPos);
             readFully(geometryChannel, geometryBatchBuffer);
             geometryBatchBuffer.flip();
 
             uvBatchBuffer.clear();
-            uvBatchBuffer.limit(batchCount * BYTES_PER_QUAD_UV);
+            uvBatchBuffer.limit(rangeCount * BYTES_PER_QUAD_UV);
             uvChannel.position(uvBatchPos);
             readFully(uvChannel, uvBatchBuffer);
             uvBatchBuffer.flip();
 
             // Process all quads in this batch
-            for (int i = 0; i < batchCount; i++) {
+            for (int i = 0; i < rangeCount; i++) {
+                int geoBase = i * BYTES_PER_QUAD_GEOMETRY;
+                geometryBatchBuffer.position(geoBase);
+
                 // geometry.bin格式: materialHash(4) + spriteId(4) + overlayId(4) + doubleSided(1) + pad(3) + pos(48) + normal(12) + color(64)
-                geometryBatchBuffer.getInt(); // skip materialHash
+                int materialHash = geometryBatchBuffer.getInt();
                 int spriteId = geometryBatchBuffer.getInt();
                 int overlayId = geometryBatchBuffer.getInt();
                 byte doubleSidedByte = geometryBatchBuffer.get();
                 geometryBatchBuffer.get(); // skip padding
                 geometryBatchBuffer.get();
                 geometryBatchBuffer.get();
+
+                // Skip quads that belong to other materials (offset list may be non-contiguous)
+                if (materialHash != materialHashValue) {
+                    skippedMismatches++;
+                    continue;
+                }
 
                 // 读取positions (12 floats)
                 float[] positions = new float[12];
@@ -500,6 +486,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 }
 
                 // 读取UV
+                uvBatchBuffer.position(i * BYTES_PER_QUAD_UV);
                 float[] uv0 = new float[8];
                 float[] uv1 = new float[8];
                 for (int j = 0; j < 8; j++) {
@@ -529,6 +516,12 @@ public final class GltfSceneBuilder implements SceneSink {
                     }
                 }
             }
+
+            offsetIndex += rangeCount;
+        }
+
+        if (skippedMismatches > 0) {
+            ExportLogger.log(String.format("[GltfBuilder][WARN] Skipped %d quads for material %s due to hash mismatch", skippedMismatches, matKey));
         }
 
         // 如果去重后没有顶点或索引，跳过
@@ -551,17 +544,20 @@ public final class GltfSceneBuilder implements SceneSink {
         // 写入glTF buffers（使用去重后的数据）
         MultiBinaryChunk.Slice posSlice = chunk.writeFloatArray(primData.positions.getArrayDirect(), primData.positions.size());
         int posView = addView(gltf, posSlice.bufferIndex(), posSlice.byteOffset(), primData.positions.size() * 4, 34962);
-        float[] posMin = primData.positions.computeMin();
-        float[] posMax = primData.positions.computeMax();
+        float[] posMin = primData.positions.computeMin(3);
+        float[] posMax = primData.positions.computeMax(3);
         int posAcc = addAccessor(gltf, posView, primData.vertexCount, "VEC3", 5126, posMin, posMax);
 
         MultiBinaryChunk.Slice uv0Slice = uvChunk.writeFloatArray(primData.uv0.getArrayDirect(), primData.uv0.size());
         int uv0View = addView(gltf, uv0Slice.bufferIndex(), uv0Slice.byteOffset(), primData.uv0.size() * 4, 34962);
         int uv0Acc = addAccessor(gltf, uv0View, primData.vertexCount, "VEC2", 5126, null, null);
 
-        MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(primData.uv1.getArrayDirect(), primData.uv1.size());
-        int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), primData.uv1.size() * 4, 34962);
-        int uv1Acc = addAccessor(gltf, uv1View, primData.vertexCount, "VEC2", 5126, null, null);
+        int uv1Acc = -1;
+        if (!primData.uv1.isEmpty()) {
+            MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(primData.uv1.getArrayDirect(), primData.uv1.size());
+            int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), primData.uv1.size() * 4, 34962);
+            uv1Acc = addAccessor(gltf, uv1View, primData.vertexCount, "VEC2", 5126, null, null);
+        }
 
         MultiBinaryChunk.Slice colorSlice = chunk.writeFloatArray(primData.colors.getArrayDirect(), primData.colors.size());
         int colorView = addView(gltf, colorSlice.bufferIndex(), colorSlice.byteOffset(), primData.colors.size() * 4, 34962);
@@ -600,7 +596,9 @@ public final class GltfSceneBuilder implements SceneSink {
         Map<String, Integer> attrs = new LinkedHashMap<>();
         attrs.put("POSITION", posAcc);
         attrs.put("TEXCOORD_0", uv0Acc);
-        attrs.put("TEXCOORD_1", uv1Acc);
+        if (!primData.uv1.isEmpty()) {
+            attrs.put("TEXCOORD_1", uv1Acc);
+        }
         attrs.put("COLOR_0", colorAcc);
         prim.setAttributes(attrs);
         prim.setIndices(idxAcc);

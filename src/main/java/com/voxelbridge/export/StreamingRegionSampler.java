@@ -114,20 +114,21 @@ public final class StreamingRegionSampler {
                         long key = chunkPos.toLong();
                         ExportProgressTracker.ChunkState state = ExportProgressTracker.snapshot().get(key);
 
-                        if (state != ExportProgressTracker.ChunkState.PENDING) {
+                    if (state != ExportProgressTracker.ChunkState.PENDING) {
+                        continue;
+                    }
+
+                    if (playerChunk != null) {
+                        int dist = Math.max(Math.abs(chunkPos.x - playerChunk.x), Math.abs(chunkPos.z - playerChunk.z));
+                        if (dist > activeDistance) {
+                            ExportLogger.log("[Streaming] Skip chunk " + chunkPos + " (outside render distance, dist=" + dist + ", active=" + activeDistance + ")");
                             continue;
                         }
+                    }
 
-                        if (playerChunk != null) {
-                            int dist = Math.max(Math.abs(chunkPos.x - playerChunk.x), Math.abs(chunkPos.z - playerChunk.z));
-                            if (dist > activeDistance) {
-                                continue;
-                            }
-                        }
-
-                        LevelChunk chunk = chunkCache.getChunk(chunkPos.x, chunkPos.z, false);
-                        if (chunk != null && !chunk.isEmpty()) {
-                            processing.add(chunkPos);
+                    LevelChunk chunk = chunkCache.getChunk(chunkPos.x, chunkPos.z, false);
+                    if (chunk != null && !chunk.isEmpty()) {
+                        processing.add(chunkPos);
 
                             int cminX = Math.max(minX, chunkPos.x << 4);
                             int cmaxX = Math.min(maxX, (chunkPos.x << 4) + 15);
@@ -137,12 +138,15 @@ public final class StreamingRegionSampler {
                             executor.submit(() -> exportChunk(
                                 chunk, chunkPos, level, chunkCache, sink, ctx,
                                 regionMin, regionMax,
-                                cminX, cmaxX, cminZ, cmaxZ, minY, maxY,
-                                mc, processing, playerChunk, activeDistance,
-                                sharedBeBatch  // OPTIMIZATION: Pass shared batch
-                            ));
-                        }
+                            cminX, cmaxX, cminZ, cmaxZ, minY, maxY,
+                            mc, processing, playerChunk, activeDistance,
+                            sharedBeBatch  // OPTIMIZATION: Pass shared batch
+                        ));
+                    } else {
+                        String reason = (chunk == null) ? "null" : "empty";
+                        ExportLogger.log("[Streaming] Chunk " + chunkPos + " not ready (" + reason + "), stay pending");
                     }
+                }
 
                     int cycle = scanCycles.incrementAndGet();
                     if (progress.pending() > 0 && cycle % 5 == 0) {
@@ -190,6 +194,8 @@ public final class StreamingRegionSampler {
                                 regionMin, regionMax, cminX, cmaxX, cminZ, cmaxZ,
                                 minY, maxY, mc, sharedBeBatch);
                         } else {
+                            String reason = (chunk == null) ? "null" : "empty";
+                            ExportLogger.log("[Streaming][Force] Chunk " + chunkPos + " unavailable (" + reason + "), marking failed");
                             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
                         }
                     }
@@ -227,18 +233,22 @@ public final class StreamingRegionSampler {
                                    BlockEntityRenderBatch sharedBeBatch) {
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
+            ExportLogger.log("[Streaming] Begin export chunk " + chunkPos);
 
             if (chunk.isEmpty()) {
+                ExportLogger.log("[Streaming] Chunk " + chunkPos + " is empty, marking pending");
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                 return;
             }
 
             if (!areNeighborChunksReady(chunkPos, minX >> 4, maxX >> 4, minZ >> 4, maxZ >> 4, chunkCache, true, playerChunk, activeDistance)) {
+                ExportLogger.log("[Streaming] Neighbor chunks not ready for " + chunkPos + ", marking pending");
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                 return;
             }
 
             if (!isChunkRenderable(level, chunkPos)) {
+                ExportLogger.log("[Streaming] Chunk " + chunkPos + " not renderable (likely not FULL), marking pending");
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                 return;
             }
@@ -260,7 +270,8 @@ public final class StreamingRegionSampler {
             int maxSectionY = level.getMaxSection();
             int worldMinY = level.getMinBuildHeight();
 
-            for (int sectionIndex = minSectionY; sectionIndex <= maxSectionY; sectionIndex++) {
+            // getMaxSection() is exclusive; iterate while < maxSectionY to avoid AIOOB on the last index
+            for (int sectionIndex = minSectionY; sectionIndex < maxSectionY; sectionIndex++) {
                 // Get section (16x16x16 block region)
                 LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(sectionIndex));
                 if (section == null || section.hasOnlyAir()) {
@@ -313,12 +324,18 @@ public final class StreamingRegionSampler {
             // OPTIMIZATION: Don't flush per-chunk, accumulate in shared batch
             // sharedBeBatch will be flushed once after all chunks complete
             if (!buffer.isEmpty()) {
+                ExportLogger.log("[Streaming] Flushing buffered quads for chunk " + chunkPos + ", quads=" + buffer.getQuadCount());
                 buffer.flushTo(finalSink);
+            } else {
+                ExportLogger.log("[Streaming] Chunk " + chunkPos + " produced 0 quads after sampling");
             }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            ExportLogger.log("[Streaming][ERROR] Export chunk " + chunkPos + " failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            for (StackTraceElement el : e.getStackTrace()) {
+                ExportLogger.log("    at " + el.toString());
+            }
             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
         } finally {
             processing.remove(chunkPos);
@@ -337,8 +354,10 @@ public final class StreamingRegionSampler {
                                         Minecraft mc, BlockEntityRenderBatch sharedBeBatch) {
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
+            ExportLogger.log("[Streaming][Force] Begin force export chunk " + chunkPos);
 
             if (chunk.isEmpty()) {
+                ExportLogger.log("[Streaming][Force] Chunk " + chunkPos + " is empty, marking failed");
                 ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
                 return;
             }
@@ -349,6 +368,7 @@ public final class StreamingRegionSampler {
             localSampler.setRegionBounds(regionMin, regionMax);
 
             BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+            int blockCount = 0;
             for (int x = minX; x <= maxX; x++) {
                 for (int z = minZ; z <= maxZ; z++) {
                     for (int y = minY; y <= maxY; y++) {
@@ -359,6 +379,7 @@ public final class StreamingRegionSampler {
                             if (state.isAir()) continue;
 
                             localSampler.sampleBlock(state, mutablePos);
+                            blockCount++;
                         } catch (Throwable t) {
                             t.printStackTrace();
                         }
@@ -367,12 +388,17 @@ public final class StreamingRegionSampler {
             }
 
             if (!buffer.isEmpty()) {
+                ExportLogger.log("[Streaming][Force] Flushing buffered quads for chunk " + chunkPos + ", quads=" + buffer.getQuadCount());
                 buffer.flushTo(finalSink);
             }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
+            ExportLogger.log("[Streaming][Force] Chunk " + chunkPos + " force exported, blocksVisited=" + blockCount);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            ExportLogger.log("[Streaming][ERROR][Force] Chunk " + chunkPos + " failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            for (StackTraceElement el : e.getStackTrace()) {
+                ExportLogger.log("    at " + el.toString());
+            }
             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
         }
     }

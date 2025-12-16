@@ -61,36 +61,40 @@ final class FloatList {
         data = Arrays.copyOf(data, newLength);
     }
 
-    float[] computeMin() {
-        if (size == 0) return new float[]{0, 0, 0};
-        float minX = Float.POSITIVE_INFINITY;
-        float minY = Float.POSITIVE_INFINITY;
-        float minZ = Float.POSITIVE_INFINITY;
-        for (int i = 0; i < size; i += 3) {
-            float x = data[i];
-            float y = data[i + 1];
-            float z = data[i + 2];
-            if (x < minX) minX = x;
-            if (y < minY) minY = y;
-            if (z < minZ) minZ = z;
+    float[] computeMin(int stride) {
+        if (size == 0) {
+            float[] result = new float[stride];
+            Arrays.fill(result, 0);
+            return result;
         }
-        return new float[]{minX, minY, minZ};
+        float[] min = new float[stride];
+        Arrays.fill(min, Float.POSITIVE_INFINITY);
+        for (int i = 0; i < size; i += stride) {
+            for (int j = 0; j < stride; j++) {
+                if (i + j < size && data[i + j] < min[j]) {
+                    min[j] = data[i + j];
+                }
+            }
+        }
+        return min;
     }
 
-    float[] computeMax() {
-        if (size == 0) return new float[]{0, 0, 0};
-        float maxX = Float.NEGATIVE_INFINITY;
-        float maxY = Float.NEGATIVE_INFINITY;
-        float maxZ = Float.NEGATIVE_INFINITY;
-        for (int i = 0; i < size; i += 3) {
-            float x = data[i];
-            float y = data[i + 1];
-            float z = data[i + 2];
-            if (x > maxX) maxX = x;
-            if (y > maxY) maxY = y;
-            if (z > maxZ) maxZ = z;
+    float[] computeMax(int stride) {
+        if (size == 0) {
+            float[] result = new float[stride];
+            Arrays.fill(result, 0);
+            return result;
         }
-        return new float[]{maxX, maxY, maxZ};
+        float[] max = new float[stride];
+        Arrays.fill(max, Float.NEGATIVE_INFINITY);
+        for (int i = 0; i < size; i += stride) {
+            for (int j = 0; j < stride; j++) {
+                if (i + j < size && data[i + j] > max[j]) {
+                    max[j] = data[i + j];
+                }
+            }
+        }
+        return max;
     }
 
     boolean isEmpty() {

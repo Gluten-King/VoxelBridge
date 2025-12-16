@@ -129,9 +129,9 @@ final class TextureRegistry {
         }
     }
 
-    int ensureSpriteTexture(String spriteKey,
-                            List<Texture> textures,
-                            List<Image> images) {
+    synchronized int ensureSpriteTexture(String spriteKey,
+                                         List<Texture> textures,
+                                         List<Image> images) {
         ensureSpriteExport(spriteKey);
         return spriteTextureIndices.computeIfAbsent(spriteKey, key -> {
             String rel = spriteRelativePaths.get(key);
