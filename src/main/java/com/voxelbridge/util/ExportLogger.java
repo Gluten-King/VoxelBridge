@@ -22,12 +22,14 @@ public final class ExportLogger {
 
     private static BufferedWriter writer;
     private static BufferedWriter animationWriter;  // Separate animation log
+    private static BufferedWriter gltfDebugWriter;  // Separate glTF debug log
 
     private ExportLogger() {}
 
     public static synchronized void initialize(Path outDir) {
         writer = null;
         animationWriter = null;
+        gltfDebugWriter = null;
         if (ENABLED) {
             try {
                 close();
@@ -45,8 +47,14 @@ public final class ExportLogger {
                 animationWriter = Files.newBufferedWriter(animLogPath, StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
 
+                // Create separate glTF debug log
+                Path gltfDebugPath = outDir.resolve("gltf-debug.log");
+                gltfDebugWriter = Files.newBufferedWriter(gltfDebugPath, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+
                 log("Export log initialized at: " + logPath);
                 logAnimation("Animation detection log initialized at: " + animLogPath);
+                logGltfDebug("glTF debug log initialized at: " + gltfDebugPath);
             } catch (IOException e) {
                 System.err.println("[ExportLogger][ERROR] Failed to initialize log files: " + e.getMessage());
                 e.printStackTrace();
@@ -93,6 +101,24 @@ public final class ExportLogger {
         }
     }
 
+    public static synchronized void logGltfDebug(String message) {
+        String logLine = String.format("[%s] %s", TIMESTAMP.format(LocalDateTime.now()), message);
+
+        // Always output to console for immediate feedback
+        System.out.println(logLine);
+
+        // Write to glTF debug log if enabled
+        if (ENABLED && gltfDebugWriter != null) {
+            try {
+                gltfDebugWriter.write(logLine);
+                gltfDebugWriter.newLine();
+                gltfDebugWriter.flush();
+            } catch (IOException e) {
+                System.err.printf("[ExportLogger] Failed to write glTF debug log: %s%n", e.getMessage());
+            }
+        }
+    }
+
     public static synchronized void close() {
         if (ENABLED) {
             if (writer != null) {
@@ -111,6 +137,15 @@ public final class ExportLogger {
                 } catch (IOException ignored) {
                 } finally {
                     animationWriter = null;
+                }
+            }
+            if (gltfDebugWriter != null) {
+                try {
+                    gltfDebugWriter.flush();
+                    gltfDebugWriter.close();
+                } catch (IOException ignored) {
+                } finally {
+                    gltfDebugWriter = null;
                 }
             }
         }

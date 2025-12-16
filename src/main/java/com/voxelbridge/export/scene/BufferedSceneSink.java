@@ -5,8 +5,8 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * 区块级缓冲Sink：缓冲chunk的所有quad。
- * 不进行去重 - 去重在glTF组装阶段按material全局进行。
+ * 区块级缓冲Sink：缓冲chunk的所有quad，并在flush时进行去重。
+ * 去重在chunk级别按material分组进行，接受chunk边界的顶点重复。
  */
 public final class BufferedSceneSink implements SceneSink {
 
@@ -42,27 +42,35 @@ public final class BufferedSceneSink implements SceneSink {
     }
 
     /**
-     * 将缓冲的quads直接flush到目标sink（不去重）
-     * 去重将在glTF组装阶段按material全局进行
+     * 将缓冲的quads按material分组去重后flush到目标sink
+     * 去重在chunk级别进行（接受chunk边界的顶点重复）
      */
     public void flushTo(SceneSink target) {
         if (buffer.isEmpty()) {
             return;
         }
 
-        // 直接flush，不去重（全局去重在组装阶段完成）
+        // 按material分组
+        Map<String, List<QuadRecord>> byMaterial = new HashMap<>();
         for (QuadRecord quad : buffer) {
-            target.addQuad(
-                quad.materialGroupKey,
-                quad.spriteKey,
-                quad.overlaySpriteKey,
-                quad.positions,
-                quad.uv0,
-                quad.uv1,
-                quad.normal,
-                quad.colors,
-                quad.doubleSided
-            );
+            byMaterial.computeIfAbsent(quad.materialGroupKey, k -> new ArrayList<>()).add(quad);
+        }
+
+        // 对每个material进行去重处理
+        for (Map.Entry<String, List<QuadRecord>> entry : byMaterial.entrySet()) {
+            String materialKey = entry.getKey();
+            List<QuadRecord> quads = entry.getValue();
+
+            // 创建chunk级去重器
+            ChunkDeduplicator deduper = new ChunkDeduplicator(materialKey);
+
+            // 处理所有quads
+            for (QuadRecord quad : quads) {
+                deduper.processQuad(quad);
+            }
+
+            // flush去重后的数据
+            deduper.flushTo(target);
         }
 
         buffer.clear();
@@ -76,8 +84,8 @@ public final class BufferedSceneSink implements SceneSink {
         return buffer.size();
     }
 
-    // 内部数据结构
-    private record QuadRecord(
+    // 内部数据结构（package-visible for ChunkDeduplicator）
+    record QuadRecord(
         String materialGroupKey,
         String spriteKey,
         String overlaySpriteKey,

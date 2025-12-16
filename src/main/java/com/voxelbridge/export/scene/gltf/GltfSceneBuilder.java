@@ -180,13 +180,13 @@ public final class GltfSceneBuilder implements SceneSink {
 
             return result;
         } catch (Exception e) {
-            ExportLogger.log("[GltfBuilder][ERROR] Export failed in write() method: " + e.getClass().getName() + ": " + e.getMessage());
-            ExportLogger.log("[GltfBuilder][ERROR] Stack trace:");
+            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Export failed in write() method: " + e.getClass().getName() + ": " + e.getMessage());
+            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {
                 ExportLogger.log("    at " + element.toString());
             }
             if (e.getCause() != null) {
-                ExportLogger.log("[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
+                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
                 for (StackTraceElement element : e.getCause().getStackTrace()) {
                     ExportLogger.log("    at " + element.toString());
                 }
@@ -219,7 +219,7 @@ public final class GltfSceneBuilder implements SceneSink {
                     );
                 }
             } catch (Exception e) {
-                ExportLogger.log("[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
+                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
                 e.printStackTrace();
             }
         }, "VoxelBridge-StreamingWriter");
@@ -285,8 +285,8 @@ public final class GltfSceneBuilder implements SceneSink {
                         GeometryIndex.MaterialChunk matChunk = geometryIndex.getMaterial(matKey);
 
                         if (matChunk != null && processedMaterials % 100 == 0) {
-                            ExportLogger.log(String.format("[GltfBuilder] Processing material: %s (quads: %d)",
-                                matKey, matChunk.quadCount()));
+                            ExportLogger.log(String.format("[GltfBuilder] Processing material: %s (quads: %d, hash: %d)",
+                                matKey, matChunk.quadCount(), matKey.hashCode()));
                         }
 
                         // 从geometry.bin和finaluv.bin读取该material的数据
@@ -306,8 +306,8 @@ public final class GltfSceneBuilder implements SceneSink {
                                 progress, processedMaterials, totalMaterials));
                         }
                     } catch (Exception e) {
-                        ExportLogger.log("[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
-                        ExportLogger.log("[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
+                        ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
+                        ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
                         e.printStackTrace();
                         throw new IOException("Failed to assemble material: " + matKey, e);
                     }
@@ -332,6 +332,32 @@ public final class GltfSceneBuilder implements SceneSink {
                 // 确保缓冲区写入并更新长度后再写 glTF JSON
                 chunk.close();
                 uvChunk.close();
+
+                ExportLogger.log("[GltfBuilder] Binary chunks closed");
+                ExportLogger.log(String.format("[GltfBuilder] Main binary files: %s", chunk.getAllPaths()));
+                ExportLogger.log(String.format("[GltfBuilder] UV binary files: %s", uvChunk.getAllPaths()));
+
+                // 验证文件大小与buffer声明匹配
+                List<de.javagl.jgltf.impl.v2.Buffer> gltfBuffers = gltf.getBuffers();
+                if (gltfBuffers != null) {
+                    for (int i = 0; i < gltfBuffers.size(); i++) {
+                        de.javagl.jgltf.impl.v2.Buffer buf = gltfBuffers.get(i);
+                        String uri = buf.getUri();
+                        int declaredSize = buf.getByteLength();
+                        Path bufPath = request.outputDir().resolve(uri);
+                        if (java.nio.file.Files.exists(bufPath)) {
+                            long actualSize = java.nio.file.Files.size(bufPath);
+                            ExportLogger.log(String.format("[GltfBuilder] Buffer[%d] %s: declared=%d, actual=%d %s",
+                                i, uri, declaredSize, actualSize,
+                                (declaredSize == actualSize) ? "✓" : "MISMATCH!"));
+                            if (declaredSize != actualSize) {
+                                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Buffer size mismatch detected!");
+                            }
+                        } else {
+                            ExportLogger.log(String.format("[GltfBuilder][ERROR] Buffer file not found: %s", bufPath));
+                        }
+                    }
+                }
 
                 ExportLogger.log("[GltfBuilder] Writing glTF file...");
                 GltfAsset assetModel = new GltfAssetV2(gltf, null);
@@ -362,13 +388,13 @@ public final class GltfSceneBuilder implements SceneSink {
             ExportLogger.log("[GltfBuilder] Assembly complete: " + finalPath);
             return finalPath;
         } catch (Exception e) {
-            ExportLogger.log("[GltfBuilder][ERROR] glTF assembly failed: " + e.getClass().getName() + ": " + e.getMessage());
-            ExportLogger.log("[GltfBuilder][ERROR] Stack trace:");
+            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] glTF assembly failed: " + e.getClass().getName() + ": " + e.getMessage());
+            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {
                 ExportLogger.log("    at " + element.toString());
             }
             if (e.getCause() != null) {
-                ExportLogger.log("[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
+                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
                 for (StackTraceElement element : e.getCause().getStackTrace()) {
                     ExportLogger.log("    at " + element.toString());
                 }
@@ -379,7 +405,7 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     /**
-     * 组装单个material的primitive（使用PrimitiveData进行全局去重）
+     * 组装单个material的primitive（直接组装，数据已在采样时去重）
      */
     private void assembleMaterialPrimitive(
         String matKey,
@@ -398,8 +424,17 @@ public final class GltfSceneBuilder implements SceneSink {
     ) throws IOException {
         if (matChunk == null || matChunk.quadCount() == 0) return;
 
-        // 使用PrimitiveData进行全局顶点去重
-        PrimitiveData primData = new PrimitiveData(matKey, matChunk.quadCount());
+        // 数据已在采样时去重，直接构建顶点和索引数组
+        int quadCount = matChunk.quadCount();
+        int vertexCount = quadCount * 4;  // 每个quad 4个顶点
+        int indexCount = quadCount * 6;   // 每个quad 6个索引 (2个三角形)
+
+        List<Float> positions = new ArrayList<>(vertexCount * 3);
+        List<Float> uv0 = new ArrayList<>(vertexCount * 2);
+        List<Float> uv1 = new ArrayList<>(vertexCount * 2);
+        List<Float> colors = new ArrayList<>(vertexCount * 4);
+        List<Integer> indices = new ArrayList<>(indexCount);
+        boolean doubleSided = false;
 
         // OPTIMIZATION: Larger buffers for batch reading (1.3-1.5x faster I/O)
         // Read up to 512 quads at once to reduce system calls
@@ -413,16 +448,23 @@ public final class GltfSceneBuilder implements SceneSink {
         int skippedMismatches = 0;
 
         // OPTIMIZATION: Sort quadOffsets for sequential disk reads (2-3x faster I/O)
-        // Random seeks on SSD: ~50MB/s, Sequential reads: ~500MB/s
         List<Long> sortedOffsets = new ArrayList<>(matChunk.quadOffsets());
         Collections.sort(sortedOffsets);
 
-        // 批量读取并注册到PrimitiveData（进行去重）
-        // 注意：排序后可以顺序读取，大幅提升I/O性能
+        ExportLogger.log(String.format("[GltfBuilder] Reading material %s (hash: %d) with %d offsets",
+            matKey, materialHashValue, sortedOffsets.size()));
+        if (sortedOffsets.size() > 0) {
+            ExportLogger.log(String.format("[GltfBuilder] First 5 offsets: %s",
+                sortedOffsets.subList(0, Math.min(5, sortedOffsets.size()))));
+        }
+
+        // 批量读取quad数据并直接构建顶点数组（数据已在采样时去重）
         int totalQuads = sortedOffsets.size();
         int offsetIndex = 0;
+        int currentVertexBase = 0;  // 当前quad的起始顶点索引
+
         while (offsetIndex < totalQuads) {
-            // Group contiguous quad offsets so we only read what belongs to this material
+            // Group contiguous quad offsets for batch reading
             long startOffset = sortedOffsets.get(offsetIndex);
             int rangeCount = 1;
             while (rangeCount < BATCH_SIZE && offsetIndex + rangeCount < totalQuads) {
@@ -455,23 +497,35 @@ public final class GltfSceneBuilder implements SceneSink {
 
                 // geometry.bin格式: materialHash(4) + spriteId(4) + overlayId(4) + doubleSided(1) + pad(3) + pos(48) + normal(12) + color(64)
                 int materialHash = geometryBatchBuffer.getInt();
-                int spriteId = geometryBatchBuffer.getInt();
-                int overlayId = geometryBatchBuffer.getInt();
+
+                // Debug first few mismatches
+                if (materialHash != materialHashValue && skippedMismatches < 3) {
+                    ExportLogger.log(String.format("[GltfBuilder][DEBUG] Hash mismatch at offset %d: expected %d, got %d",
+                        sortedOffsets.get(offsetIndex + i), materialHashValue, materialHash));
+                }
+
+                geometryBatchBuffer.getInt(); // skip spriteId (不再需要)
+                geometryBatchBuffer.getInt(); // skip overlayId
                 byte doubleSidedByte = geometryBatchBuffer.get();
                 geometryBatchBuffer.get(); // skip padding
                 geometryBatchBuffer.get();
                 geometryBatchBuffer.get();
 
-                // Skip quads that belong to other materials (offset list may be non-contiguous)
+                // Skip quads that belong to other materials
                 if (materialHash != materialHashValue) {
                     skippedMismatches++;
-                    continue;
+                    continue;  // 注意：不读取数据，不递增currentVertexBase
                 }
 
-                // 读取positions (12 floats)
-                float[] positions = new float[12];
+                // 读取positions (12 floats = 4 vertices × 3 coords)
                 for (int j = 0; j < 12; j++) {
-                    positions[j] = geometryBatchBuffer.getFloat();
+                    float pos = geometryBatchBuffer.getFloat();
+                    if (Float.isNaN(pos) || Float.isInfinite(pos)) {
+                        ExportLogger.log(String.format("[GltfBuilder][ERROR] Invalid position value (NaN/Inf) in material %s at offset %d, vertex component %d",
+                            matKey, sortedOffsets.get(offsetIndex + i), j));
+                        pos = 0f; // Replace with 0 to avoid corruption
+                    }
+                    positions.add(pos);
                 }
 
                 // 跳过normal (3 floats)
@@ -479,41 +533,34 @@ public final class GltfSceneBuilder implements SceneSink {
                 geometryBatchBuffer.getFloat();
                 geometryBatchBuffer.getFloat();
 
-                // 读取colors (16 floats)
-                float[] colors = new float[16];
+                // 读取colors (16 floats = 4 vertices × 4 RGBA)
                 for (int j = 0; j < 16; j++) {
-                    colors[j] = geometryBatchBuffer.getFloat();
+                    colors.add(geometryBatchBuffer.getFloat());
                 }
 
                 // 读取UV
                 uvBatchBuffer.position(i * BYTES_PER_QUAD_UV);
-                float[] uv0 = new float[8];
-                float[] uv1 = new float[8];
                 for (int j = 0; j < 8; j++) {
-                    uv0[j] = uvBatchBuffer.getFloat();
+                    uv0.add(uvBatchBuffer.getFloat());
                 }
                 for (int j = 0; j < 8; j++) {
-                    uv1[j] = uvBatchBuffer.getFloat();
+                    uv1.add(uvBatchBuffer.getFloat());
                 }
 
-                // 从sprite ID获取sprite key
-                String spriteKey = spriteIndex.getKey(spriteId);
-                String overlaySpriteKey = overlayId >= 0 ? spriteIndex.getKey(overlayId) : null;
+                // 生成索引 (quad -> 2 triangles)
+                // Triangle 1: v0, v1, v2
+                indices.add(currentVertexBase + 0);
+                indices.add(currentVertexBase + 1);
+                indices.add(currentVertexBase + 2);
+                // Triangle 2: v0, v2, v3
+                indices.add(currentVertexBase + 0);
+                indices.add(currentVertexBase + 2);
+                indices.add(currentVertexBase + 3);
 
-                // 注册quad到PrimitiveData（进行全局去重）
-                int[] quadIndices = primData.registerQuad(spriteKey, overlaySpriteKey, positions, uv0, uv1, colors);
-                if (quadIndices != null) {
-                    // 生成索引 (quad -> 2 triangles)
-                    primData.indices.add(quadIndices[0]);
-                    primData.indices.add(quadIndices[1]);
-                    primData.indices.add(quadIndices[2]);
-                    primData.indices.add(quadIndices[0]);
-                    primData.indices.add(quadIndices[2]);
-                    primData.indices.add(quadIndices[3]);
+                currentVertexBase += 4;  // 只有成功添加顶点后才递增
 
-                    if (doubleSidedByte != 0) {
-                        primData.doubleSided = true;
-                    }
+                if (doubleSidedByte != 0) {
+                    doubleSided = true;
                 }
             }
 
@@ -524,48 +571,112 @@ public final class GltfSceneBuilder implements SceneSink {
             ExportLogger.log(String.format("[GltfBuilder][WARN] Skipped %d quads for material %s due to hash mismatch", skippedMismatches, matKey));
         }
 
-        // 如果去重后没有顶点或索引，跳过
-        if (primData.vertexCount == 0 || primData.indices.size() == 0) {
-            ExportLogger.log("[GltfBuilder] Skipping material " + matKey + " (no valid geometry after deduplication)");
-            return;
-        }
-
         // 验证数据完整性
-        if (primData.positions.size() == 0 || primData.uv0.size() == 0 || primData.colors.size() == 0) {
-            ExportLogger.log("[GltfBuilder][WARN] Material " + matKey + " has incomplete data, skipping");
+        if (positions.isEmpty() || indices.isEmpty()) {
+            ExportLogger.log("[GltfBuilder] Skipping material " + matKey + " (no valid geometry)");
             return;
         }
 
-        // 日志:记录数据大小用于调试
-        ExportLogger.log(String.format("[GltfBuilder] Material %s: vertices=%d, indices=%d, pos=%d, uv0=%d, colors=%d",
-            matKey, primData.vertexCount, primData.indices.size(),
-            primData.positions.size(), primData.uv0.size(), primData.colors.size()));
+        int finalVertexCount = positions.size() / 3;
+        int finalIndexCount = indices.size();
 
-        // 写入glTF buffers（使用去重后的数据）
-        MultiBinaryChunk.Slice posSlice = chunk.writeFloatArray(primData.positions.getArrayDirect(), primData.positions.size());
-        int posView = addView(gltf, posSlice.bufferIndex(), posSlice.byteOffset(), primData.positions.size() * 4, 34962);
-        float[] posMin = primData.positions.computeMin(3);
-        float[] posMax = primData.positions.computeMax(3);
-        int posAcc = addAccessor(gltf, posView, primData.vertexCount, "VEC3", 5126, posMin, posMax);
+        // 日志:记录数据大小
+        ExportLogger.log(String.format("[GltfBuilder] Material %s: read %d quads from %d offsets, got vertices=%d, indices=%d",
+            matKey, (finalVertexCount / 4), totalQuads, finalVertexCount, finalIndexCount));
+        ExportLogger.log(String.format("[GltfBuilder] Material %s hash: %d, skipped mismatches: %d",
+            matKey, materialHashValue, skippedMismatches));
 
-        MultiBinaryChunk.Slice uv0Slice = uvChunk.writeFloatArray(primData.uv0.getArrayDirect(), primData.uv0.size());
-        int uv0View = addView(gltf, uv0Slice.bufferIndex(), uv0Slice.byteOffset(), primData.uv0.size() * 4, 34962);
-        int uv0Acc = addAccessor(gltf, uv0View, primData.vertexCount, "VEC2", 5126, null, null);
+        // DEBUG: 验证数据一致性
+        int expectedPosSize = finalVertexCount * 3;
+        int expectedUv0Size = finalVertexCount * 2;
+        int expectedColorSize = finalVertexCount * 4;
+        if (positions.size() != expectedPosSize) {
+            ExportLogger.log(String.format("[GltfBuilder][ERROR] Position size mismatch: expected %d, got %d",
+                expectedPosSize, positions.size()));
+        }
+        if (uv0.size() != expectedUv0Size) {
+            ExportLogger.log(String.format("[GltfBuilder][ERROR] UV0 size mismatch: expected %d, got %d",
+                expectedUv0Size, uv0.size()));
+        }
+        if (colors.size() != expectedColorSize) {
+            ExportLogger.log(String.format("[GltfBuilder][ERROR] Color size mismatch: expected %d, got %d",
+                expectedColorSize, colors.size()));
+        }
+
+        // 转换为数组
+        float[] posArray = new float[positions.size()];
+        float[] uv0Array = new float[uv0.size()];
+        float[] uv1Array = new float[uv1.size()];
+        float[] colorArray = new float[colors.size()];
+        int[] indexArray = new int[indices.size()];
+
+        for (int i = 0; i < positions.size(); i++) posArray[i] = positions.get(i);
+        for (int i = 0; i < uv0.size(); i++) uv0Array[i] = uv0.get(i);
+        for (int i = 0; i < uv1.size(); i++) uv1Array[i] = uv1.get(i);
+        for (int i = 0; i < colors.size(); i++) colorArray[i] = colors.get(i);
+        for (int i = 0; i < indices.size(); i++) indexArray[i] = indices.get(i);
+
+        // 计算边界框
+        float[] posMin = computeMin(posArray, 3);
+        float[] posMax = computeMax(posArray, 3);
+
+        // Validate bounds for NaN
+        boolean hasNaN = false;
+        for (int i = 0; i < posMin.length; i++) {
+            if (Float.isNaN(posMin[i]) || Float.isNaN(posMax[i])) {
+                hasNaN = true;
+                ExportLogger.log(String.format("[GltfBuilder][ERROR] NaN detected in bounds for material %s: min[%d]=%f, max[%d]=%f",
+                    matKey, i, posMin[i], i, posMax[i]));
+            }
+        }
+        if (hasNaN) {
+            ExportLogger.log(String.format("[GltfBuilder][ERROR] Material %s has NaN in position bounds. First 10 positions: %s",
+                matKey, java.util.Arrays.toString(java.util.Arrays.copyOf(posArray, Math.min(10, posArray.length)))));
+            // Skip this material to avoid corrupting the glTF
+            return;
+        }
+
+        // 写入glTF buffers
+        MultiBinaryChunk.Slice posSlice = chunk.writeFloatArray(posArray, posArray.length);
+        int posView = addView(gltf, posSlice.bufferIndex(), posSlice.byteOffset(), posArray.length * 4, 34962);
+        int posAcc = addAccessor(gltf, posView, finalVertexCount, "VEC3", 5126, posMin, posMax);
+
+        // Check for potential integer overflow
+        if (posSlice.byteOffset() < 0) {
+            ExportLogger.log(String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: position byteOffset=%d",
+                matKey, posSlice.byteOffset()));
+        }
+
+        MultiBinaryChunk.Slice uv0Slice = uvChunk.writeFloatArray(uv0Array, uv0Array.length);
+        int uv0View = addView(gltf, uv0Slice.bufferIndex(), uv0Slice.byteOffset(), uv0Array.length * 4, 34962);
+        int uv0Acc = addAccessor(gltf, uv0View, finalVertexCount, "VEC2", 5126, null, null);
+
+        if (uv0Slice.byteOffset() < 0) {
+            ExportLogger.log(String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: uv0 byteOffset=%d",
+                matKey, uv0Slice.byteOffset()));
+        }
 
         int uv1Acc = -1;
-        if (!primData.uv1.isEmpty()) {
-            MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(primData.uv1.getArrayDirect(), primData.uv1.size());
-            int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), primData.uv1.size() * 4, 34962);
-            uv1Acc = addAccessor(gltf, uv1View, primData.vertexCount, "VEC2", 5126, null, null);
+        boolean hasUV1 = false;
+        for (float f : uv1Array) {
+            if (f != 0) {
+                hasUV1 = true;
+                break;
+            }
+        }
+        if (hasUV1) {
+            MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(uv1Array, uv1Array.length);
+            int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), uv1Array.length * 4, 34962);
+            uv1Acc = addAccessor(gltf, uv1View, finalVertexCount, "VEC2", 5126, null, null);
         }
 
-        MultiBinaryChunk.Slice colorSlice = chunk.writeFloatArray(primData.colors.getArrayDirect(), primData.colors.size());
-        int colorView = addView(gltf, colorSlice.bufferIndex(), colorSlice.byteOffset(), primData.colors.size() * 4, 34962);
-        int colorAcc = addAccessor(gltf, colorView, primData.vertexCount, "VEC4", 5126, null, null);
+        MultiBinaryChunk.Slice colorSlice = chunk.writeFloatArray(colorArray, colorArray.length);
+        int colorView = addView(gltf, colorSlice.bufferIndex(), colorSlice.byteOffset(), colorArray.length * 4, 34962);
+        int colorAcc = addAccessor(gltf, colorView, finalVertexCount, "VEC4", 5126, null, null);
 
-        MultiBinaryChunk.Slice idxSlice = chunk.writeIntArray(primData.indices.getArrayDirect(), primData.indices.size());
-        int idxView = addView(gltf, idxSlice.bufferIndex(), idxSlice.byteOffset(), primData.indices.size() * 4, 34963);
-        int idxAcc = addAccessor(gltf, idxView, primData.indices.size(), "SCALAR", 5125, null, null);
+        MultiBinaryChunk.Slice idxSlice = chunk.writeIntArray(indexArray, indexArray.length);
+        int idxView = addView(gltf, idxSlice.bufferIndex(), idxSlice.byteOffset(), indexArray.length * 4, 34963);
+        int idxAcc = addAccessor(gltf, idxView, finalIndexCount, "SCALAR", 5125, null, null);
 
         // 创建material
         String sampleSprite = matChunk.usedSprites().iterator().next();
@@ -580,7 +691,7 @@ public final class GltfSceneBuilder implements SceneSink {
         pbr.setMetallicFactor(0.0f);
         pbr.setRoughnessFactor(1.0f);
         material.setPbrMetallicRoughness(pbr);
-        material.setDoubleSided(primData.doubleSided);
+        material.setDoubleSided(doubleSided);
 
         Map<String, Object> extras = new HashMap<>();
         if (!colorMapIndices.isEmpty()) {
@@ -596,7 +707,7 @@ public final class GltfSceneBuilder implements SceneSink {
         Map<String, Integer> attrs = new LinkedHashMap<>();
         attrs.put("POSITION", posAcc);
         attrs.put("TEXCOORD_0", uv0Acc);
-        if (!primData.uv1.isEmpty()) {
+        if (hasUV1) {
             attrs.put("TEXCOORD_1", uv1Acc);
         }
         attrs.put("COLOR_0", colorAcc);
@@ -614,10 +725,6 @@ public final class GltfSceneBuilder implements SceneSink {
         node.setName(matKey);
         node.setMesh(meshes.size() - 1);
         nodes.add(node);
-
-        // OPTIMIZATION: Release PrimitiveData memory immediately after writing
-        // This prevents memory accumulation across all materials (saves 6-8GB)
-        primData.releaseMemory();
     }
 
     private void readFully(FileChannel channel, ByteBuffer buffer) throws IOException {
@@ -634,6 +741,21 @@ public final class GltfSceneBuilder implements SceneSink {
         view.setByteOffset(byteOffset);
         view.setByteLength(byteLength);
         view.setTarget(target);
+
+        // Validate bufferView doesn't exceed buffer bounds
+        List<de.javagl.jgltf.impl.v2.Buffer> buffers = gltf.getBuffers();
+        if (buffers != null && bufferIndex < buffers.size()) {
+            Integer bufferSize = buffers.get(bufferIndex).getByteLength();
+            // buffer.byteLength is only populated when the chunk is closed; skip validation while null
+            if (bufferSize != null) {
+                long viewEnd = (long) byteOffset + (long) byteLength;
+                if (viewEnd > bufferSize) {
+                    ExportLogger.log(String.format("[GltfBuilder][ERROR] BufferView exceeds buffer bounds: buffer[%d] size=%d, view offset=%d, length=%d, end=%d",
+                        bufferIndex, bufferSize, byteOffset, byteLength, viewEnd));
+                }
+            }
+        }
+
         gltf.addBufferViews(view);
         return gltf.getBufferViews().size() - 1;
     }
