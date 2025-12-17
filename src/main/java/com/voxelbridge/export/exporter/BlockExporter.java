@@ -42,6 +42,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.client.extensions.IBakedModelExtension;
 import net.neoforged.neoforge.client.model.data.ModelData;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -72,14 +73,19 @@ public final class BlockExporter {
     private double offsetX = 0;
     private double offsetY = 0;
     private double offsetZ = 0;
-    // Cache for overlay quads; keep vanilla and CTM separate to avoid CTM overwriting vanilla overlays
-    // Changed to List to support multiple overlays per position (up to 4 per face)
-    private final Map<Long, List<OverlayQuadData>> overlayCacheVanilla = new HashMap<>();
-    private final Map<Long, List<OverlayQuadData>> overlayCacheCTM = new HashMap<>();
-    // Combined overlay view (vanilla + CTM) for UV mapping on base quads
-    private final Map<Long, List<OverlayQuadData>> overlayCacheCombined = new HashMap<>();
-    // Track overlay quads' original hashes to skip double emission when cached under a different hash
-    private final Set<Long> overlayOriginalHashes = new HashSet<>();
+    // ===== NEW OVERLAY CACHE ARCHITECTURE (baseMaterialKey-based, not position-based) =====
+    // Cache overlays by their source block (baseMaterialKey) instead of position hash
+    // This ensures overlays are attributed to their true source (e.g., sand overlay stays with sand)
+    // rather than the block they "land on" (e.g., grass)
+    private final Map<String, List<OverlayQuadData>> overlayCacheByMaterial = new HashMap<>();
+    // Track which sprites have been processed as overlays to avoid duplicates
+    private final Set<String> processedOverlaySprites = new HashSet<>();
+    // Cache CTM properties-based overlay detection by sprite path
+    private final Map<String, CtmOverlayInfo> ctmOverlayCache = new HashMap<>();
+    // Reflection-based cache for Continuity overlay processors (sprite -> overlay info)
+    private static final Map<String, CtmOverlayInfo> continuityOverlayCache = new HashMap<>();
+    private static boolean continuityOverlayScanned = false;
+    private static boolean continuityOverlayRetryAllowed = true;
     // Track which sprites have already had their PBR textures loaded (deduplication)
     private final Set<String> pbrLoadedSprites = new HashSet<>();
     // Reusable scratch buffers to cut GC pressure during dense exports
@@ -91,7 +97,9 @@ public final class BlockExporter {
     // Track if current block uses CTM/connected textures (for face culling decisions)
     private boolean currentBlockIsCTM = false;
     // CTM Debug logging
-    private static final boolean CTM_LOG_ENABLED = false;
+    private static final boolean CTM_LOG_ENABLED = true;
+    // Disable legacy geometry-based CTM overlay detection; rely on properties-based detection instead
+    private static final boolean USE_GEOMETRY_CTM_DETECTION = false;
     private static final float AXIS_NORMAL_DOT_MIN = 0.9999f;
     private static final float AXIS_COMPONENT_EPS = 1e-3f;
     private static final float PLANE_EPS = 1e-4f;
@@ -112,7 +120,10 @@ public final class BlockExporter {
         final int color;
         final boolean ctmOverlay;
         final int overlayIndex; // 0-based index for this overlay (for z-offset calculation)
-        OverlayQuadData(float[] positions, float[] normal, float[] uv, float[] colorUv, String spriteKey, int color, boolean ctmOverlay, int overlayIndex) {
+        final String baseMaterialKey; // The base material this overlay belongs to (from connectTiles or block key)
+        final boolean emissive; // Whether this overlay should be marked emissive
+        final Direction direction; // Direction of the overlay quad for visibility culling
+        OverlayQuadData(float[] positions, float[] normal, float[] uv, float[] colorUv, String spriteKey, int color, boolean ctmOverlay, int overlayIndex, String baseMaterialKey, boolean emissive, Direction direction) {
             this.positions = positions;
             this.normal = normal;
             this.uv = uv;
@@ -121,8 +132,12 @@ public final class BlockExporter {
             this.color = color;
             this.ctmOverlay = ctmOverlay;
             this.overlayIndex = overlayIndex;
+            this.baseMaterialKey = baseMaterialKey;
+            this.emissive = emissive;
+            this.direction = direction;
         }
     }
+    private record CtmOverlayInfo(boolean isOverlay, String baseMaterialKey, String propertiesPath, Integer tileIndex) {}
     private static class QuadInfo {
         String sprite;
         float[] normal;
@@ -183,6 +198,14 @@ public final class BlockExporter {
             }
         }
     }
+    private void logCtmDebug(String message) {
+        if (CTM_LOG_ENABLED && ctmDebugLog != null) {
+            try {
+                ctmDebugLog.println(message);
+                ctmDebugLog.flush();
+            } catch (Exception ignored) {}
+        }
+    }
     public static void closeCTMDebugLog() {
         if (ctmDebugLog != null) {
             try {
@@ -213,10 +236,8 @@ public final class BlockExporter {
             missingNeighborDetected = true;
             return;
         }
-        overlayCacheVanilla.clear();
-        overlayCacheCTM.clear();
-        overlayCacheCombined.clear();
-        overlayOriginalHashes.clear();
+        overlayCacheByMaterial.clear();
+        processedOverlaySprites.clear();
         currentBlockIsCTM = false; // Reset for each block
         if (state.isAir()) return;
         // 原版位置哈希随机偏移（草/蕨等），可开关
@@ -308,6 +329,16 @@ public final class BlockExporter {
                 extractVertices(quad, pos, positions, uv0, quad.getSprite(), randomOffset);
                 float[] normal = GeometryUtil.computeFaceNormal(positions);
                 String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
+                // Properties-based CTM overlay detection (preferred)
+                CtmOverlayInfo ctmOverlay = resolveCtmOverlay(quad.getSprite(), spriteKey, model);
+                if (ctmOverlay != null && ctmOverlay.isOverlay()) {
+                    // Always attribute CTM overlays to the current block (source) rather than the connected target
+                    // block referenced by connectTiles. Using connectTiles here would incorrectly make the overlay
+                    // belong to whatever block it is painted onto.
+                    cacheOverlayByMaterial(blockKey, state, pos, quad, randomOffset, spriteKey);
+                    quadIndex++;
+                    continue; // skip adding overlay quads to base list
+                }
                 QuadInfo info = buildQuadInfo(spriteKey, positions, normal, quadIndex);
                 quadInfos[quadIndex] = info;
                 borrowedQuadInfos.add(info);
@@ -319,6 +350,16 @@ public final class BlockExporter {
             }
             quadIndex++;
         }
+
+        // ===== LEGACY GEOMETRY-BASED OVERLAY DETECTION (DISABLED) =====
+        // These detection methods are disabled in favor of reflection-based detection.
+        // They have O(n²) complexity and can misattribute overlays to the block they "land on"
+        // rather than their true source block (e.g., sand overlay appearing on grass).
+        // Reflection-based detection (resolveCtmOverlay) is O(1) with caching and uses
+        // the authoritative connectTiles/matchTiles from CTM properties.
+
+        /*
+        // LEGACY: DIRT_PATH special geometry detection
         if (state.is(Blocks.DIRT_PATH)) {
             Map<Long, List<QuadInfo>> footprintGroups = new HashMap<>();
             for (List<QuadInfo> list : ctmPositionQuads.values()) {
@@ -352,11 +393,14 @@ public final class BlockExporter {
                     try {
                         overlayQuad = quads.get(info.originalIndex);
                     } catch (Throwable t) { continue; }
-                    cacheOverlayQuadWithBaseHash(state, pos, overlayQuad, true, overlayIdx++, randomOffset, baseHash);
+                    cacheOverlayQuadWithBaseHash(state, pos, overlayQuad, true, overlayIdx++, randomOffset, baseHash, null);
                 }
             }
         }
-        // PASS 1b: Analyze each position and cache overlays (position-based detection)
+        */
+
+        /*
+        // LEGACY: PASS 1b - Position-based overlay detection (geometry analysis)
         for (Map.Entry<Long, List<QuadInfo>> entry : ctmPositionQuads.entrySet()) {
             List<QuadInfo> quadsAtPos = entry.getValue();
             if (quadsAtPos.size() < 2) continue; // Need at least base + overlay
@@ -373,7 +417,8 @@ public final class BlockExporter {
                 if (info.originalIndex < minIndex) minIndex = info.originalIndex;
             }
             // Apply detection rules based on quad types at this position
-            if (hasCTM) {
+            boolean handled = false;
+            if (USE_GEOMETRY_CTM_DETECTION && hasCTM) {
                 // Case A: CTM detection - require geometry validation
                 boolean allValid = true;
                 for (QuadInfo info : quadsAtPos) {
@@ -389,51 +434,50 @@ public final class BlockExporter {
                         if (info.originalIndex > minIndex) {
                             // Find the actual BakedQuad from quads list
                             BakedQuad overlayQuad = quads.get(info.originalIndex);
-                            cacheOverlayQuad(state, pos, overlayQuad, true, overlayIdx++, randomOffset);
+                            cacheOverlayQuad(state, pos, overlayQuad, true, overlayIdx++, randomOffset, null);
                         }
                     }
                 }
-            } else if (hasVanillaOverlay) {
+                handled = true;
+            }
+            if (!handled && hasVanillaOverlay) {
                 // Case B: Vanilla overlay - sprite-based detection (no geometry check)
                 int overlayIdx = 0;
                 for (QuadInfo info : quadsAtPos) {
                     if (isVanillaOverlayQuad(info.sprite)) {
                         BakedQuad overlayQuad = quads.get(info.originalIndex);
-                        cacheOverlayQuad(state, pos, overlayQuad, false, overlayIdx++, randomOffset);
+                        // Extract base material key from vanilla overlay sprite name
+                        // e.g., "minecraft:block/grass_block_overlay" -> "minecraft:grass_block"
+                        String vanillaBase = extractVanillaOverlayBase(info.sprite);
+                        cacheOverlayQuad(state, pos, overlayQuad, false, overlayIdx++, randomOffset, vanillaBase);
                     }
                 }
             }
         }
-        // Build combined overlay cache (merge vanilla and CTM overlays at same position)
-        // Copy all vanilla overlays first
-        for (Map.Entry<Long, List<OverlayQuadData>> entry : overlayCacheVanilla.entrySet()) {
-            overlayCacheCombined.put(entry.getKey(), new ArrayList<>(entry.getValue()));
-        }
-        // Append CTM overlays to the same positions (don't replace)
-        for (Map.Entry<Long, List<OverlayQuadData>> entry : overlayCacheCTM.entrySet()) {
-            List<OverlayQuadData> combined = overlayCacheCombined.computeIfAbsent(entry.getKey(), k -> new ArrayList<>());
-            combined.addAll(entry.getValue());
-        }
-        // Abnormal overlay count detection: count total overlays across all positions
-        int totalOverlayCount = 0;
-        for (List<OverlayQuadData> list : overlayCacheCombined.values()) {
-            totalOverlayCount += list.size();
-        }
-        int overlayCount = totalOverlayCount;
-        if (overlayCount > 24) {
-            if (CTM_LOG_ENABLED && ctmDebugLog != null && sampledBlockCount <= 100) {
-                ctmDebugLog.println("  [WARNING] Abnormal overlay count: " + overlayCount + " (expected <=24), clearing overlay detection");
-                ctmDebugLog.println("  [INFO] This block likely has complex geometry, not CTM overlays");
-                ctmDebugLog.flush();
+        */
+
+        // PASS 1c: Vanilla overlay detection (sprite-name based, no geometry)
+        // Vanilla overlays don't have CTM properties, so we extract source from sprite name
+        for (int i = 0; i < quads.size(); i++) {
+            BakedQuad quad = quads.get(i);
+            if (quad == null || quad.getSprite() == null) continue;
+
+            String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
+
+            // Check if this is a vanilla overlay (sprite name contains "_overlay")
+            if (isVanillaOverlayQuad(spriteKey)) {
+                // Extract base material key from sprite name
+                // e.g., "minecraft:block/grass_block_overlay" -> "minecraft:grass_block"
+                String vanillaBase = extractVanillaOverlayBase(spriteKey);
+                if (vanillaBase == null) vanillaBase = blockKey;
+
+                // Cache by baseMaterialKey
+                cacheOverlayByMaterial(vanillaBase, state, pos, quad, randomOffset, spriteKey);
             }
-            // Clear all overlay caches to treat this as a normal block without overlays
-            overlayCacheVanilla.clear();
-            overlayCacheCTM.clear();
-            overlayCacheCombined.clear();
         }
+
+        // ===== PASS 2: Process all quads and output geometry =====
         Set<Long> quadKeys = new HashSet<>();
-        Set<Long> processedPositions = new HashSet<>(); // Track base quad positions for overlay detection
-        // PASS 2: Process all quads and output geometry
         for (int i = 0; i < quads.size(); i++) {
             BakedQuad quad = quads.get(i);
             QuadInfo quadInfo = (i < quadInfos.length) ? quadInfos[i] : null;
@@ -465,16 +509,61 @@ public final class BlockExporter {
                 }
                 // Regular transparent blocks (leaves, etc.): no culling
             }
-            processQuad(state, pos, quad, quadInfo, quadKeys, processedPositions, blockKey, randomOffset);
+            processQuad(state, pos, quad, quadInfo, quadKeys, blockKey, randomOffset);
         }
+
+        // ===== PASS 3: Output all cached overlays WITH visibility culling =====
+        // Overlays are now organized by baseMaterialKey, not position
+        for (Map.Entry<String, List<OverlayQuadData>> entry : overlayCacheByMaterial.entrySet()) {
+            String materialKey = entry.getKey();
+            List<OverlayQuadData> overlays = entry.getValue();
+            if (overlays.isEmpty()) continue;
+
+            String overlayMaterialKey = materialKey + "_overlay";
+
+            // Output overlays with same culling logic as base quads
+            for (OverlayQuadData overlay : overlays) {
+                Direction dir = overlay.direction;
+
+                // Apply occlusion culling (same logic as PASS 2 base quads)
+                if (dir != null) {
+                    if (!isTransparent) {
+                        // Opaque blocks: cull if neighbor is solid
+                        if (isFaceOccluded(pos, dir)) {
+                            continue;  // Skip occluded overlay face
+                        }
+                    } else if (currentBlockIsCTM) {
+                        // CTM transparent blocks: only cull if neighbor is same block type
+                        if (isFaceOccludedBySameBlock(state, pos, dir)) {
+                            continue;  // Skip CTM overlay when connected
+                        }
+                    }
+                    // Regular transparent blocks (leaves, etc.): no culling
+                }
+
+                // Output visible overlay
+                boolean doubleSided = state.getBlock() instanceof BushBlock;
+                ColorModeHandler.ColorData overlayColorData = ColorModeHandler.prepareColors(ctx, overlay.color, true);
+                ctx.registerSpriteMaterial(overlay.spriteKey, overlayMaterialKey);
+                sceneSink.addQuad(overlayMaterialKey, overlay.spriteKey, overlay.spriteKey, overlay.positions, overlay.uv,
+                    overlayColorData.uv1, overlay.normal, overlayColorData.colors, doubleSided);
+            }
+        }
+
         for (QuadInfo info : borrowedQuadInfos) {
             quadInfoPool.release(info);
         }
     }
-    private void processQuad(BlockState state, BlockPos pos, BakedQuad quad, QuadInfo quadInfo, Set<Long> quadKeys, Set<Long> processedPositions, String blockKey, Vec3 randomOffset) {
+    private void processQuad(BlockState state, BlockPos pos, BakedQuad quad, QuadInfo quadInfo, Set<Long> quadKeys, String blockKey, Vec3 randomOffset) {
         TextureAtlasSprite sprite = quad.getSprite();
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
+
+        // Skip if this quad was already processed as an overlay in PASS 1
+        if (processedOverlaySprites.contains(spriteKey)) {
+            return;
+        }
+
         // Try to load PBR companion textures for individual export (normal/specular)
         // Only load once per unique sprite to avoid redundant I/O operations
         if (!pbrLoadedSprites.contains(spriteKey)) {
@@ -500,13 +589,6 @@ public final class BlockExporter {
         long quadKey = computeQuadKey(spriteKey, positions, normal, doubleSided, uv0);
         if (!quadKeys.add(quadKey)) return;
 
-        // Check if this quad is an overlay (already cached in PASS 1)
-        long posHash = (quadInfo != null) ? quadInfo.posHash : computePositionHash(positions);
-        if (isQuadCachedAsOverlay(posHash, spriteKey)) {
-            // Skip this quad - it's an overlay that will be output after its base quad
-            return;
-        }
-
         // This is a base quad - output it
         int argb = computeTintColor(state, pos, quad);
 
@@ -516,23 +598,6 @@ public final class BlockExporter {
         ctx.registerSpriteMaterial(spriteKey, blockKey);
 
         sceneSink.addQuad(blockKey, spriteKey, null, positions, uv0, colorData.uv1, normal, colorData.colors, doubleSided);
-
-        // Check if we've already processed overlays for this position
-        if (!processedPositions.add(posHash)) {
-            return; // Already output overlays for this position
-        }
-
-        // Output all cached overlay quads for this position
-        List<OverlayQuadData> overlays = overlayCacheCombined.get(posHash);
-        if (overlays != null && !overlays.isEmpty()) {
-            for (OverlayQuadData overlay : overlays) {
-                // Use ColorModeHandler to prepare overlay colors
-                ColorModeHandler.ColorData overlayColorData = ColorModeHandler.prepareColors(ctx, overlay.color, true);
-
-                sceneSink.addQuad(blockKey, overlay.spriteKey, "overlay", overlay.positions, overlay.uv,
-                    overlayColorData.uv1, overlay.normal, overlayColorData.colors, doubleSided);
-            }
-        }
     }
     private void extractVertices(BakedQuad quad, BlockPos pos, float[] positions, float[] uv0, TextureAtlasSprite sprite, Vec3 randomOffset) {
         int[] verts = quad.getVertices();
@@ -707,6 +772,9 @@ public final class BlockExporter {
      * Check if a quad with given position hash and sprite key is cached as an overlay.
      * Used to skip rendering overlay quads in PASS 2 (they'll be output after their base quad).
      */
+    // ===== LEGACY POSITION-HASH OVERLAY LOOKUP METHODS (REMOVED) =====
+    // These methods are no longer needed with the new baseMaterialKey-based architecture
+    /*
     private boolean isQuadCachedAsOverlay(long posHash, String spriteKey) {
         if (overlayOriginalHashes.contains(posHash)) return true;
         // Check vanilla overlays
@@ -748,6 +816,8 @@ public final class BlockExporter {
         List<OverlayQuadData> overlays = overlayCacheCombined.get(posHash);
         return (overlays != null) ? overlays : new ArrayList<>();
     }
+    */
+
     private boolean isLikelyCTMOverlay(String spriteKey) {
         if (spriteKey == null) return false;
         String key = spriteKey.toLowerCase(Locale.ROOT);
@@ -761,6 +831,296 @@ public final class BlockExporter {
     private boolean isVanillaOverlayQuad(String spriteKey) {
         return spriteKey != null && spriteKey.contains("_overlay");
     }
+
+    /**
+     * Extract base material key from vanilla overlay sprite name.
+     * Example: "minecraft:block/grass_block_overlay" -> "minecraft:grass_block"
+     */
+    private String extractVanillaOverlayBase(String spriteKey) {
+        if (spriteKey == null || !spriteKey.contains("_overlay")) {
+            return null;
+        }
+
+        String key = spriteKey;
+        String namespace = "minecraft";
+        String path = key;
+
+        // Parse namespace
+        int colon = key.indexOf(':');
+        if (colon >= 0) {
+            namespace = key.substring(0, colon);
+            path = key.substring(colon + 1);
+        }
+
+        // Remove "block/" prefix if present
+        if (path.startsWith("block/")) {
+            path = path.substring("block/".length());
+        }
+
+        // Remove "_overlay" suffix
+        path = path.replace("_overlay", "");
+
+        // Remove directional suffixes (e.g., _top, _side)
+        path = path.replaceAll("_(top|side|bottom|north|south|east|west)$", "");
+
+        return namespace + ":" + path;
+    }
+    private CtmOverlayInfo resolveCtmOverlay(TextureAtlasSprite sprite, String spriteKey, Object model) {
+        if (sprite == null) return null;
+        ResourceLocation name = sprite.contents().name();
+        String cacheKey = name.toString();
+        if (ctmOverlayCache.containsKey(cacheKey)) {
+            return ctmOverlayCache.get(cacheKey);
+        }
+        CtmOverlayInfo result = null;
+        // First, try Continuity reflection (QuadProcessors -> overlay processors)
+        CtmOverlayInfo reflectedProcessor = tryReflectContinuityProcessors(name);
+        if (reflectedProcessor != null) {
+            logCtmDebug("[CTM][REFLECT] Using Continuity processor map for " + name);
+            ctmOverlayCache.put(cacheKey, reflectedProcessor);
+            return reflectedProcessor;
+        }
+        // Try to reflect properties from CtmBakedModel
+        CtmOverlayInfo reflected = tryReflectCtm(model, name, spriteKey);
+        if (reflected != null) {
+            logCtmDebug("[CTM][REFLECT] Using reflected properties for " + name);
+            ctmOverlayCache.put(cacheKey, reflected);
+            return reflected;
+        }
+        // Heuristic fallback for Continuity reserved sprites: treat as overlay to keep offset
+        if (result == null && name.getPath().contains("continuity_reserved")) {
+            logCtmDebug("[CTM] Heuristic overlay for continuity_reserved sprite " + name);
+            result = new CtmOverlayInfo(true, null, null, parseTileIndex(name) >= 0 ? parseTileIndex(name) : null);
+        }
+        ctmOverlayCache.put(cacheKey, result);
+        return result;
+    }
+    private int parseTileIndex(ResourceLocation spriteName) {
+        String file = spriteName.getPath();
+        int idx = file.lastIndexOf('/');
+        if (idx >= 0) file = file.substring(idx + 1);
+        try {
+            return Integer.parseInt(file.replaceAll("[^0-9]", ""));
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+    private boolean matchesTile(String tiles, int tileIndex) {
+        if (tileIndex < 0) return true;
+        String[] parts = tiles.split("[ ,]");
+        for (String p : parts) {
+            if (p.isEmpty()) continue;
+            if (p.contains("-")) {
+                String[] range = p.split("-");
+                try {
+                    int start = Integer.parseInt(range[0]);
+                    int end = Integer.parseInt(range[1]);
+                    if (tileIndex >= start && tileIndex <= end) return true;
+                } catch (NumberFormatException ignored) {}
+            } else {
+                try {
+                    if (tileIndex == Integer.parseInt(p)) return true;
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return false;
+    }
+    private CtmOverlayInfo tryReflectCtm(Object model, ResourceLocation spriteName, String spriteKey) {
+        if (model == null) return null;
+        Class<?> cls = model.getClass();
+        if (!cls.getName().toLowerCase(Locale.ROOT).contains("continuity")) return null;
+        logCtmDebug("[CTM][REFLECT] Inspecting model class " + cls.getName() + " for sprite " + spriteName);
+        Properties props = null;
+        // Scan declared fields for properties-like object
+        for (var field : cls.getDeclaredFields()) {
+            try {
+                field.setAccessible(true);
+                Object value = field.get(model);
+                if (value == null) continue;
+                String vCls = value.getClass().getName();
+                logCtmDebug("[CTM][REFLECT] Field " + field.getName() + " -> " + vCls);
+                if (value instanceof Properties p) {
+                    props = p;
+                    break;
+                }
+                if (vCls.toLowerCase(Locale.ROOT).contains("ctmproperties") || vCls.toLowerCase(Locale.ROOT).contains("properties")) {
+                    props = extractPropertiesFromObject(value);
+                    logCtmDebug("[CTM][REFLECT] Extracted properties from field " + field.getName());
+                    break;
+                }
+            } catch (Throwable t) {
+                logCtmDebug("[CTM][REFLECT][WARN] Failed reading field " + field.getName() + ": " + t.getMessage());
+            }
+        }
+        if (props == null) return null;
+        String method = props.getProperty("method", "").trim().toLowerCase(Locale.ROOT);
+        String tiles = props.getProperty("tiles", "").trim();
+        String connectTiles = props.getProperty("connectTiles", "").trim();
+        int tileIndex = parseTileIndex(spriteName);
+        boolean tileMatch = matchesTile(tiles, tileIndex);
+        boolean isOverlay = "overlay".equals(method) && tileMatch;
+        String baseMaterialKey = connectTiles.isEmpty() ? null : (connectTiles.contains(":") ? connectTiles : "minecraft:" + connectTiles);
+        logCtmDebug("[CTM][REFLECT] method=" + method + " tiles=" + tiles + " connectTiles=" + connectTiles + " tileIdx=" + tileIndex + " match=" + tileMatch);
+        if (isOverlay) {
+            return new CtmOverlayInfo(true, baseMaterialKey, "reflected:" + cls.getName(), tileIndex >= 0 ? tileIndex : null);
+        }
+        return null;
+    }
+    @SuppressWarnings("unchecked")
+    private CtmOverlayInfo tryReflectContinuityProcessors(ResourceLocation spriteName) {
+        // Build the lookup map once
+        // Allow one retry if previously scanned empty (e.g., before resource reload)
+        if (continuityOverlayScanned && continuityOverlayCache.isEmpty() && continuityOverlayRetryAllowed) {
+            continuityOverlayRetryAllowed = false;
+            continuityOverlayScanned = false;
+        }
+        if (!continuityOverlayScanned) {
+            continuityOverlayScanned = true;
+            try {
+                Class<?> qpClass = Class.forName("me.pepperbell.continuity.client.model.QuadProcessors");
+                var holdersField = qpClass.getDeclaredField("processorHolders");
+                holdersField.setAccessible(true);
+                Object holdersObj = holdersField.get(null);
+                if (holdersObj instanceof Object[] holdersArr) {
+                    for (Object holder : holdersArr) {
+                        if (holder == null) continue;
+                        Object processor = null;
+                        try {
+                            var m = holder.getClass().getMethod("processor");
+                            processor = m.invoke(holder);
+                        } catch (Throwable ignored) {}
+                        if (processor == null) continue;
+                        Class<?> pCls = processor.getClass();
+                        String name = pCls.getName().toLowerCase(Locale.ROOT);
+                        if (!name.contains("overlay")) continue;
+                        // Try to read fields from StandardOverlayQuadProcessor (and compatibles)
+                        Object[] sprites = null;
+                        Set<?> connectTiles = null;
+                        Set<?> matchTiles = null;
+                        try { var f = pCls.getDeclaredField("sprites"); f.setAccessible(true); sprites = (Object[]) f.get(processor); } catch (Throwable ignored) {}
+                        try { var f = pCls.getDeclaredField("connectTilesSet"); f.setAccessible(true); connectTiles = (Set<?>) f.get(processor); } catch (Throwable ignored) {}
+                        try { var f = pCls.getDeclaredField("matchTilesSet"); f.setAccessible(true); matchTiles = (Set<?>) f.get(processor); } catch (Throwable ignored) {}
+                        String baseMaterialKey = null;
+                        baseMaterialKey = firstIdentifier(connectTiles);
+                        if (baseMaterialKey == null) baseMaterialKey = firstIdentifier(matchTiles);
+                        if (sprites != null) {
+                            for (Object s : sprites) {
+                                String key = spriteNameFromObject(s);
+                                if (key == null) continue;
+                                continuityOverlayCache.put(key, new CtmOverlayInfo(true, baseMaterialKey, "reflect:processor:" + pCls.getName(), null));
+                            }
+                        }
+                    }
+                }
+                if (CTM_LOG_ENABLED && ctmDebugLog != null && !continuityOverlayCache.isEmpty()) {
+                    ctmDebugLog.println("[CTM][REFLECT] Continuity processor scan complete, entries=" + continuityOverlayCache.size());
+                    ctmDebugLog.flush();
+                }
+            } catch (Throwable t) {
+                if (CTM_LOG_ENABLED && ctmDebugLog != null) {
+                    ctmDebugLog.println("[CTM][REFLECT][WARN] Continuity processor scan failed: " + t.getMessage());
+                    ctmDebugLog.flush();
+                }
+            }
+        }
+        if (continuityOverlayCache.isEmpty()) return null;
+        return continuityOverlayCache.get(spriteName.toString());
+    }
+    private String firstIdentifier(Set<?> set) {
+        if (set == null || set.isEmpty()) return null;
+        Object first = set.iterator().next();
+        if (first == null) return null;
+        String s = first.toString();
+        // Normalize missing namespace
+        if (!s.contains(":")) {
+            s = "minecraft:" + s;
+        }
+        return s;
+    }
+    private String deriveBaseFromSprite(String spriteKey) {
+        if (spriteKey == null || spriteKey.isEmpty()) return null;
+        String key = spriteKey;
+        String namespace = "minecraft";
+        String path = key;
+        int colon = key.indexOf(':');
+        if (colon >= 0) {
+            namespace = key.substring(0, colon);
+            path = key.substring(colon + 1);
+        }
+        if (path.startsWith("block/")) {
+            path = path.substring("block/".length());
+        }
+        if (path.contains("continuity_reserved")) {
+            return null; // avoid reserved names as base
+        }
+        // strip overlay and directional suffixes
+        path = path.replace("_overlay", "").replace("_top", "").replace("_side", "");
+        // strip trailing digits
+        path = path.replaceAll("_\\d+$", "");
+        return namespace + ":" + path;
+    }
+    private String spriteNameFromObject(Object spriteObj) {
+        if (spriteObj == null) return null;
+        try {
+            var getContents = spriteObj.getClass().getMethod("getContents");
+            Object contents = getContents.invoke(spriteObj);
+            if (contents != null) {
+                try {
+                    var getId = contents.getClass().getMethod("getId");
+                    Object id = getId.invoke(contents);
+                    return (id != null) ? id.toString() : null;
+                } catch (NoSuchMethodException ignored) {
+                    try {
+                        var nameField = contents.getClass().getDeclaredField("id");
+                        nameField.setAccessible(true);
+                        Object id = nameField.get(contents);
+                        return (id != null) ? id.toString() : null;
+                    } catch (Throwable ignored2) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            var contentsField = spriteObj.getClass().getDeclaredField("contents");
+            contentsField.setAccessible(true);
+            Object contents = contentsField.get(spriteObj);
+            if (contents != null) {
+                var getId = contents.getClass().getMethod("getId");
+                Object id = getId.invoke(contents);
+                return (id != null) ? id.toString() : null;
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+    private Properties extractPropertiesFromObject(Object obj) {
+        Properties p = new Properties();
+        readProperty(obj, "method", p);
+        readProperty(obj, "tiles", p);
+        readProperty(obj, "connectTiles", p);
+        return p;
+    }
+    private void readProperty(Object obj, String name, Properties p) {
+        try {
+            var cls = obj.getClass();
+            // Field
+            try {
+                var f = cls.getDeclaredField(name);
+                f.setAccessible(true);
+                Object v = f.get(obj);
+                if (v != null) p.setProperty(name, v.toString());
+                return;
+            } catch (NoSuchFieldException ignored) {}
+            // Getter
+            String getter = "get" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
+            try {
+                var m = cls.getDeclaredMethod(getter);
+                m.setAccessible(true);
+                Object v = m.invoke(obj);
+                if (v != null) p.setProperty(name, v.toString());
+            } catch (NoSuchMethodException ignored) {}
+        } catch (Throwable t) {
+            logCtmDebug("[CTM][REFLECT][WARN] readProperty " + name + " failed: " + t.getMessage());
+        }
+    }
     private boolean isApprox1x1Square(QuadInfo info) {
         if (info == null || info.axis < 0) return false;
         float sizeU = info.maxU - info.minU;
@@ -773,13 +1133,138 @@ public final class BlockExporter {
         if (Math.abs(sizeU - UNIT_SIZE) > SIZE_TOLERANCE) return false;
         return true;
     }
-    private void cacheOverlayQuad(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset) {
-        cacheOverlayQuadInternal(state, pos, quad, isCtmOverlay, overlayIndex, randomOffset, null, false);
+
+    /**
+     * Cache an overlay quad organized by its base material key (source block).
+     * This replaces the old position-hash based caching to ensure overlays are
+     * attributed to their true source block, not where they "land".
+     */
+    private void cacheOverlayByMaterial(String baseMaterialKey, BlockState state, BlockPos pos, BakedQuad quad, Vec3 randomOffset, String spriteKey) {
+        if (baseMaterialKey == null || baseMaterialKey.isEmpty()) {
+            baseMaterialKey = "unknown";
+        }
+
+        // Mark this sprite as processed to skip it in PASS 2
+        processedOverlaySprites.add(spriteKey);
+
+        var sprite = quad.getSprite();
+        if (sprite == null) return;
+
+        // Extract direction early for visibility culling
+        Direction dir = quad.getDirection();
+
+        // Register and cache dynamic overlay textures
+        boolean isDynamicTexture = spriteKey.contains("_overlay")
+            || spriteKey.matches(".*\\d+$")
+            || !ctx.getMaterialPaths().containsKey(spriteKey);
+        if (isDynamicTexture) {
+            com.voxelbridge.export.texture.TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
+            if (ctx.getCachedSpriteImage(spriteKey) == null) {
+                try {
+                    BufferedImage image = TextureLoader.fromSprite(sprite);
+                    if (image != null) {
+                        ctx.cacheSpriteImage(spriteKey, image);
+                    }
+                } catch (Exception ignore) {}
+            }
+        }
+
+        float[] positions = positions12Pool.acquire();
+        float[] uv0 = uv8Pool.acquire();
+        float u0 = sprite.getU0();
+        float u1 = sprite.getU1();
+        float v0 = sprite.getV0();
+        float v1 = sprite.getV1();
+        // Detect animated texture and adjust v1 to first frame
+        int spriteWidth = sprite.contents().width();
+        int spriteHeight = sprite.contents().height();
+        if (spriteHeight > spriteWidth) {
+            int frameCount = spriteHeight / spriteWidth;
+            float frameRatio = 1.0f / frameCount;
+            v1 = v0 + (v1 - v0) * frameRatio;
+        }
+        float du = u1 - u0;
+        float dv = v1 - v0;
+        if (du == 0) du = 1f;
+        if (dv == 0) dv = 1f;
+        int[] vertexColors = null;
+        float[] localPos = null;
+        try {
+            int[] verts;
+            try {
+                verts = quad.getVertices();
+            } catch (Throwable t) { return; }
+            if (verts.length < 32) return;
+            final int stride = 8;
+            vertexColors = int4Pool.acquire();
+            localPos = positions12Pool.acquire();
+            // Extract local coordinates and UV/colors
+            for (int i = 0; i < 4; i++) {
+                int base = i * stride;
+                float vx = Float.intBitsToFloat(verts[base]);
+                float vy = Float.intBitsToFloat(verts[base + 1]);
+                float vz = Float.intBitsToFloat(verts[base + 2]);
+                int abgr = verts[base + 3];
+                float uu = Float.intBitsToFloat(verts[base + 4]);
+                float vv = Float.intBitsToFloat(verts[base + 5]);
+                vertexColors[i] = abgr;
+                localPos[i * 3] = vx;
+                localPos[i * 3 + 1] = vy;
+                localPos[i * 3 + 2] = vz;
+                float su = (uu - u0) / du;
+                float sv = (vv - v0) / dv;
+                uv0[i * 2] = su;
+                uv0[i * 2 + 1] = sv;
+            }
+
+            // Get current overlay count for this material to determine z-offset index
+            List<OverlayQuadData> overlayList = overlayCacheByMaterial.computeIfAbsent(baseMaterialKey, k -> new ArrayList<>());
+            int overlayIndex = overlayList.size();
+
+            // Apply overlay offset in local coordinates to prevent z-fighting
+            applyLocalOverlayOffset(localPos, overlayIndex);
+
+            // Convert to world coordinates with offset applied
+            for (int i = 0; i < 4; i++) {
+                double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
+                double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
+                double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
+                positions[i * 3] = (float)worldX;
+                positions[i * 3 + 1] = (float)worldY;
+                positions[i * 3 + 2] = (float)worldZ;
+            }
+
+            int overlayColor = extractOverlayColor(state, pos, quad, vertexColors);
+            float[] overlayColorUv = new float[8];
+            var placement = com.voxelbridge.export.texture.ColorMapManager.registerColor(ctx, overlayColor);
+            overlayColorUv[0] = placement.u0(); overlayColorUv[1] = placement.v0();
+            overlayColorUv[2] = placement.u1(); overlayColorUv[3] = placement.v0();
+            overlayColorUv[4] = placement.u1(); overlayColorUv[5] = placement.v1();
+            overlayColorUv[6] = placement.u0(); overlayColorUv[7] = placement.v1();
+
+            float[] normal = GeometryUtil.computeFaceNormal(positions);
+            boolean emissive = state.getLightEmission() > 0;
+
+            OverlayQuadData data = new OverlayQuadData(positions.clone(), normal, uv0.clone(), overlayColorUv, spriteKey, overlayColor, true, overlayIndex, baseMaterialKey, emissive, dir);
+            overlayList.add(data);
+        } finally {
+            if (vertexColors != null) int4Pool.release(vertexColors);
+            if (localPos != null) positions12Pool.release(localPos);
+            positions12Pool.release(positions);
+            uv8Pool.release(uv0);
+        }
     }
-    private void cacheOverlayQuadWithBaseHash(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, Long forcedBaseHash) {
-        cacheOverlayQuadInternal(state, pos, quad, isCtmOverlay, overlayIndex, randomOffset, forcedBaseHash, true);
+
+    // ===== LEGACY POSITION-HASH BASED OVERLAY CACHING (REMOVED) =====
+    // These methods have been replaced by cacheOverlayByMaterial()
+    /*
+    private void cacheOverlayQuad(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, String baseMaterialKey) {
+        cacheOverlayQuadInternal(state, pos, quad, isCtmOverlay, overlayIndex, randomOffset, null, false, baseMaterialKey);
     }
-    private void cacheOverlayQuadInternal(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, Long forcedBaseHash, boolean recordOriginal) {
+    private void cacheOverlayQuadWithBaseHash(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, Long forcedBaseHash, String baseMaterialKey) {
+        cacheOverlayQuadInternal(state, pos, quad, isCtmOverlay, overlayIndex, randomOffset, forcedBaseHash, true, baseMaterialKey);
+    }
+    private void cacheOverlayQuadInternal(BlockState state, BlockPos pos, BakedQuad quad, boolean isCtmOverlay, int overlayIndex, Vec3 randomOffset, Long forcedBaseHash, boolean recordOriginal, String baseMaterialKey) {
         var sprite = quad.getSprite();
         if (sprite == null) return;
         String spriteKey = SpriteKeyResolver.resolve(sprite);
@@ -861,9 +1346,6 @@ public final class BlockExporter {
             }
             long rawHash = computePositionHash(rawPos);
 
-            // Apply overlay offset in local coordinate system (0-1 range) for precision
-            applyLocalOverlayOffset(localPos, overlayIndex);
-
             // Convert to world coordinates with double precision to avoid precision loss
             for (int i = 0; i < 4; i++) {
                 double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
@@ -884,15 +1366,26 @@ public final class BlockExporter {
             // Calculate normal for the overlay quad
             float[] normal = GeometryUtil.computeFaceNormal(positions);
 
-            long overlayPosHash = computePositionHash(positions);
             if (recordOriginal) {
                 overlayOriginalHashes.add(rawHash);
             }
-            long posHash = (forcedBaseHash != null) ? forcedBaseHash : overlayPosHash;
+            long posHash = (forcedBaseHash != null) ? forcedBaseHash : rawHash;
             Map<Long, List<OverlayQuadData>> cache = isCtmOverlay ? overlayCacheCTM : overlayCacheVanilla;
             List<OverlayQuadData> overlayList = cache.computeIfAbsent(posHash, k -> new ArrayList<>());
-            // Use the provided overlayIndex from caller (for progressive offset assignment)
-            OverlayQuadData data = new OverlayQuadData(positions.clone(), normal, uv0.clone(), overlayColorUv, spriteKey, overlayColor, isCtmOverlay, overlayIndex);
+            int resolvedOverlayIndex = overlayList.size();
+            // Apply overlay offset using resolved index to keep layers sequential
+            applyLocalOverlayOffset(localPos, resolvedOverlayIndex);
+            // Recompute positions with offset applied
+            for (int i = 0; i < 4; i++) {
+                double worldX = pos.getX() + localPos[i * 3] + offsetX + (randomOffset != null ? randomOffset.x : 0);
+                double worldY = pos.getY() + localPos[i * 3 + 1] + offsetY + (randomOffset != null ? randomOffset.y : 0);
+                double worldZ = pos.getZ() + localPos[i * 3 + 2] + offsetZ + (randomOffset != null ? randomOffset.z : 0);
+                positions[i * 3] = (float)worldX;
+                positions[i * 3 + 1] = (float)worldY;
+                positions[i * 3 + 2] = (float)worldZ;
+            }
+            String resolvedBaseMaterial = (baseMaterialKey != null && !baseMaterialKey.isEmpty()) ? baseMaterialKey : deriveBaseFromSprite(spriteKey);
+            OverlayQuadData data = new OverlayQuadData(positions.clone(), normal, uv0.clone(), overlayColorUv, spriteKey, overlayColor, isCtmOverlay, resolvedOverlayIndex, resolvedBaseMaterial, state.getLightEmission() > 0);
             overlayList.add(data);
         } finally {
             if (vertexColors != null) int4Pool.release(vertexColors);
@@ -902,6 +1395,8 @@ public final class BlockExporter {
             uv8Pool.release(uv0);
         }
     }
+    */
+
     private int extractOverlayColor(BlockState state, BlockPos pos, BakedQuad quad, int[] vertexColors) {
         for (int i = 0; i < 4; i++) {
             int abgr = vertexColors[i];

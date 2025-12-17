@@ -110,7 +110,10 @@ final class UVRemapper {
                     }
 
                     // 重映射uv1（overlay）
-                    if (overlayKey != null && !isAnimated(ctx, overlayKey) && hasAtlasPlacement(ctx, overlayKey)) {
+                    // IMPORTANT: In colormap mode, uv1 contains color map coordinates (LUT UV), not sprite texture UV
+                    // Color map UVs should NOT be remapped - they already point to the correct position in the color LUT texture
+                    boolean isColormapMode = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP;
+                    if (!isColormapMode && overlayKey != null && !isAnimated(ctx, overlayKey) && hasAtlasPlacement(ctx, overlayKey)) {
                         boolean hasUV1 = false;
                         for (float f : uv1) if (f != 0) { hasUV1 = true; break; }
                         if (hasUV1) {

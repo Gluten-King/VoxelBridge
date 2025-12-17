@@ -14,10 +14,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
 import java.util.Map;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.StandardOpenOption;
 
 /**
  * Manages BlockEntity textures by loading them and registering with the atlas system.
@@ -117,9 +114,6 @@ public final class BlockEntityTextureManager {
                     "entity_textures/" + safe(textureLoc.toString()) + "_n.png");
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
                     new ExportContext.EntityTexture(pbr.normalLocation(), pbr.normalImage().getWidth(), pbr.normalImage().getHeight()));
-                logBerProbe(ctx, "[BER-PBR] direct normal hit: " + pbr.normalLocation());
-            } else {
-                logBerProbe(ctx, "[BER-PBR] direct normal miss for " + spriteKey);
             }
             if (pbr.specularImage() != null && pbr.specularLocation() != null) {
                 repo.put(pbr.specularLocation(), specKey(spriteKey), pbr.specularImage());
@@ -127,9 +121,6 @@ public final class BlockEntityTextureManager {
                     "entity_textures/" + safe(textureLoc.toString()) + "_s.png");
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
                     new ExportContext.EntityTexture(pbr.specularLocation(), pbr.specularImage().getWidth(), pbr.specularImage().getHeight()));
-                logBerProbe(ctx, "[BER-PBR] direct specular hit: " + pbr.specularLocation());
-            } else {
-                logBerProbe(ctx, "[BER-PBR] direct specular miss for " + spriteKey);
             }
 
             // If atlas texture and _n/_s still missing, attempt atlas companion crop (e.g., chest atlas)
@@ -296,19 +287,6 @@ public final class BlockEntityTextureManager {
         return baseKey + "_s";
     }
 
-    private static void logBerProbe(ExportContext ctx, String msg) {
-        try {
-            Path dir = Path.of("logs");
-            Files.createDirectories(dir);
-            Path file = dir.resolve("berprobelog.txt");
-            Files.writeString(file,
-                LocalDateTime.now() + " " + msg + System.lineSeparator(),
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND);
-        } catch (Exception ignored) {}
-    }
-
     /**
      * Some block entity textures come from atlases (e.g., chest/sign). Their PBR companions are often atlases like chest_n.png.
      * This attempts to load atlas-level _n/_s and crop the relevant UV rectangle into sprite-specific images.
@@ -327,7 +305,6 @@ public final class BlockEntityTextureManager {
 
         // Normal
         if (ctx.getCachedSpriteImage(normalKey(spriteKey)) == null) {
-            logBerProbe(ctx, "[BER-PBR] atlas normal try " + atlasNormal + " uv[" + u0 + "," + u1 + "][" + v0 + "," + v1 + "] for " + spriteKey);
             BufferedImage atlasImg = TextureLoader.readTexture(atlasNormal);
             BufferedImage cropped = crop(atlasImg, u0, u1, v0, v1);
             if (cropped != null) {
@@ -338,14 +315,10 @@ public final class BlockEntityTextureManager {
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
                     new ExportContext.EntityTexture(genLoc, cropped.getWidth(), cropped.getHeight()));
                 ExportLogger.log("[BlockEntityTex][PBR] Cropped normal from atlas " + atlasNormal + " for " + spriteKey);
-                logBerProbe(ctx, "[BER-PBR] atlas normal cropped " + atlasNormal + " size " + cropped.getWidth() + "x" + cropped.getHeight());
-            } else {
-                logBerProbe(ctx, "[BER-PBR] atlas normal miss " + atlasNormal + " (read=" + (atlasImg != null) + ") for " + spriteKey);
             }
         }
         // Specular
         if (ctx.getCachedSpriteImage(specKey(spriteKey)) == null) {
-            logBerProbe(ctx, "[BER-PBR] atlas spec try " + atlasSpec + " uv[" + u0 + "," + u1 + "][" + v0 + "," + v1 + "] for " + spriteKey);
             BufferedImage atlasImg = TextureLoader.readTexture(atlasSpec);
             BufferedImage cropped = crop(atlasImg, u0, u1, v0, v1);
             if (cropped != null) {
@@ -356,9 +329,6 @@ public final class BlockEntityTextureManager {
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
                     new ExportContext.EntityTexture(genLoc, cropped.getWidth(), cropped.getHeight()));
                 ExportLogger.log("[BlockEntityTex][PBR] Cropped specular from atlas " + atlasSpec + " for " + spriteKey);
-                logBerProbe(ctx, "[BER-PBR] atlas spec cropped " + atlasSpec + " size " + cropped.getWidth() + "x" + cropped.getHeight());
-            } else {
-                logBerProbe(ctx, "[BER-PBR] atlas spec miss " + atlasSpec + " (read=" + (atlasImg != null) + ") for " + spriteKey);
             }
         }
     }
@@ -391,7 +361,6 @@ public final class BlockEntityTextureManager {
 
         if (needNormal) {
             ResourceLocation sibNormal = appendSuffix(pngBase, "_n");
-            logBerProbe(ctx, "[BER-PBR] sibling normal try " + sibNormal + " for " + spriteKey);
             BufferedImage img = TextureLoader.readTexture(sibNormal);
             if (img != null) {
                 repo(ctx).put(sibNormal, normalKey(spriteKey), img);
@@ -399,15 +368,11 @@ public final class BlockEntityTextureManager {
                     "entity_textures/" + safe(spriteKey) + "_n.png");
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
                     new ExportContext.EntityTexture(sibNormal, img.getWidth(), img.getHeight()));
-                logBerProbe(ctx, "[BER-PBR] sibling normal hit: " + sibNormal);
-            } else {
-                logBerProbe(ctx, "[BER-PBR] sibling normal miss " + sibNormal + " for " + spriteKey);
             }
         }
 
         if (needSpec) {
             ResourceLocation sibSpec = appendSuffix(pngBase, "_s");
-            logBerProbe(ctx, "[BER-PBR] sibling spec try " + sibSpec + " for " + spriteKey);
             BufferedImage img = TextureLoader.readTexture(sibSpec);
             if (img != null) {
                 repo(ctx).put(sibSpec, specKey(spriteKey), img);
@@ -415,9 +380,6 @@ public final class BlockEntityTextureManager {
                     "entity_textures/" + safe(spriteKey) + "_s.png");
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
                     new ExportContext.EntityTexture(sibSpec, img.getWidth(), img.getHeight()));
-                logBerProbe(ctx, "[BER-PBR] sibling spec hit: " + sibSpec);
-            } else {
-                logBerProbe(ctx, "[BER-PBR] sibling spec miss " + sibSpec + " for " + spriteKey);
             }
         }
     }

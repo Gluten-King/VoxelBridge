@@ -1,6 +1,7 @@
 package com.voxelbridge.export.scene.gltf;
 
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
@@ -94,6 +95,20 @@ public final class GltfSceneBuilder implements SceneSink {
                         boolean doubleSided) {
         if (materialGroupKey == null || spriteKey == null) return;
 
+        // colormap 模式：所有 quad 都要带 TEXCOORD_1；无 tint 时指向预留白槽
+        if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP) {
+            if (uv1 == null || uv1.length < 8) {
+                float[] lut = ColorMapManager.remapColorUV(ctx, 0xFFFFFFFF);
+                float u0 = lut[0], v0 = lut[1], u1v = lut[2], v1v = lut[3];
+                uv1 = new float[]{
+                    u0, v0,
+                    u1v, v0,
+                    u1v, v1v,
+                    u0, v1v
+                };
+            }
+        }
+
         // 启动写线程
         startWriterThread();
 
@@ -117,6 +132,7 @@ public final class GltfSceneBuilder implements SceneSink {
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "完成采样");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 1/4: Finalizing sampling...");
+            long tFinalizeSampling = TimeLogger.now();
 
             try {
                 queue.put(POISON_PILL);
@@ -134,6 +150,7 @@ public final class GltfSceneBuilder implements SceneSink {
             ExportLogger.log(String.format("[GltfBuilder] Sampling complete. Total quads: %d", totalQuads));
             ExportLogger.log(String.format("[GltfBuilder] Materials: %d", geometryIndex.size()));
             ExportLogger.log(String.format("[GltfBuilder] Sprites: %d", spriteIndex.size()));
+            TimeLogger.logDuration("gltf_finalize_sampling", TimeLogger.elapsedSince(tFinalizeSampling));
 
             if (totalQuads == 0) {
                 throw new IOException("No geometry data was written during sampling phase");
@@ -143,6 +160,7 @@ public final class GltfSceneBuilder implements SceneSink {
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "生成图集");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 2/4: Generating texture atlases...");
+            long tAtlas = TimeLogger.now();
 
             for (String spriteKey : spriteIndex.getAllKeys()) {
                 TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
@@ -150,11 +168,13 @@ public final class GltfSceneBuilder implements SceneSink {
             TextureAtlasManager.generateAllAtlases(ctx, request.outputDir());
             ColorMapManager.generateColorMaps(ctx, request.outputDir());
             ExportLogger.log("[GltfBuilder] Texture atlas generation complete");
+            TimeLogger.logDuration("gltf_atlas_generation", TimeLogger.elapsedSince(tAtlas));
 
             // 3. UV重映射
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "重映射UV");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 3/4: Remapping UVs...");
+            long tUvRemap = TimeLogger.now();
 
             Path geometryBin = request.outputDir().resolve("geometry.bin");
             Path uvrawBin = request.outputDir().resolve("uvraw.bin");
@@ -169,14 +189,17 @@ public final class GltfSceneBuilder implements SceneSink {
 
             UVRemapper.remapUVs(geometryBin, uvrawBin, finaluvBin, spriteIndex, ctx);
             ExportLogger.log("[GltfBuilder] UV remapping complete");
+            TimeLogger.logDuration("gltf_uv_remap", TimeLogger.elapsedSince(tUvRemap));
 
             // 4. 组装glTF
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "组装glTF");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 4/4: Assembling glTF...");
+            long tAssemble = TimeLogger.now();
 
             Path result = assembleGltf(request, geometryBin, finaluvBin);
             ExportLogger.log("[GltfBuilder] glTF assembly complete: " + result);
+            TimeLogger.logDuration("gltf_assembly", TimeLogger.elapsedSince(tAssemble));
 
             return result;
         } catch (Exception e) {
@@ -263,6 +286,7 @@ public final class GltfSceneBuilder implements SceneSink {
             ExportLogger.log("[GltfBuilder] Registering colormap textures...");
             List<Integer> colorMapIndices = registerColorMapTextures(request.outputDir(), textures, images, 0);
             ExportLogger.log("[GltfBuilder] Colormap textures registered: " + colorMapIndices.size());
+            long tMaterialAssembly = TimeLogger.now();
 
         try (MultiBinaryChunk chunk = new MultiBinaryChunk(binPath, gltf);
              MultiBinaryChunk uvChunk = new MultiBinaryChunk(uvBinPath, gltf);
@@ -336,6 +360,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 ExportLogger.log("[GltfBuilder] Binary chunks closed");
                 ExportLogger.log(String.format("[GltfBuilder] Main binary files: %s", chunk.getAllPaths()));
                 ExportLogger.log(String.format("[GltfBuilder] UV binary files: %s", uvChunk.getAllPaths()));
+                TimeLogger.logDuration("gltf_material_assembly", TimeLogger.elapsedSince(tMaterialAssembly));
 
                 // 验证文件大小与buffer声明匹配
                 List<de.javagl.jgltf.impl.v2.Buffer> gltfBuffers = gltf.getBuffers();
@@ -363,8 +388,10 @@ public final class GltfSceneBuilder implements SceneSink {
                 GltfAsset assetModel = new GltfAssetV2(gltf, null);
                 GltfAssetWriter writer = new GltfAssetWriter();
                 Path gltfPath = request.outputDir().resolve(request.baseName() + ".gltf");
+                long tWriteGltf = TimeLogger.now();
                 writer.writeJson(assetModel, gltfPath.toFile());
                 ExportLogger.log("[GltfBuilder] glTF file written successfully: " + gltfPath);
+                TimeLogger.logDuration("gltf_write_json", TimeLogger.elapsedSince(tWriteGltf));
 
                 // 验证文件确实被创建
                 if (!java.nio.file.Files.exists(gltfPath)) {
