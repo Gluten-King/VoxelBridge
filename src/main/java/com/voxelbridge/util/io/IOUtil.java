@@ -1,4 +1,4 @@
-package com.voxelbridge.util;
+package com.voxelbridge.util.io;
 
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;

@@ -1,6 +1,6 @@
 package com.voxelbridge.export.scene.gltf;
 
-import com.voxelbridge.util.TimeLogger;
+import com.voxelbridge.util.debug.TimeLogger;
 import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.IOException;

@@ -74,7 +74,7 @@ public final class ExportProgressTracker {
     }
 
     /**
-     * Called by RegionSampler once the task list is finalized so the tracker matches the actual workload.
+     * Called by StreamingRegionSampler once the task list is finalized so the tracker matches the actual workload.
      */
     public static void initForExport(Set<Long> chunkKeys) {
         chunkStates.clear();

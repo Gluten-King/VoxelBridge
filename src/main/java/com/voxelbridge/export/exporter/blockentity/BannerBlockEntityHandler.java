@@ -47,7 +47,7 @@ final class BannerBlockEntityHandler implements BlockEntityHandler {
                 textures.bakedHandle().textureLocation()
             );
         } else {
-            com.voxelbridge.util.ExportLogger.log("[BannerBlockEntityHandler][WARN] Missing baked image for " + textures.bakedHandle().spriteKey());
+            com.voxelbridge.util.debug.ExportLogger.log("[BannerBlockEntityHandler][WARN] Missing baked image for " + textures.bakedHandle().spriteKey());
         }
 
         TextureOverrideMap overrideWrapper = textures.overrides();

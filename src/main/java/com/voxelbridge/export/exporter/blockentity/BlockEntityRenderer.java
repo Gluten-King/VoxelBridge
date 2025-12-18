@@ -2,10 +2,10 @@ package com.voxelbridge.export.exporter.blockentity;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
-import com.voxelbridge.util.BlockEntityDebugLogger;
+import com.voxelbridge.util.debug.BlockEntityDebugLogger;
 import com.voxelbridge.config.ExportRuntimeConfig;
-import com.voxelbridge.export.util.ColorModeHandler;
-import com.voxelbridge.export.util.GeometryUtil;
+import com.voxelbridge.export.util.color.ColorModeHandler;
+import com.voxelbridge.export.util.geometry.GeometryUtil;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
@@ -94,18 +94,18 @@ public final class BlockEntityRenderer {
         double offsetZ,
         TextureOverrideMap overrides
     ) {
-        com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
+        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
         BlockEntityRenderDispatcher dispatcher = ctx.getMc().getBlockEntityRenderDispatcher();
         net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer =
             (net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity>)
             dispatcher.getRenderer(blockEntity);
 
         if (renderer == null) {
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] No renderer found for: " + blockEntity.getClass().getSimpleName());
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] No renderer found for: " + blockEntity.getClass().getSimpleName());
             return null;
         }
 
-        com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Found renderer: " + renderer.getClass().getSimpleName());
+        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Found renderer: " + renderer.getClass().getSimpleName());
         return new RenderTask(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer);
     }
 
@@ -123,6 +123,7 @@ public final class BlockEntityRenderer {
         net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer
     ) {
         try {
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer][renderDirect] Starting render for " + blockEntity.getClass().getSimpleName());
             if (overrides != null) {
                 OVERRIDES.set(overrides);
             }
@@ -131,6 +132,7 @@ public final class BlockEntityRenderer {
 
             CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, offsetX, offsetY, offsetZ, blockEntity);
 
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer][renderDirect] Calling renderer.render()...");
             renderer.render(
                 blockEntity,
                 0.0f,
@@ -140,16 +142,17 @@ public final class BlockEntityRenderer {
                 OverlayTexture.NO_OVERLAY
             );
 
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer][renderDirect] renderer.render() returned, flushing buffer...");
             captureBuffer.flush();
 
             boolean hadGeometry = captureBuffer.hadGeometry();
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Render complete: hadGeometry=" + hadGeometry);
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Final result: " + hadGeometry);
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Render complete: hadGeometry=" + hadGeometry);
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Final result: " + hadGeometry);
             return hadGeometry;
         } catch (Exception e) {
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Render error: " + e.getMessage());
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Render error: " + e.getMessage());
             e.printStackTrace();
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityRenderer] Final result: false");
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Final result: false");
             return false;
         } finally {
             OVERRIDES.remove();
@@ -224,6 +227,7 @@ public final class BlockEntityRenderer {
 
         @Override
         public VertexConsumer getBuffer(RenderType renderType) {
+            BlockEntityDebugLogger.log("[CaptureBuffer] getBuffer() called for RenderType: " + renderType);
             return collectors.computeIfAbsent(renderType, rt -> new VertexCollector(this, rt));
         }
 

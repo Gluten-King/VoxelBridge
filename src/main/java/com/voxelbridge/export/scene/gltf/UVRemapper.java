@@ -3,7 +3,7 @@ package com.voxelbridge.export.scene.gltf;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.texture.TextureAtlasManager;
-import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.debug.ExportLogger;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -13,21 +13,21 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 /**
- * UV重映射器：顺序读取uvraw.bin，根据atlas重映射UV坐标，流式写入finaluv.bin。
+ * UV Remapper: Sequentially reads uvraw.bin, remaps UV coordinates based on atlas, and streams to finaluv.bin.
  */
 final class UVRemapper {
     private static final int CHUNK_SIZE_QUADS = 65536; // 64K quads per chunk
-    private static final int BYTES_PER_QUAD_UV = 64;   // 每个quad的UV数据大小
+    private static final int BYTES_PER_QUAD_UV = 64;   // UV data size per quad
 
     private UVRemapper() {}
 
     /**
-     * 重映射UV坐标
-     * @param geometryBin geometry.bin路径（用于读取spriteId）
-     * @param uvrawBin uvraw.bin路径
-     * @param finaluvBin 输出finaluv.bin路径
-     * @param spriteIndex sprite索引
-     * @param ctx 导出上下文
+     * Remaps UV coordinates
+     * @param geometryBin geometry.bin path (for reading spriteId)
+     * @param uvrawBin uvraw.bin path
+     * @param finaluvBin output finaluv.bin path
+     * @param spriteIndex sprite index
+     * @param ctx export context
      */
     static void remapUVs(
         Path geometryBin,
@@ -43,7 +43,7 @@ final class UVRemapper {
 
         boolean atlasEnabled = ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS;
         if (!atlasEnabled) {
-            // 无atlas模式，直接复制uvraw.bin到finaluv.bin
+            // No atlas mode, directly copy uvraw.bin to finaluv.bin
             ExportLogger.log("[UVRemapper] Atlas disabled, copying uvraw.bin -> finaluv.bin");
             java.nio.file.Files.copy(uvrawBin, finaluvBin, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             return;
@@ -56,7 +56,7 @@ final class UVRemapper {
                  StandardOpenOption.WRITE,
                  StandardOpenOption.TRUNCATE_EXISTING)) {
 
-            // 分配缓冲区
+            // Allocate buffers
             int chunkBytes = CHUNK_SIZE_QUADS * BYTES_PER_QUAD_UV;
             ByteBuffer geometryBuffer = ByteBuffer.allocateDirect(CHUNK_SIZE_QUADS * 140).order(ByteOrder.LITTLE_ENDIAN);
             ByteBuffer uvInBuffer = ByteBuffer.allocateDirect(chunkBytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -66,7 +66,7 @@ final class UVRemapper {
             while (processedQuads < totalQuads) {
                 int quadsThisChunk = (int) Math.min(CHUNK_SIZE_QUADS, totalQuads - processedQuads);
 
-                // 读取geometry chunk（获取spriteId）
+                // Read geometry chunk (to get spriteId)
                 geometryBuffer.clear();
                 geometryBuffer.limit(quadsThisChunk * 140);
                 while (geometryBuffer.hasRemaining()) {
@@ -74,7 +74,7 @@ final class UVRemapper {
                 }
                 geometryBuffer.flip();
 
-                // 读取UV chunk
+                // Read UV chunk
                 uvInBuffer.clear();
                 uvInBuffer.limit(quadsThisChunk * BYTES_PER_QUAD_UV);
                 while (uvInBuffer.hasRemaining()) {
@@ -82,25 +82,25 @@ final class UVRemapper {
                 }
                 uvInBuffer.flip();
 
-                // 重映射UV
+                // Remap UVs
                 uvOutBuffer.clear();
                 for (int i = 0; i < quadsThisChunk; i++) {
-                    // 从geometry读取spriteId（跳过其他字段）
-                    geometryBuffer.position(i * 140 + 4); // 跳过materialHash
+                    // Read spriteId from geometry (skip other fields)
+                    geometryBuffer.position(i * 140 + 4); // Skip materialHash
                     int spriteId = geometryBuffer.getInt();
                     int overlaySpriteId = geometryBuffer.getInt();
 
                     String spriteKey = spriteIndex.getKey(spriteId);
                     String overlayKey = overlaySpriteId >= 0 ? spriteIndex.getKey(overlaySpriteId) : null;
 
-                    // 从uvIn读取原始UV
+                    // Read original UV from uvIn
                     uvInBuffer.position(i * BYTES_PER_QUAD_UV);
                     float[] uv0 = new float[8];
                     float[] uv1 = new float[8];
                     for (int j = 0; j < 8; j++) uv0[j] = uvInBuffer.getFloat();
                     for (int j = 0; j < 8; j++) uv1[j] = uvInBuffer.getFloat();
 
-                    // 重映射uv0
+                    // Remap uv0
                     if (spriteKey != null && !isAnimated(ctx, spriteKey) && hasAtlasPlacement(ctx, spriteKey)) {
                         for (int v = 0; v < 4; v++) {
                             float[] remapped = TextureAtlasManager.remapUV(ctx, spriteKey, 0xFFFFFF, uv0[v * 2], uv0[v * 2 + 1]);
@@ -109,7 +109,7 @@ final class UVRemapper {
                         }
                     }
 
-                    // 重映射uv1（overlay）
+                    // Remap uv1 (overlay)
                     // IMPORTANT: In colormap mode, uv1 contains color map coordinates (LUT UV), not sprite texture UV
                     // Color map UVs should NOT be remapped - they already point to the correct position in the color LUT texture
                     boolean isColormapMode = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP;
@@ -125,12 +125,12 @@ final class UVRemapper {
                         }
                     }
 
-                    // 写入重映射后的UV
+                    // Write remapped UVs
                     for (float f : uv0) uvOutBuffer.putFloat(f);
                     for (float f : uv1) uvOutBuffer.putFloat(f);
                 }
 
-                // 写入finaluv chunk
+                // Write finaluv chunk
                 uvOutBuffer.flip();
                 while (uvOutBuffer.hasRemaining()) {
                     uvOutChannel.write(uvOutBuffer);
@@ -138,7 +138,7 @@ final class UVRemapper {
 
                 processedQuads += quadsThisChunk;
 
-                // 进度日志（每10%或最后）
+                // Progress logging (every 10% or last)
                 if (totalQuads > 0) {
                     double progress = processedQuads * 100.0 / totalQuads;
                     if (processedQuads % Math.max(1, totalQuads / 10) == 0 || processedQuads == totalQuads) {

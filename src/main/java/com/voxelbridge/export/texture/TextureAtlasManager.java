@@ -7,9 +7,9 @@ import com.voxelbridge.export.ExportContext.BlockEntityAtlasPlacement;
 import com.voxelbridge.export.ExportContext.TexturePlacement;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
-import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.export.texture.PngjWriter;
-import com.voxelbridge.util.TimeLogger;
+import com.voxelbridge.util.debug.TimeLogger;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
@@ -763,7 +763,7 @@ public final class TextureAtlasManager {
             copyOriginalMcmeta(ctx, spriteKey, spriteDir, baseName);
 
             exportCount++;
-            com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+            com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
                 "[Animation] Exported %s: %d frames to %s",
                 spriteKey, frameCount, spriteDir.getFileName()
             ));
@@ -772,7 +772,7 @@ public final class TextureAtlasManager {
         // ✅ 新增日志：输出导出成功统计
         ExportLogger.logAnimation(String.format("[Animation] Export completed: %d animations", exportCount));
 
-        com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+        com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
             "[Animation] ===== EXPORT COMPLETE: %d animations exported =====", exportCount
         ));
     }

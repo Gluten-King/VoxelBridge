@@ -1,7 +1,7 @@
 package com.voxelbridge.export.texture;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
-import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.debug.ExportLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.metadata.animation.AnimationMetadataSection;
@@ -256,13 +256,13 @@ public final class AnimatedTextureHelper {
 
         // OPTIMIZATION: Skip expensive filesystem scan if cache is already warmed up
         if (cacheWarmedUp) {
-            com.voxelbridge.util.ExportLogger.logAnimation("[Animation][CACHE] Using cached scan results (skipping 0.5-2s filesystem scan)");
+            com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][CACHE] Using cached scan results (skipping 0.5-2s filesystem scan)");
             return;
         }
 
         int totalFound = 0;
 
-        com.voxelbridge.util.ExportLogger.logAnimation("[Animation] ===== ANIMATION SCAN START =====");
+        com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation] ===== ANIMATION SCAN START =====");
 
         if (whitelist != null && !whitelist.isEmpty()) {
             // Whitelist-only scan: probe exactly the sprites used by the current export.
@@ -275,15 +275,15 @@ public final class AnimatedTextureHelper {
                 AnimatedFrameSet frames = detectFromMetadata(key, pngLoc, repo);
                 if (frames != null) {
                     whitelistFound++;
-                    com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+                    com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
                         "[Animation][WHITELIST] %s (%d frames)", key, frames.frames().size()
                     ));
                 } else {
-                    com.voxelbridge.util.ExportLogger.logAnimation("[Animation][WHITELIST][MISS] No animation metadata for: " + pngLoc);
+                    com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][WHITELIST][MISS] No animation metadata for: " + pngLoc);
                 }
             }
             totalFound += whitelistFound;
-            com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Whitelist scan complete: %d animations found", whitelistFound));
+            com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format("[Animation] Whitelist scan complete: %d animations found", whitelistFound));
         } else {
             // Fallback path: broader scan (atlas + standard paths) if no whitelist available.
             try {
@@ -291,9 +291,9 @@ public final class AnimatedTextureHelper {
                     ctx.getMc().getModelManager().getAtlas(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS);
                 int atlasCount = scanAtlasAnimations(blockAtlas, repo, whitelist);
                 totalFound += atlasCount;
-                com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Atlas scan: %d animations found", atlasCount));
+                com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format("[Animation] Atlas scan: %d animations found", atlasCount));
             } catch (Exception e) {
-                com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] Atlas scan failed: " + e.getMessage());
+                com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][ERROR] Atlas scan failed: " + e.getMessage());
                 e.printStackTrace();
             }
 
@@ -312,19 +312,19 @@ public final class AnimatedTextureHelper {
                 for (String path : additionalPaths) {
                     int pathCount = scanPathForMetadata(rm, null, path, repo, whitelist);
                     totalFound += pathCount;
-                    com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] Path '%s': %d animations found", path, pathCount));
+                    com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format("[Animation] Path '%s': %d animations found", path, pathCount));
                 }
             } catch (Exception e) {
-                com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] File scan failed: " + e.getMessage());
+                com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][ERROR] File scan failed: " + e.getMessage());
                 e.printStackTrace();
             }
         }
 
-        com.voxelbridge.util.ExportLogger.logAnimation(String.format("[Animation] ===== SCAN COMPLETE: %d total animations =====", totalFound));
+        com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format("[Animation] ===== SCAN COMPLETE: %d total animations =====", totalFound));
 
         // OPTIMIZATION: Mark cache as warmed up to skip future scans
         cacheWarmedUp = true;
-        com.voxelbridge.util.ExportLogger.logAnimation("[Animation][CACHE] Cache warmed up - future exports will skip filesystem scan");
+        com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][CACHE] Cache warmed up - future exports will skip filesystem scan");
     }
 
     /**
@@ -336,8 +336,8 @@ public final class AnimatedTextureHelper {
     private static int scanAtlasAnimations(net.minecraft.client.renderer.texture.TextureAtlas atlas,
                                            TextureRepository repo,
                                            java.util.Set<String> whitelist) {
-        com.voxelbridge.util.ExportLogger.logAnimation("[Animation][INFO] Atlas.getSprites() API not available, skipping atlas scan");
-        com.voxelbridge.util.ExportLogger.logAnimation("[Animation][INFO] Relying on file system scanning for animation detection");
+        com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][INFO] Atlas.getSprites() API not available, skipping atlas scan");
+        com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][INFO] Relying on file system scanning for animation detection");
         return 0;
     }
 
@@ -359,7 +359,7 @@ public final class AnimatedTextureHelper {
             java.util.Map<ResourceLocation, net.minecraft.server.packs.resources.Resource> resources =
                 rm.listResources(cleanPath, loc -> loc.getPath().endsWith(".png"));
 
-            com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+            com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
                 "[Animation][DEBUG] listResources('%s') available: %d files",
                 cleanPath, resources.size()
             ));
@@ -387,7 +387,7 @@ public final class AnimatedTextureHelper {
                             continue; // Skip sprites outside the export whitelist
                         }
                         // Record every discovered .mcmeta for debugging
-                        com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+                        com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
                             "[Animation][MCMETA] %s meta=%s", spriteKey, metaLoc
                         ));
 
@@ -396,7 +396,7 @@ public final class AnimatedTextureHelper {
                             AnimatedFrameSet frames = detectFromMetadata(spriteKey, pngLoc, repo);
                             if (frames != null) {
                                 foundCount++;
-                                com.voxelbridge.util.ExportLogger.logAnimation(String.format(
+                                com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
                                     "[Animation] File scan hit: %s (%d frames)",
                                     spriteKey, frames.frames().size()
                                 ));
@@ -404,11 +404,11 @@ public final class AnimatedTextureHelper {
                         }
                     }
                 } catch (Exception e) {
-                    com.voxelbridge.util.ExportLogger.logAnimation("[Animation][WARN] File check error for " + pngLoc + ": " + e.getMessage());
+                    com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][WARN] File check error for " + pngLoc + ": " + e.getMessage());
                 }
             }
         } catch (Exception e) {
-            com.voxelbridge.util.ExportLogger.logAnimation("[Animation][ERROR] Path scan failed for '" + path + "': " + e.getMessage());
+            com.voxelbridge.util.debug.ExportLogger.logAnimation("[Animation][ERROR] Path scan failed for '" + path + "': " + e.getMessage());
             e.printStackTrace();
         }
 

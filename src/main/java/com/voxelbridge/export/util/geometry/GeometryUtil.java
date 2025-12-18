@@ -1,4 +1,4 @@
-package com.voxelbridge.export.util;
+package com.voxelbridge.export.util.geometry;
 
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 

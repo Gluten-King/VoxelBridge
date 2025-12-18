@@ -1,4 +1,4 @@
-package com.voxelbridge.util;
+package com.voxelbridge.util.client;
 
 import com.voxelbridge.export.ExportProgressTracker;
 import net.minecraft.ChatFormatting;

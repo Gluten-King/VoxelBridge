@@ -1,6 +1,6 @@
 package com.voxelbridge.export.exporter.blockentity;
 
-import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.debug.ExportLogger;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -24,6 +24,7 @@ public final class BlockEntityRenderBatch {
     public void enqueue(BlockEntityRenderer.RenderTask task) {
         if (task != null) {
             tasks.add(task);
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderBatch] Enqueued task, total queued: " + tasks.size());
         }
     }
 
@@ -36,18 +37,24 @@ public final class BlockEntityRenderBatch {
      */
     public void flush(Minecraft mc) {
         if (tasks.isEmpty()) {
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderBatch] flush() called but queue is empty");
             return;
         }
+        int taskCount = tasks.size();
+        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderBatch] flush() called with " + taskCount + " tasks");
         mc.executeBlocking(() -> {
+            int executed = 0;
             BlockEntityRenderer.RenderTask task;
             while ((task = tasks.poll()) != null) {
                 try {
                     task.run();
+                    executed++;
                 } catch (Exception e) {
-                    ExportLogger.log("[BlockEntityRenderBatch][ERROR] " + e.getMessage());
+                    com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderBatch][ERROR] " + e.getMessage());
                     e.printStackTrace();
                 }
             }
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderBatch] Executed " + executed + " tasks");
         });
         tasks.clear();
     }

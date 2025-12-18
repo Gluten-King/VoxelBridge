@@ -1,8 +1,9 @@
-package com.voxelbridge.export.util;
+package com.voxelbridge.export.util.color;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.texture.ColorMapManager;
+import com.voxelbridge.export.util.geometry.GeometryUtil;
 
 /**
  * Handles color mode logic for quad exporters.
@@ -47,7 +48,7 @@ public final class ColorModeHandler {
             );
         } else {
             // ColorMap mode: use TEXCOORD_1
-            // 无 tint 时强制映射到预留白槽，避免生成额外 LUT 条目
+            // Force white slot for non-tinted to avoid extra LUT entries
             float[] colorUv = getColormapUV(ctx, hasTint ? argb : 0xFFFFFFFF);
             return new ColorData(
                 colorUv,

@@ -1,7 +1,7 @@
 package com.voxelbridge.export.texture;
 
 import com.voxelbridge.export.ExportContext;
-import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.debug.ExportLogger;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;

@@ -8,10 +8,10 @@ import com.voxelbridge.export.exporter.BlockExporter;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺失的类
 import com.voxelbridge.export.texture.TextureAtlasManager;
-import com.voxelbridge.util.BlockEntityDebugLogger;
-import com.voxelbridge.util.ExportLogger;
-import com.voxelbridge.util.TimeLogger;
-import com.voxelbridge.util.ProgressNotifier;
+import com.voxelbridge.util.debug.BlockEntityDebugLogger;
+import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.TimeLogger;
+import com.voxelbridge.util.client.ProgressNotifier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -94,7 +94,8 @@ public final class GltfExportService {
         BlockEntityDebugLogger.initialize(outDir);
 
         // 修复: 初始化 CTM 调试日志
-        BlockExporter.initializeCTMDebugLog(outDir);
+        // CTM debug logging is now handled internally by CtmDetector
+        // BlockExporter.initializeCTMDebugLog(outDir);  // REMOVED
 
         // Clear BlockEntity texture registry for new export
         com.voxelbridge.export.texture.BlockEntityTextureManager.clear(ctx);
@@ -194,7 +195,8 @@ public final class GltfExportService {
         } finally {
             BlockEntityDebugLogger.close();
             ExportLogger.close();
-            BlockExporter.closeCTMDebugLog();
+            // CTM debug logging is now handled internally by CtmDetector
+            // BlockExporter.closeCTMDebugLog();  // REMOVED
             TimeLogger.close();
         }
 

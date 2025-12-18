@@ -29,6 +29,7 @@ public final class GenericBlockEntityHandler implements BlockEntityHandler {
         double offsetZ,
         BlockEntityRenderBatch renderBatch
     ) {
+        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] Attempting to export BlockEntity: " + blockEntity.getClass().getSimpleName());
         BlockEntityRenderer.RenderTask task = BlockEntityRenderer.createTask(
             ctx,
             blockEntity,
@@ -41,20 +42,27 @@ public final class GenericBlockEntityHandler implements BlockEntityHandler {
 
         boolean rendered = false;
         if (task != null) {
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] Task created, renderBatch=" + (renderBatch != null ? "present" : "null"));
             if (renderBatch != null) {
                 renderBatch.enqueue(task);
                 rendered = true; // scheduled for batch execution
+                com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] Task enqueued to batch");
             } else {
                 task.run();
                 rendered = task.wasSuccessful();
+                com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] Task executed immediately, success=" + rendered);
             }
+        } else {
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] createTask returned null");
         }
 
         if (rendered) {
             // Keep the block model (BlockEntity adds to it, doesn't replace)
+            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] Returning RENDERED_KEEP_BLOCK");
             return BlockEntityExportResult.RENDERED_KEEP_BLOCK;
         }
 
+        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[GenericBlockEntityHandler] Returning NOT_HANDLED");
         return BlockEntityExportResult.NOT_HANDLED;
     }
 }

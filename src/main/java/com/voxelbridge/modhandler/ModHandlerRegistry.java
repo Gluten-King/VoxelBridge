@@ -13,6 +13,15 @@ import java.util.Optional;
 
 /**
  * Registry for mod-specific block handlers.
+ *
+ * NOTE: This registry is for mods that need to COMPLETELY REPLACE block rendering logic.
+ *
+ * CTM/Continuity and Fabric Rendering API are handled differently:
+ * - Fabric Rendering API: Handled directly in BlockExporter.getQuads() via FabricApiHelper
+ * - CTM/Continuity overlays: Detected in BlockExporter.sampleBlock() via CtmDetector
+ *
+ * Only register handlers here if a mod requires custom quad generation that can't be
+ * handled through standard Fabric API or CTM detection.
  */
 public final class ModHandlerRegistry {
 

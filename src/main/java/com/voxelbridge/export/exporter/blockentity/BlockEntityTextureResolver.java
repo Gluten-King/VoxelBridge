@@ -85,7 +85,7 @@ public final class BlockEntityTextureResolver {
                 if (atlasGetter != null) {
                     var sprite = atlasGetter.apply(texture);
                     if (sprite != null && !isMissingSprite(sprite)) {
-                        com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Found texture " + texture +
+                        com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Found texture " + texture +
                             " in atlas " + atlas);
                         return new ResolvedTexture(texture, sprite.getU0(), sprite.getU1(),
                             sprite.getV0(), sprite.getV1(), true, sprite, atlas);
@@ -97,11 +97,11 @@ public final class BlockEntityTextureResolver {
 
         // Not found in any atlas - treat as standalone texture
         if (texture != null && texture.getPath().startsWith("textures/atlas/")) {
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Atlas texture not resolved via sprite, using full atlas: " + texture);
+            com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Atlas texture not resolved via sprite, using full atlas: " + texture);
             return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, true, null, texture);
         }
 
-        com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Texture not in any atlas, treating as standalone: " + texture);
+        com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Texture not in any atlas, treating as standalone: " + texture);
         return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, false, null, null);
     }
 
@@ -222,7 +222,7 @@ public final class BlockEntityTextureResolver {
      */
     private static ResolvedTexture resolveTextureInAtlas(ResourceLocation atlas, ResourceLocation texture) {
         if (atlas == null || texture == null) {
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Null atlas or texture, using fallback");
+            com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Null atlas or texture, using fallback");
             return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, false, null, atlas);
         }
 
@@ -232,22 +232,22 @@ public final class BlockEntityTextureResolver {
             if (atlasGetter != null) {
                 var atlasSprite = atlasGetter.apply(texture);
                 if (atlasSprite != null && !isMissingSprite(atlasSprite)) {
-                    com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Resolved sprite for " + texture + " in atlas " + atlas +
+                    com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Resolved sprite for " + texture + " in atlas " + atlas +
                         " UV: [" + atlasSprite.getU0() + "," + atlasSprite.getU1() + "] x [" + atlasSprite.getV0() + "," + atlasSprite.getV1() + "]");
                     return new ResolvedTexture(texture, atlasSprite.getU0(), atlasSprite.getU1(),
                         atlasSprite.getV0(), atlasSprite.getV1(), true, atlasSprite, atlas);
                 }
             }
         } catch (Exception e) {
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Failed to resolve sprite: " + e.getMessage());
+            com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Failed to resolve sprite: " + e.getMessage());
         }
         // Fallbacks
         if (texture != null && texture.getPath().startsWith("textures/atlas/")) {
-            com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Atlas texture not resolved via sprite, using full atlas: " + texture);
+            com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Atlas texture not resolved via sprite, using full atlas: " + texture);
             return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, true, null, texture);
         }
 
-        com.voxelbridge.util.ExportLogger.log("[BlockEntityTextureResolver] Texture not in atlas, treating as standalone: " + texture);
+        com.voxelbridge.util.debug.ExportLogger.log("[BlockEntityTextureResolver] Texture not in atlas, treating as standalone: " + texture);
         return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, false, null, null);
     }
 }

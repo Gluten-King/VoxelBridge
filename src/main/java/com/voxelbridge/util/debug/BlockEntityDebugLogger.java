@@ -1,4 +1,4 @@
-package com.voxelbridge.util;
+package com.voxelbridge.util.debug;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -14,8 +14,8 @@ import java.time.format.DateTimeFormatter;
  */
 public final class BlockEntityDebugLogger {
 
-    // Disabled for release builds to avoid generating large debug logs.
-    private static final boolean ENABLED = false;
+    // Enabled for debugging BlockEntity export issues.
+    private static final boolean ENABLED = true;
 
     private static final DateTimeFormatter TIMESTAMP =
         DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS");
@@ -48,6 +48,8 @@ public final class BlockEntityDebugLogger {
                 System.err.printf("[BlockEntityDebugLogger] Failed to write log: %s%n", e.getMessage());
             }
         }
+        // Also write to main export log for convenience
+        ExportLogger.log(message);
     }
 
     public static synchronized void close() {

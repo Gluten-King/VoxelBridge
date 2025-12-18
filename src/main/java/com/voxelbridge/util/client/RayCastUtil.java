@@ -1,4 +1,4 @@
-package com.voxelbridge.util;
+package com.voxelbridge.util.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;

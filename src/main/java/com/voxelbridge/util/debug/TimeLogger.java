@@ -1,4 +1,4 @@
-package com.voxelbridge.util;
+package com.voxelbridge.util.debug;
 
 import java.io.BufferedWriter;
 import java.io.IOException;

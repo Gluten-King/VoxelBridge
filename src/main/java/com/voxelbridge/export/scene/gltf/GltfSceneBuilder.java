@@ -7,9 +7,9 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.export.texture.TextureAtlasManager;
-import com.voxelbridge.util.ExportLogger;
-import com.voxelbridge.util.ProgressNotifier;
-import com.voxelbridge.util.TimeLogger;
+import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.client.ProgressNotifier;
+import com.voxelbridge.util.debug.TimeLogger;
 import de.javagl.jgltf.impl.v2.*;
 import de.javagl.jgltf.model.io.GltfAsset;
 import de.javagl.jgltf.model.io.GltfAssetWriter;
@@ -29,11 +29,11 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 流式几何处理管道（重构版）
- * 1. 接收 Quad -> 流式写入 geometry.bin + uvraw.bin
- * 2. 采样结束 -> 生成图集 (Atlas)
- * 3. UV重映射 -> uvraw.bin -> finaluv.bin
- * 4. 流式组装glTF -> 从 geometry.bin + finaluv.bin 直接构建
+ * Streaming geometry processing pipeline (refactored)
+ * 1. Receive Quad -> Stream to geometry.bin + uvraw.bin
+ * 2. Sampling complete -> Generate atlas
+ * 3. UV remapping -> uvraw.bin -> finaluv.bin
+ * 4. Assemble glTF -> Build directly from geometry.bin + finaluv.bin
  */
 public final class GltfSceneBuilder implements SceneSink {
     private final ExportContext ctx;
@@ -42,18 +42,18 @@ public final class GltfSceneBuilder implements SceneSink {
     private static final int BYTES_PER_QUAD_GEOMETRY = 140;
     private static final int BYTES_PER_QUAD_UV = 64;
 
-    // 流式写入器
+    // Streaming writer
     private final StreamingGeometryWriter streamingWriter;
     private final SpriteIndex spriteIndex;
     private final GeometryIndex geometryIndex;
 
-    // 线程通信
+    // Thread communication
     private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, null, null, null, null, null, false);
     private final BlockingQueue<QuadBatch> queue = new ArrayBlockingQueue<>(16384);
     private final AtomicBoolean writerStarted = new AtomicBoolean(false);
     private Thread writerThread;
 
-    // 临时四边形数据结构（写入队列）
+    // Temporary quad data structure (for queue)
     private record QuadBatch(
         String materialGroupKey,
         String spriteKey,
@@ -71,11 +71,11 @@ public final class GltfSceneBuilder implements SceneSink {
         this.outputDir = outDir;
         this.textureRegistry = new TextureRegistry(ctx, outDir);
 
-        // 创建流式索引
+        // Create streaming indices
         this.spriteIndex = new SpriteIndex();
         this.geometryIndex = new GeometryIndex();
 
-        // 创建流式写入器
+        // Create streaming writer
         Path geometryBin = outDir.resolve("geometry.bin");
         Path uvrawBin = outDir.resolve("uvraw.bin");
         this.streamingWriter = new StreamingGeometryWriter(geometryBin, uvrawBin, spriteIndex, geometryIndex);
@@ -95,7 +95,7 @@ public final class GltfSceneBuilder implements SceneSink {
                         boolean doubleSided) {
         if (materialGroupKey == null || spriteKey == null) return;
 
-        // colormap 模式：所有 quad 都要带 TEXCOORD_1；无 tint 时指向预留白槽
+        // Colormap mode: all quads must have TEXCOORD_1; non-tinted points to reserved white slot
         if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP) {
             if (uv1 == null || uv1.length < 8) {
                 float[] lut = ColorMapManager.remapColorUV(ctx, 0xFFFFFFFF);
@@ -109,10 +109,10 @@ public final class GltfSceneBuilder implements SceneSink {
             }
         }
 
-        // 启动写线程
+        // Start writer thread
         startWriterThread();
 
-        // 入队
+        // Enqueue
         try {
             queue.put(new QuadBatch(
                 materialGroupKey, spriteKey, overlaySpriteKey,

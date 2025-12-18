@@ -5,8 +5,8 @@ import com.voxelbridge.export.exporter.BlockExporter;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.export.scene.BufferedSceneSink;
 import com.voxelbridge.export.scene.SceneSink;
-import com.voxelbridge.util.ExportLogger;
-import com.voxelbridge.util.ProgressNotifier;
+import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.client.ProgressNotifier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -256,7 +256,7 @@ public final class StreamingRegionSampler {
             // ATOMIC EXPORT
             BufferedSceneSink buffer = new BufferedSceneSink();
             // OPTIMIZATION: Use shared BlockEntityRenderBatch instead of per-chunk instance
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch);
+            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
             localSampler.setRegionBounds(regionMin, regionMax);
 
             // OPTIMIZATION: Reuse MutableBlockPos to avoid 98,304 object allocations per chunk
@@ -316,7 +316,8 @@ public final class StreamingRegionSampler {
 
             if (localSampler.hadMissingNeighborAndReset()) {
                 ExportLogger.log("[Streaming] Chunk " + chunkPos + " incomplete (missing neighbors), retry.");
-                sharedBeBatch.clear();
+                // BUG FIX: Don't clear shared batch! Only discard this chunk's buffered geometry
+                // sharedBeBatch.clear();  // REMOVED: This would discard ALL queued BlockEntity tasks from other chunks!
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
                 return;
             }
@@ -364,7 +365,7 @@ public final class StreamingRegionSampler {
 
             // 不检查邻居，不检查渲染距离，直接导出
             BufferedSceneSink buffer = new BufferedSceneSink();
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch);
+            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
             localSampler.setRegionBounds(regionMin, regionMax);
 
             BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();

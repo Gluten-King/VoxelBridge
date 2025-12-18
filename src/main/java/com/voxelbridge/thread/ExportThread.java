@@ -52,8 +52,8 @@ public class ExportThread extends Thread {
             e.printStackTrace();
             StringWriter sw = new StringWriter();
             e.printStackTrace(new PrintWriter(sw));
-            com.voxelbridge.util.ExportLogger.log("[GLTF][ERROR] Export failed: " + e.getMessage());
-            com.voxelbridge.util.ExportLogger.log(sw.toString());
+            com.voxelbridge.util.debug.ExportLogger.log("[GLTF][ERROR] Export failed: " + e.getMessage());
+            com.voxelbridge.util.debug.ExportLogger.log(sw.toString());
             mc.execute(() -> {
                 if (mc.player != null)
                     mc.player.displayClientMessage(Component.literal("[VoxelBridge] Export failed: " + e.getMessage()), false);

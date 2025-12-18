@@ -2,7 +2,7 @@ package com.voxelbridge.export.texture;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityTextureResolver;
-import com.voxelbridge.util.ExportLogger;
+import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.export.texture.TextureAtlasManager;
