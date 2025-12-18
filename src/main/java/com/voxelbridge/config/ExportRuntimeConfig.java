@@ -72,10 +72,26 @@ public final class ExportRuntimeConfig {
         }
     }
 
+    public enum ExportFormat {
+        GLTF("glTF"),
+        VXB("VXB");
+
+        private final String description;
+
+        ExportFormat(String description) {
+            this.description = description;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+    }
+
     private static AtlasMode atlasMode = AtlasMode.ATLAS;
     private static AtlasSize atlasSize = AtlasSize.SIZE_8192;
     private static ColorMode colorMode = ColorMode.VERTEX_COLOR;
     private static CoordinateMode coordinateMode = CoordinateMode.CENTERED;
+    private static ExportFormat exportFormat = ExportFormat.GLTF;
     private static int exportThreadCount = Runtime.getRuntime().availableProcessors();
     // 控制是否应用原版基于位置哈希的随机变换（草丛偏移、随机模型旋转等）
     private static boolean vanillaRandomTransformEnabled = true;
@@ -150,6 +166,16 @@ public final class ExportRuntimeConfig {
 
     public static void setAnimationEnabled(boolean enabled) {
         animationEnabled = enabled;
+    }
+
+    public static ExportFormat getExportFormat() {
+        return exportFormat;
+    }
+
+    public static void setExportFormat(ExportFormat format) {
+        if (format != null) {
+            exportFormat = format;
+        }
     }
 
 }

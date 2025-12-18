@@ -1,6 +1,8 @@
 package com.voxelbridge.thread;
 
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.scene.gltf.GltfExportService;
+import com.voxelbridge.export.scene.vxb.VxbExportService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.Level;
@@ -24,7 +26,7 @@ public class ExportThread extends Thread {
         this.pos1 = pos1;
         this.pos2 = pos2;
         this.outDir = outDir;
-        setName("MineExporter-glTF");
+        setName("MineExporter-Export");
     }
 
     @Override
@@ -33,7 +35,13 @@ public class ExportThread extends Thread {
         try {
             long start = System.currentTimeMillis();
 
-            Path file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
+            Path file;
+            ExportRuntimeConfig.ExportFormat format = ExportRuntimeConfig.getExportFormat();
+            if (format == ExportRuntimeConfig.ExportFormat.VXB) {
+                file = VxbExportService.exportRegion(level, pos1, pos2, outDir);
+            } else {
+                file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
+            }
 
             long time = System.currentTimeMillis() - start;
             String msg = String.format("[VoxelBridge] Export completed! File: %s (%.2fs)",
@@ -52,7 +60,7 @@ public class ExportThread extends Thread {
             e.printStackTrace();
             StringWriter sw = new StringWriter();
             e.printStackTrace(new PrintWriter(sw));
-            com.voxelbridge.util.debug.ExportLogger.log("[GLTF][ERROR] Export failed: " + e.getMessage());
+            com.voxelbridge.util.debug.ExportLogger.log("[Export][ERROR] Export failed: " + e.getMessage());
             com.voxelbridge.util.debug.ExportLogger.log(sw.toString());
             mc.execute(() -> {
                 if (mc.player != null)

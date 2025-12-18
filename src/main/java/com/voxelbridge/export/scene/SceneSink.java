@@ -37,9 +37,21 @@ public interface SceneSink {
                  boolean doubleSided);
 
     /**
+     * Called when a chunk begins emitting geometry.
+     */
+    default void onChunkStart(int chunkX, int chunkZ) {}
+
+    /**
+     * Called when a chunk finishes emitting geometry.
+     *
+     * @param successful true if the chunk is complete and should be kept
+     */
+    default void onChunkEnd(int chunkX, int chunkZ, boolean successful) {}
+
+    /**
      * Finalize the scene and write it to disk.
      *
-     * @return the primary output file (e.g., glTF/OBJ)
+     * @return the primary output file (e.g., glTF/VXB)
      */
     java.nio.file.Path write(SceneWriteRequest request) throws IOException;
 }

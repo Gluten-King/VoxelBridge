@@ -14,6 +14,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.api.distmarker.Dist;
@@ -106,7 +107,10 @@ public final class BlockEntityRenderer {
         }
 
         com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Found renderer: " + renderer.getClass().getSimpleName());
-        return new RenderTask(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer);
+        BlockPos pos = blockEntity.getBlockPos();
+        int chunkX = pos.getX() >> 4;
+        int chunkZ = pos.getZ() >> 4;
+        return new RenderTask(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer, chunkX, chunkZ);
     }
 
     /**
@@ -171,6 +175,8 @@ public final class BlockEntityRenderer {
         private final double offsetZ;
         private final TextureOverrideMap overrides;
         private final net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer;
+        private final int chunkX;
+        private final int chunkZ;
         private boolean success;
 
         RenderTask(
@@ -181,7 +187,9 @@ public final class BlockEntityRenderer {
             double offsetY,
             double offsetZ,
             TextureOverrideMap overrides,
-            net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer
+            net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer,
+            int chunkX,
+            int chunkZ
         ) {
             this.ctx = ctx;
             this.blockEntity = blockEntity;
@@ -191,11 +199,18 @@ public final class BlockEntityRenderer {
             this.offsetZ = offsetZ;
             this.overrides = overrides;
             this.renderer = renderer;
+            this.chunkX = chunkX;
+            this.chunkZ = chunkZ;
         }
 
         @Override
         public void run() {
-            this.success = renderDirect(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer);
+            sceneSink.onChunkStart(chunkX, chunkZ);
+            try {
+                this.success = renderDirect(ctx, blockEntity, sceneSink, offsetX, offsetY, offsetZ, overrides, renderer);
+            } finally {
+                sceneSink.onChunkEnd(chunkX, chunkZ, this.success);
+            }
         }
 
         public boolean wasSuccessful() {

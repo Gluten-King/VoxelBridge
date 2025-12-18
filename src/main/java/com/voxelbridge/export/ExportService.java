@@ -1,5 +1,7 @@
 package com.voxelbridge.export;
 
+import com.voxelbridge.config.ExportRuntimeConfig;
+import com.voxelbridge.export.scene.vxb.VxbExportService;
 import com.voxelbridge.util.debug.ExportLogger;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -28,6 +30,9 @@ public final class ExportService {
                                     BlockPos pos1,
                                     BlockPos pos2,
                                     Path outDir) throws IOException {
+        if (ExportRuntimeConfig.getExportFormat() == ExportRuntimeConfig.ExportFormat.VXB) {
+            return VxbExportService.exportRegion(level, pos1, pos2, outDir);
+        }
         return com.voxelbridge.export.scene.gltf.GltfExportService.exportRegion(level, pos1, pos2, outDir);
     }
 

@@ -86,6 +86,7 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Selection info:"));
             ctx.getSource().sendSystemMessage(Component.literal("e  pos1: f" + (pos1 != null ? pos1 : "unset")));
             ctx.getSource().sendSystemMessage(Component.literal("e  pos2: f" + (pos2 != null ? pos2 : "unset")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  Export format: f" + ExportRuntimeConfig.getExportFormat().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas mode: f" + ExportRuntimeConfig.getAtlasMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas size: f" + ExportRuntimeConfig.getAtlasSize().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Coordinate mode: f" +
@@ -105,7 +106,24 @@ public final class VoxelBridgeCommands {
             return 1;
         }));
 
-        // OBJ export mode is deprecated; we always run the asynchronous glTF path now.
+        root.then(Commands.literal("format")
+                .executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Current export format: f" +
+                            ExportRuntimeConfig.getExportFormat().getDescription()));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge format <gltf|vxb>"));
+                    return 1;
+                })
+                .then(Commands.literal("gltf").executes(ctx -> {
+                    ExportRuntimeConfig.setExportFormat(ExportRuntimeConfig.ExportFormat.GLTF);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Export format -> glTF"));
+                    return 1;
+                }))
+                .then(Commands.literal("vxb").executes(ctx -> {
+                    ExportRuntimeConfig.setExportFormat(ExportRuntimeConfig.ExportFormat.VXB);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Export format -> VXB"));
+                    return 1;
+                }))
+        );
 
         root.then(Commands.literal("atlas")
                 .executes(ctx -> {
@@ -287,7 +305,8 @@ public final class VoxelBridgeCommands {
             try {
                 Path outDir = IOUtil.ensureExportDir();
                 Thread exportThread = new ExportThread(level, pos1, pos2, outDir);
-                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Exporting to glTF..."));
+                String formatName = ExportRuntimeConfig.getExportFormat().getDescription();
+                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Exporting to " + formatName + "..."));
                 exportThread.start();
                 return 1;
             } catch (Exception e) {

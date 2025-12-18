@@ -231,6 +231,7 @@ public final class StreamingRegionSampler {
                                    Minecraft mc, Set<ChunkPos> processing,
                                    ChunkPos playerChunk, int activeDistance,
                                    BlockEntityRenderBatch sharedBeBatch) {
+        boolean started = false;
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
             ExportLogger.log("[Streaming] Begin export chunk " + chunkPos);
@@ -255,6 +256,8 @@ public final class StreamingRegionSampler {
 
             // ATOMIC EXPORT
             BufferedSceneSink buffer = new BufferedSceneSink();
+            finalSink.onChunkStart(chunkPos.x, chunkPos.z);
+            started = true;
             // OPTIMIZATION: Use shared BlockEntityRenderBatch instead of per-chunk instance
             BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
             localSampler.setRegionBounds(regionMin, regionMax);
@@ -319,6 +322,8 @@ public final class StreamingRegionSampler {
                 // BUG FIX: Don't clear shared batch! Only discard this chunk's buffered geometry
                 // sharedBeBatch.clear();  // REMOVED: This would discard ALL queued BlockEntity tasks from other chunks!
                 ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
+                finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+                started = false;
                 return;
             }
 
@@ -331,6 +336,8 @@ public final class StreamingRegionSampler {
                 ExportLogger.log("[Streaming] Chunk " + chunkPos + " produced 0 quads after sampling");
             }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
+            finalSink.onChunkEnd(chunkPos.x, chunkPos.z, true);
+            started = false;
 
         } catch (Exception e) {
             ExportLogger.log("[Streaming][ERROR] Export chunk " + chunkPos + " failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -338,7 +345,14 @@ public final class StreamingRegionSampler {
                 ExportLogger.log("    at " + el.toString());
             }
             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
+            if (started) {
+                finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+                started = false;
+            }
         } finally {
+            if (started) {
+                finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+            }
             processing.remove(chunkPos);
         }
     }
@@ -353,6 +367,7 @@ public final class StreamingRegionSampler {
                                         int minX, int maxX, int minZ, int maxZ,
                                         int minY, int maxY,
                                         Minecraft mc, BlockEntityRenderBatch sharedBeBatch) {
+        boolean started = false;
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
             ExportLogger.log("[Streaming][Force] Begin force export chunk " + chunkPos);
@@ -365,6 +380,8 @@ public final class StreamingRegionSampler {
 
             // 不检查邻居，不检查渲染距离，直接导出
             BufferedSceneSink buffer = new BufferedSceneSink();
+            finalSink.onChunkStart(chunkPos.x, chunkPos.z);
+            started = true;
             BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
             localSampler.setRegionBounds(regionMin, regionMax);
 
@@ -394,6 +411,8 @@ public final class StreamingRegionSampler {
             }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
             ExportLogger.log("[Streaming][Force] Chunk " + chunkPos + " force exported, blocksVisited=" + blockCount);
+            finalSink.onChunkEnd(chunkPos.x, chunkPos.z, true);
+            started = false;
 
         } catch (Exception e) {
             ExportLogger.log("[Streaming][ERROR][Force] Chunk " + chunkPos + " failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -401,6 +420,14 @@ public final class StreamingRegionSampler {
                 ExportLogger.log("    at " + el.toString());
             }
             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
+            if (started) {
+                finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+                started = false;
+            }
+        } finally {
+            if (started) {
+                finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+            }
         }
     }
 
