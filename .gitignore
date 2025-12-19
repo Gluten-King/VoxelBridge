@@ -25,3 +25,5 @@ Thumbs.db
 *~
 .claude/
 .eclipse/
+/tools/
+/docs/

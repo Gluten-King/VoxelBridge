@@ -6,19 +6,22 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.TextureLoader;
 
-import gnu.trove.map.hash.TObjectIntHashMap;
-
 import java.awt.image.BufferedImage;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.BufferedOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * VXB scene builder that writes split binary buffers with uv loops.
@@ -37,11 +40,15 @@ public final class VxbSceneBuilder implements SceneSink {
     private final Map<String, MeshInfo> meshInfos = new LinkedHashMap<>();
     private final ThreadLocal<Long> currentChunk = new ThreadLocal<>();
     private final Object writeLock = new Object();
+    private final BlockingQueue<QueueEvent> queue = new ArrayBlockingQueue<>(16384);
+    private final AtomicBoolean writerStarted = new AtomicBoolean(false);
+    private Thread writerThread;
     private final BinaryWriter binOut;
     private final BinaryWriter uvRawOut;
     private final BufferInfo bin;
     private final BufferInfo uv;
     private final Path uvRawPath;
+    private static final int BUFFER_SIZE = 4 << 20; // 4MB, match glTF streaming buffers
 
     public VxbSceneBuilder(ExportContext ctx, Path outputDir, String baseName) throws IOException {
         this.ctx = ctx;
@@ -52,8 +59,8 @@ public final class VxbSceneBuilder implements SceneSink {
         this.uvRawPath = outputDir.resolve(baseName + ".uvraw.bin");
         this.bin = new BufferInfo("bin", binPath);
         this.uv = new BufferInfo("uv", outputDir.resolve(baseName + ".uv.bin"));
-        this.binOut = new BinaryWriter(Files.newOutputStream(binPath));
-        this.uvRawOut = new BinaryWriter(Files.newOutputStream(uvRawPath));
+        this.binOut = new BinaryWriter(new BufferedOutputStream(Files.newOutputStream(binPath), BUFFER_SIZE));
+        this.uvRawOut = new BinaryWriter(new BufferedOutputStream(Files.newOutputStream(uvRawPath), BUFFER_SIZE));
     }
 
     @Override
@@ -66,46 +73,34 @@ public final class VxbSceneBuilder implements SceneSink {
                                      float[] normal,
                                      float[] colors,
                                      boolean doubleSided) {
-        if (materialGroupKey == null || spriteKey == null || positions == null || uv0 == null) {
-            return;
-        }
-        Long chunkKey = currentChunk.get();
-        if (chunkKey == null) {
-            chunkKey = -1L;
-        }
-        ChunkState chunkState = getOrCreateChunkState(chunkKey);
-        MeshBuilder mesh = chunkState.meshes.computeIfAbsent(materialGroupKey, MeshBuilder::new);
-        mesh.recordQuad(spriteKey, overlaySpriteKey, positions, uv0, uv1, normal, colors, doubleSided,
-            this::getSpriteId, this::getSpriteSize);
+        if (materialGroupKey == null || spriteKey == null || positions == null || uv0 == null) return;
+        startWriterThread();
+        long chunkKey = currentChunk.get() != null ? currentChunk.get() : -1L;
+        enqueue(new QuadEvent(chunkKey, materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, normal, colors, doubleSided));
     }
 
     @Override
     public void onChunkStart(int chunkX, int chunkZ) {
         long key = packChunkKey(chunkX, chunkZ);
         currentChunk.set(key);
-        getOrCreateChunkState(key);
+        startWriterThread();
+        enqueue(new ChunkStartEvent(key));
     }
 
     @Override
     public void onChunkEnd(int chunkX, int chunkZ, boolean successful) {
         long key = packChunkKey(chunkX, chunkZ);
         currentChunk.remove();
-        ChunkState chunkState;
-        synchronized (chunkStates) {
-            chunkState = chunkStates.remove(key);
-        }
-        if (chunkState == null) {
-            return;
-        }
-        if (!successful) {
-            return;
-        }
-        flushChunk(chunkState);
+        startWriterThread();
+        enqueue(new ChunkEndEvent(key, successful));
     }
 
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
-        flushRemainingChunks();
+        // Signal writer thread to finish and wait for completion
+        startWriterThread();
+        enqueue(PoisonEvent.INSTANCE);
+        joinWriter();
         closeWriters();
 
         Path uvPath = uv.path;
@@ -116,17 +111,6 @@ public final class VxbSceneBuilder implements SceneSink {
         Files.deleteIfExists(uvRawPath);
         writeJson(jsonPath, request, bin, uv, meshList);
         return jsonPath;
-    }
-
-    private void flushRemainingChunks() throws IOException {
-        List<ChunkState> remaining;
-        synchronized (chunkStates) {
-            remaining = new ArrayList<>(chunkStates.values());
-            chunkStates.clear();
-        }
-        for (ChunkState state : remaining) {
-            flushChunk(state);
-        }
     }
 
     private void closeWriters() throws IOException {
@@ -160,6 +144,70 @@ public final class VxbSceneBuilder implements SceneSink {
             }
         }
     }
+
+    private void startWriterThread() {
+        if (writerStarted.getAndSet(true)) return;
+        writerThread = new Thread(() -> {
+            try {
+                while (true) {
+                    QueueEvent ev = queue.take();
+                    if (ev == PoisonEvent.INSTANCE) {
+                        chunkStates.clear();
+                        break;
+                    }
+                    if (ev instanceof ChunkStartEvent cse) {
+                        getOrCreateChunkState(cse.chunkKey());
+                    } else if (ev instanceof ChunkEndEvent cee) {
+                        ChunkState state = chunkStates.remove(cee.chunkKey());
+                        if (state != null && cee.successful()) {
+                            flushChunk(state);
+                        }
+                    } else if (ev instanceof QuadEvent qe) {
+                        ChunkState state = getOrCreateChunkState(qe.chunkKey());
+                        MeshBuilder mesh = state.meshes.computeIfAbsent(qe.materialGroupKey(), MeshBuilder::new);
+                        mesh.recordQuad(qe.spriteKey(), qe.overlaySpriteKey(), qe.positions(), qe.uv0(), qe.uv1(),
+                            qe.normal(), qe.colors(), qe.doubleSided(), this::getSpriteId, this::getSpriteSize);
+                    }
+                }
+            } catch (InterruptedException ignore) {
+                Thread.currentThread().interrupt();
+            }
+        }, "VXB-StreamingWriter");
+        writerThread.setDaemon(true);
+        writerThread.start();
+    }
+
+    private void enqueue(QueueEvent ev) {
+        try {
+            queue.put(ev);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void joinWriter() {
+        if (writerThread == null) return;
+        try {
+            writerThread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private interface QueueEvent {}
+    private record QuadEvent(long chunkKey,
+                             String materialGroupKey,
+                             String spriteKey,
+                             String overlaySpriteKey,
+                             float[] positions,
+                             float[] uv0,
+                             float[] uv1,
+                             float[] normal,
+                             float[] colors,
+                             boolean doubleSided) implements QueueEvent {}
+    private record ChunkStartEvent(long chunkKey) implements QueueEvent {}
+    private record ChunkEndEvent(long chunkKey, boolean successful) implements QueueEvent {}
+    private enum PoisonEvent implements QueueEvent { INSTANCE }
 
     private long packChunkKey(int chunkX, int chunkZ) {
         return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
@@ -313,7 +361,10 @@ public final class VxbSceneBuilder implements SceneSink {
         for (int i = 0; i < meshInfos.size(); i++) {
             MeshInfo m = meshInfos.get(i);
             out.write("    {\"id\": " + i + ", \"name\": \"" + escape(m.materialKey) + "\", \"mesh\": " + i + "}");
-            out.write(i + 1 < meshInfos.size() ? ",\n" : "\n");
+            if (i + 1 < meshInfos.size()) {
+                out.write(",");
+            }
+            out.write("\n");
         }
         out.write("  ],\n");
 
@@ -467,7 +518,8 @@ public final class VxbSceneBuilder implements SceneSink {
         private final ByteList loopColors = new ByteList();
         private final IntList faceCounts = new IntList();
         private final IntList faceIndices = new IntList();
-        private final TObjectIntHashMap<PositionKey> positionLookup = new TObjectIntHashMap<>(1024, 0.5f, -1);
+        private final Map<PositionKey, Integer> positionLookup = new HashMap<>(1024);
+        private final Map<QuadKey, Boolean> quadDedup = new HashMap<>(2048);
         private boolean doubleSided;
 
         MeshBuilder(String materialKey) {
@@ -487,14 +539,29 @@ public final class VxbSceneBuilder implements SceneSink {
             int spriteId = spriteResolver.get(spriteKey);
             SpriteSize size = sizeResolver.get(spriteKey);
             int overlaySpriteId = resolveOverlayId(overlaySpriteKey, spriteResolver);
+            int spriteId16 = Math.min(65535, spriteId);
+            int overlayId16 = Math.min(65535, overlaySpriteId);
+            float nx = normal != null && normal.length >= 3 ? normal[0] : 0f;
+            float ny = normal != null && normal.length >= 3 ? normal[1] : 1f;
+            float nz = normal != null && normal.length >= 3 ? normal[2] : 0f;
+            int qnx = quantizeNormal(nx);
+            int qny = quantizeNormal(ny);
+            int qnz = quantizeNormal(nz);
             int[] v = new int[4];
+            int[] qp = new int[12];
             for (int i = 0; i < 4; i++) {
                 float px = pos[i * 3];
                 float py = pos[i * 3 + 1];
                 float pz = pos[i * 3 + 2];
-                PositionKey key = new PositionKey(quantize(px), quantize(py), quantize(pz));
-                int existing = positionLookup.get(key);
-                if (existing >= 0) {
+                int qx = quantizePos(px);
+                int qy = quantizePos(py);
+                int qz = quantizePos(pz);
+                qp[i * 3] = qx;
+                qp[i * 3 + 1] = qy;
+                qp[i * 3 + 2] = qz;
+                PositionKey key = new PositionKey(qx, qy, qz);
+                Integer existing = positionLookup.get(key);
+                if (existing != null) {
                     v[i] = existing;
                 } else {
                     int newIndex = positions.size() / 3;
@@ -506,11 +573,12 @@ public final class VxbSceneBuilder implements SceneSink {
                 }
             }
 
-            float nx = normal != null && normal.length >= 3 ? normal[0] : 0f;
-            float ny = normal != null && normal.length >= 3 ? normal[1] : 1f;
-            float nz = normal != null && normal.length >= 3 ? normal[2] : 0f;
-            int spriteId16 = spriteId > 65535 ? 65535 : spriteId;
-            int overlayId16 = overlaySpriteId > 65535 ? 65535 : overlaySpriteId;
+            QuadKey qk = new QuadKey(spriteId16, overlayId16, qp, qnx, qny, qnz);
+            if (quadDedup.containsKey(qk)) {
+                return; // Skip duplicate quad occupying the same space with same material/normal
+            }
+            quadDedup.put(qk, Boolean.TRUE);
+
             this.doubleSided |= doubleSided;
 
             // Triangle indices for render
@@ -637,10 +705,6 @@ public final class VxbSceneBuilder implements SceneSink {
             return offset;
         }
 
-        private int quantize(float v) {
-            return Math.round(v * 10000f);
-        }
-
         private int quantizeUv(float uv, int size) {
             if (size <= 0) return 0;
             int value = Math.round(uv * size);
@@ -663,11 +727,46 @@ public final class VxbSceneBuilder implements SceneSink {
             return i;
         }
 
+        private int quantizePos(float v) {
+            return Math.round(v * 10000f);
+        }
+
+        private int quantizeNormal(float n) {
+            return Math.round(n * 10000f);
+        }
+
         private int resolveOverlayId(String overlaySpriteKey, SpriteIdResolver spriteResolver) {
             if (overlaySpriteKey == null || "voxelbridge:transparent".equals(overlaySpriteKey)) {
                 return NO_SPRITE_ID;
             }
             return spriteResolver.get(overlaySpriteKey);
+        }
+
+        private record QuadKey(int spriteId, int overlayId, int[] pos, int nx, int ny, int nz) {
+            @Override
+            public int hashCode() {
+                int h = spriteId;
+                h = 31 * h + overlayId;
+                h = 31 * h + nx;
+                h = 31 * h + ny;
+                h = 31 * h + nz;
+                for (int v : pos) {
+                    h = 31 * h + v;
+                }
+                return h;
+            }
+
+            @Override
+            public boolean equals(Object obj) {
+                if (this == obj) return true;
+                if (!(obj instanceof QuadKey other)) return false;
+                if (spriteId != other.spriteId || overlayId != other.overlayId || nx != other.nx || ny != other.ny || nz != other.nz) return false;
+                if (pos.length != other.pos.length) return false;
+                for (int i = 0; i < pos.length; i++) {
+                    if (pos[i] != other.pos[i]) return false;
+                }
+                return true;
+            }
         }
     }
 
