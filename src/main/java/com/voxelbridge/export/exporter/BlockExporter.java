@@ -9,9 +9,9 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import com.voxelbridge.modhandler.ModHandlerRegistry;
-import com.voxelbridge.modhandler.ctm.CtmDetector;
 import com.voxelbridge.modhandler.frapi.FabricApiHelper;
 import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.export.util.geometry.VertexExtractor;
 import net.fabricmc.fabric.api.renderer.v1.model.FabricBakedModel;
 import net.fabricmc.fabric.api.renderer.v1.model.SpriteFinder;
 import net.minecraft.client.multiplayer.ClientChunkCache;
@@ -35,7 +35,11 @@ import net.neoforged.neoforge.client.extensions.IBakedModelExtension;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * Simplified block geometry exporter.
@@ -164,9 +168,6 @@ public final class BlockExporter {
 
         if (quads.isEmpty()) return;
 
-        // Detect CTM
-        boolean isCTM = CtmDetector.isCTMModel(model, quads);
-
         // Generate material key
         String blockKey = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
         int lightLevel = state.getLightEmission();
@@ -176,24 +177,27 @@ public final class BlockExporter {
 
         ctx.registerSpriteMaterial(blockKey, blockKey);
 
-        // PASS 1: Detect and cache overlays
+        // PASS 1: Position-based CTM overlay detection
+        detectCtmOverlaysByPosition(quads, state, pos, blockKey, randomOffset);
+
+        // PASS 1b: Detect and cache overlays
         for (BakedQuad quad : quads) {
             if (quad == null || quad.getSprite() == null) continue;
 
             String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
-
-            // Check CTM overlay
-            CtmDetector.CtmOverlayInfo ctmOverlay = CtmDetector.resolveCtmOverlay(quad.getSprite(), spriteKey, model);
-            if (ctmOverlay != null && ctmOverlay.isOverlay()) {
-                overlayManager.cacheOverlay(blockKey, state, pos, quad, randomOffset, spriteKey);
-                continue;
-            }
 
             // Check vanilla overlay
             if (OverlayManager.isVanillaOverlay(spriteKey)) {
                 String vanillaBase = OverlayManager.extractVanillaOverlayBase(spriteKey);
                 if (vanillaBase == null) vanillaBase = blockKey;
                 overlayManager.cacheOverlay(vanillaBase, state, pos, quad, randomOffset, spriteKey);
+                continue;  // Skip this quad in PASS 2
+            }
+
+            // Check hilight overlay
+            if (isHilightOverlay(spriteKey)) {
+                // Hilight: bypass overlay suffix, let OverlayManager use sprite name (_hilight) for material/offset
+                overlayManager.cacheOverlayNoMarkup(blockKey, state, pos, quad, randomOffset, spriteKey);
                 continue;  // Skip this quad in PASS 2
             }
         }
@@ -215,10 +219,8 @@ public final class BlockExporter {
                 if (!isTransparent) {
                     // Opaque blocks: cull if neighbor is solid
                     if (isFaceOccluded(pos, dir)) continue;
-                } else if (isCTM) {
-                    // CTM transparent blocks: cull if neighbor is same block
-                    if (isFaceOccludedBySameBlock(state, pos, dir)) continue;
                 }
+                // Transparent blocks: no face culling (internal faces must remain visible)
             }
 
             // Process quad
@@ -230,11 +232,128 @@ public final class BlockExporter {
             if (dir == null) return false;
             if (!isTransparent) {
                 return isFaceOccluded(pos, dir);
-            } else if (isCTM) {
-                return isFaceOccludedBySameBlock(state, pos, dir);
             }
+            // Transparent blocks: no face culling for overlays
             return false;
         });
+    }
+
+    private void detectCtmOverlaysByPosition(List<BakedQuad> quads, BlockState state, BlockPos pos, String blockKey, Vec3 randomOffset) {
+        record QuadEntry(int index, BakedQuad quad, String spriteKey, long posHash, boolean approxSquare,
+                         float uMin, float uMax, float vMin, float vMax) {}
+
+        Map<Long, List<QuadEntry>> groups = new HashMap<>();
+
+        for (int i = 0; i < quads.size(); i++) {
+            BakedQuad quad = quads.get(i);
+            if (quad == null || quad.getSprite() == null) continue;
+
+            var sprite = quad.getSprite();
+            String spriteKey = SpriteKeyResolver.resolve(sprite);
+            var vertexData = VertexExtractor.extractFromQuad(quad, pos, sprite, offsetX, offsetY, offsetZ, randomOffset);
+            long posHash = computePositionHash(vertexData.positions());
+            boolean approxSquare = isApprox1x1Square(vertexData.positions());
+
+            float[] uv = vertexData.uvs();
+            float uMin = Math.min(Math.min(uv[0], uv[2]), Math.min(uv[4], uv[6]));
+            float uMax = Math.max(Math.max(uv[0], uv[2]), Math.max(uv[4], uv[6]));
+            float vMin = Math.min(Math.min(uv[1], uv[3]), Math.min(uv[5], uv[7]));
+            float vMax = Math.max(Math.max(uv[1], uv[3]), Math.max(uv[5], uv[7]));
+
+            groups.computeIfAbsent(posHash, k -> new ArrayList<>())
+                .add(new QuadEntry(i, quad, spriteKey, posHash, approxSquare, uMin, uMax, vMin, vMax));
+        }
+
+        for (List<QuadEntry> group : groups.values()) {
+            if (group.size() < 2) continue;
+
+            // CTM overlay 检测：正方形 + CTM sprite
+            boolean hasCtmSprite = group.stream().anyMatch(q -> isCtmOverlaySprite(q.spriteKey()));
+            QuadEntry first = group.get(0);
+            if (!hasCtmSprite || !first.approxSquare()) continue;
+
+            // 允许任意长方形，只要 UV AABB 尺寸一致（同形状）
+            float du = first.uMax - first.uMin;
+            float dv = first.vMax - first.vMin;
+            final float UV_EPS = 1e-4f;
+            boolean sameShape = group.stream().allMatch(q -> Math.abs((q.uMax - q.uMin) - du) < UV_EPS
+                && Math.abs((q.vMax - q.vMin) - dv) < UV_EPS);
+            if (!sameShape) continue;
+
+            int minIndex = group.stream().mapToInt(QuadEntry::index).min().orElse(Integer.MAX_VALUE);
+
+            group.stream()
+                .sorted(Comparator.comparingInt(QuadEntry::index))
+                .filter(q -> q.index() != minIndex)
+                .forEach(q -> overlayManager.cacheOverlay(blockKey, state, pos, q.quad(), randomOffset, q.spriteKey()));
+        }
+    }
+
+    private boolean isCtmOverlaySprite(String spriteKey) {
+        if (spriteKey == null) return false;
+        String lower = spriteKey.toLowerCase(Locale.ROOT);
+        return lower.matches(".*_\\d+$")
+            || lower.contains("/ctm/")
+            || lower.contains("ctm/")
+            || lower.contains("continuity");
+    }
+
+    private boolean isHilightOverlay(String spriteKey) {
+        if (spriteKey == null) return false;
+        return spriteKey.toLowerCase(Locale.ROOT).contains("_hilight");
+    }
+
+    private boolean isApprox1x1Square(float[] positions) {
+        if (positions == null || positions.length < 12) return false;
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        for (int i = 0; i < 4; i++) {
+            float x = positions[i * 3];
+            float y = positions[i * 3 + 1];
+            float z = positions[i * 3 + 2];
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        }
+        float sizeX = maxX - minX;
+        float sizeY = maxY - minY;
+        float sizeZ = maxZ - minZ;
+        float SIZE_TOLERANCE = 0.01f;
+
+        if (sizeX < SIZE_TOLERANCE) {
+            return Math.abs(sizeY - 1f) <= SIZE_TOLERANCE && Math.abs(sizeZ - 1f) <= SIZE_TOLERANCE;
+        }
+        if (sizeY < SIZE_TOLERANCE) {
+            return Math.abs(sizeX - 1f) <= SIZE_TOLERANCE && Math.abs(sizeZ - 1f) <= SIZE_TOLERANCE;
+        }
+        if (sizeZ < SIZE_TOLERANCE) {
+            return Math.abs(sizeX - 1f) <= SIZE_TOLERANCE && Math.abs(sizeY - 1f) <= SIZE_TOLERANCE;
+        }
+        return false;
+    }
+
+    private long computePositionHash(float[] positions) {
+        Integer[] order = {0, 1, 2, 3};
+        java.util.Arrays.sort(order, (a, b) -> {
+            int ia = a * 3;
+            int ib = b * 3;
+            int cmpX = Float.compare(positions[ia], positions[ib]);
+            if (cmpX != 0) return cmpX;
+            int cmpY = Float.compare(positions[ia + 1], positions[ib + 1]);
+            if (cmpY != 0) return cmpY;
+            return Float.compare(positions[ia + 2], positions[ib + 2]);
+        });
+        long hash = 1125899906842597L;
+        for (int idx : order) {
+            int pi = idx * 3;
+            hash = 31 * hash + Math.round(positions[pi] * 100f);
+            hash = 31 * hash + Math.round(positions[pi + 1] * 100f);
+            hash = 31 * hash + Math.round(positions[pi + 2] * 100f);
+        }
+        return hash;
     }
 
     /**
@@ -321,13 +440,6 @@ public final class BlockExporter {
         mutablePos.setWithOffset(pos, face);
         if (isOutsideRegion(mutablePos)) return false;
         return isNeighborSolid(mutablePos);
-    }
-
-    private boolean isFaceOccludedBySameBlock(BlockState state, BlockPos pos, Direction face) {
-        mutablePos.setWithOffset(pos, face);
-        if (isOutsideRegion(mutablePos)) return false;
-        BlockState neighborState = level.getBlockState(mutablePos);
-        return neighborState.getBlock() == state.getBlock();
     }
 
     private boolean isOutsideRegion(BlockPos pos) {

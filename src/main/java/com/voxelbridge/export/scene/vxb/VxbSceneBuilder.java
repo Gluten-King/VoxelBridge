@@ -5,6 +5,8 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.TextureLoader;
+import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.TimeLogger;
 
 import java.awt.image.BufferedImage;
 import java.io.BufferedWriter;
@@ -19,6 +21,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -48,7 +51,7 @@ public final class VxbSceneBuilder implements SceneSink {
     private final BufferInfo bin;
     private final BufferInfo uv;
     private final Path uvRawPath;
-    private static final int BUFFER_SIZE = 4 << 20; // 4MB, match glTF streaming buffers
+    private static final int BUFFER_SIZE = 32 << 20; // 32MB，大缓冲减少 IO 次数
 
     public VxbSceneBuilder(ExportContext ctx, Path outputDir, String baseName) throws IOException {
         this.ctx = ctx;
@@ -97,19 +100,30 @@ public final class VxbSceneBuilder implements SceneSink {
 
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
+        long tWrite = TimeLogger.now();
         // Signal writer thread to finish and wait for completion
+        long tFinalizeSampling = TimeLogger.now();
         startWriterThread();
         enqueue(PoisonEvent.INSTANCE);
         joinWriter();
         closeWriters();
+        TimeLogger.logDuration("vxb_finalize_sampling", TimeLogger.elapsedSince(tFinalizeSampling));
 
         Path uvPath = uv.path;
         Path jsonPath = outputDir.resolve(baseName + ".vxb");
         List<MeshInfo> meshList = new ArrayList<>(meshInfos.values());
 
+        TimeLogger.logMemory("before_vxb_uv_remap");
+        long tUvRemap = TimeLogger.now();
         VxbUvRemapper.remapUv(ctx, spriteKeys, spriteSizes, meshList, uvRawPath, uvPath);
         Files.deleteIfExists(uvRawPath);
+        TimeLogger.logDuration("vxb_uv_remap", TimeLogger.elapsedSince(tUvRemap));
+
+        long tAssembly = TimeLogger.now();
         writeJson(jsonPath, request, bin, uv, meshList);
+        TimeLogger.logDuration("vxb_write_json", TimeLogger.elapsedSince(tAssembly));
+        TimeLogger.logDuration("vxb_assembly", TimeLogger.elapsedSince(tAssembly));
+        TimeLogger.logDuration("vxb_write", TimeLogger.elapsedSince(tWrite));
         return jsonPath;
     }
 
@@ -518,8 +532,10 @@ public final class VxbSceneBuilder implements SceneSink {
         private final ByteList loopColors = new ByteList();
         private final IntList faceCounts = new IntList();
         private final IntList faceIndices = new IntList();
-        private final Map<PositionKey, Integer> positionLookup = new HashMap<>(1024);
+        // 焊接：只按位置合并顶点，UV数据per-loop存储不受影响
+        private final Map<PositionKey, List<VertexSlot>> positionLookup = new HashMap<>(1024);
         private final Map<QuadKey, Boolean> quadDedup = new HashMap<>(2048);
+        private final Map<FaceKey, Boolean> faceDedup = new HashMap<>(2048); // Face index deduplication
         private boolean doubleSided;
 
         MeshBuilder(String materialKey) {
@@ -540,7 +556,10 @@ public final class VxbSceneBuilder implements SceneSink {
             SpriteSize size = sizeResolver.get(spriteKey);
             int overlaySpriteId = resolveOverlayId(overlaySpriteKey, spriteResolver);
             int spriteId16 = Math.min(65535, spriteId);
+            boolean colormapMode = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP;
             int overlayId16 = Math.min(65535, overlaySpriteId);
+            // Per-vertex UDIM page IDs (colormap) or overlay sprite ID (non-colormap)
+            int[] uv1PageIds = new int[4];
             float nx = normal != null && normal.length >= 3 ? normal[0] : 0f;
             float ny = normal != null && normal.length >= 3 ? normal[1] : 1f;
             float nz = normal != null && normal.length >= 3 ? normal[2] : 0f;
@@ -549,6 +568,12 @@ public final class VxbSceneBuilder implements SceneSink {
             int qnz = quantizeNormal(nz);
             int[] v = new int[4];
             int[] qp = new int[12];
+            int[] uv0_u16 = new int[4];
+            int[] uv0_v16 = new int[4];
+            int[] uv1_u16 = new int[4];
+            int[] uv1_v16 = new int[4];
+            byte[] colorBytes = new byte[16]; // 4 verts * 4 channels
+
             for (int i = 0; i < 4; i++) {
                 float px = pos[i * 3];
                 float py = pos[i * 3 + 1];
@@ -559,21 +584,62 @@ public final class VxbSceneBuilder implements SceneSink {
                 qp[i * 3] = qx;
                 qp[i * 3 + 1] = qy;
                 qp[i * 3 + 2] = qz;
-                PositionKey key = new PositionKey(qx, qy, qz);
-                Integer existing = positionLookup.get(key);
-                if (existing != null) {
-                    v[i] = existing;
+
+                uv0_u16[i] = quantizeUv(uv0[i * 2], size.width);
+                uv0_v16[i] = quantizeUv(uv0[i * 2 + 1], size.height);
+
+                if (uv1 != null && uv1.length >= 8) {
+                    float uv1_u = uv1[i * 2];
+                    float uv1_v = uv1[i * 2 + 1];
+                    if (colormapMode) {
+                        // Per-vertex UDIM extraction
+                        int vertexTileU = (int) Math.floor(uv1_u);
+                        // ColorMapManager使用负值tileV，这里取ceil(-v)得到整页索引
+                        int vertexTileV = (int) Math.ceil(-uv1_v);
+
+                        // 计算小数部分（使用当前顶点的页码）
+                        float uFrac = uv1_u - vertexTileU;
+                        float vFrac = uv1_v + vertexTileV;
+
+                        // 验证小数部分（调试用，应该在[0,1]范围内）
+                        if (uFrac < -0.001f || uFrac > 1.001f || vFrac < -0.001f || vFrac > 1.001f) {
+                            ExportLogger.log(String.format(
+                                "[VXB] Warning: UV1 fractional out of range at vertex %d: " +
+                                "uFrac=%.4f, vFrac=%.4f, raw=(%.4f,%.4f), tile=(%d,%d)",
+                                i, uFrac, vFrac, uv1_u, uv1_v, vertexTileU, vertexTileV));
+                        }
+
+                        uv1_u16[i] = quantizeUvNormalized(uFrac);
+                        uv1_v16[i] = quantizeUvNormalized(1.0f - vFrac);  // Flip V for Blender
+                        uv1PageIds[i] = packUdimTile(vertexTileU, vertexTileV);
+                    } else {
+                        // UV1 for overlay/lightmap: convert UDIM to normalized [0,1] and flip V
+                        float uNorm = uv1_u - (float)Math.floor(uv1_u);
+                        float vNorm = uv1_v - (float)Math.floor(uv1_v);
+                        uv1_u16[i] = quantizeUvNormalized(uNorm);
+                        uv1_v16[i] = quantizeUvNormalized(1.0f - vNorm);  // Flip V for Blender
+                        uv1PageIds[i] = overlayId16;  // 使用overlay sprite ID
+                    }
                 } else {
-                    int newIndex = positions.size() / 3;
-                    positionLookup.put(key, newIndex);
-                    positions.add(px);
-                    positions.add(py);
-                    positions.add(pz);
-                    v[i] = newIndex;
+                    uv1_u16[i] = 0;
+                    uv1_v16[i] = 0;
+                    uv1PageIds[i] = colormapMode ? 0 : overlayId16;
                 }
+
+                // 焊接：只基于位置（UV数据per-loop存储，不受焊接影响）
+                PositionKey key = new PositionKey(qx, qy, qz);
+                v[i] = lookupOrInsertVertex(key, px, py, pz);
+
+                int colorBase = i * 4;
+                colorBytes[colorBase] = (byte) colorToByte(colors != null ? colors[colorBase] : 1f);
+                colorBytes[colorBase + 1] = (byte) colorToByte(colors != null ? colors[colorBase + 1] : 1f);
+                colorBytes[colorBase + 2] = (byte) colorToByte(colors != null ? colors[colorBase + 2] : 1f);
+                colorBytes[colorBase + 3] = (byte) colorToByte(colors != null ? colors[colorBase + 3] : 1f);
             }
 
-            QuadKey qk = new QuadKey(spriteId16, overlayId16, qp, qnx, qny, qnz);
+            // Colormap模式下不使用overlayId16进行去重（每个顶点有独立的页码）
+            int dedupOverlayId = colormapMode ? 0 : overlayId16;
+            QuadKey qk = new QuadKey(spriteId16, dedupOverlayId, qp, qnx, qny, qnz);
             if (quadDedup.containsKey(qk)) {
                 return; // Skip duplicate quad occupying the same space with same material/normal
             }
@@ -581,43 +647,34 @@ public final class VxbSceneBuilder implements SceneSink {
 
             this.doubleSided |= doubleSided;
 
-            // Triangle indices for render
-            indices.add(v[0]);
-            indices.add(v[1]);
-            indices.add(v[2]);
-            indices.add(v[0]);
-            indices.add(v[2]);
-            indices.add(v[3]);
+            // Face deduplication - skip if same vertex indices already exist
+            FaceKey faceKey = FaceKey.of(v[0], v[1], v[2], v[3]);
+            if (faceDedup.containsKey(faceKey)) {
+                return; // Skip duplicate face before writing any loop data
+            }
+            faceDedup.put(faceKey, Boolean.TRUE);
 
-            // Loop data follows face corner order (quad) for UV/normal/color
-            for (int vi = 0; vi < 4; vi++) {
-                int u16 = quantizeUv(uv0[vi * 2], size.width);
-                int v16 = quantizeUv(uv0[vi * 2 + 1], size.height);
-                uvLoop.add(u16);
-                uvLoop.add(v16);
+            // Quad loop data按顺序写4个角
+            for (int i = 0; i < 4; i++) {
+                uvLoop.add(uv0_u16[i]);
+                uvLoop.add(uv0_v16[i]);
                 uvLoop.add(spriteId16);
                 uvLoop.add(0);
 
-                int u1 = 0;
-                int v1 = 0;
-                if (uv1 != null && uv1.length >= 8) {
-                    u1 = quantizeUvNormalized(uv1[vi * 2]);
-                    v1 = quantizeUvNormalized(uv1[vi * 2 + 1]);
-                }
-                uv1Loop.add(u1);
-                uv1Loop.add(v1);
-                uv1Loop.add(overlayId16);
+                uv1Loop.add(uv1_u16[i]);
+                uv1Loop.add(uv1_v16[i]);
+                uv1Loop.add(uv1PageIds[i]);  // Per-vertex UDIM页码或overlay sprite ID
                 uv1Loop.add(0);
 
                 loopNormals.add(nx);
                 loopNormals.add(ny);
                 loopNormals.add(nz);
 
-                int colorBase = vi * 4;
-                loopColors.add(colorToByte(colors != null ? colors[colorBase] : 1f));
-                loopColors.add(colorToByte(colors != null ? colors[colorBase + 1] : 1f));
-                loopColors.add(colorToByte(colors != null ? colors[colorBase + 2] : 1f));
-                loopColors.add(colorToByte(colors != null ? colors[colorBase + 3] : 1f));
+                int colorBase = i * 4;
+                loopColors.add(colorBytes[colorBase]);
+                loopColors.add(colorBytes[colorBase + 1]);
+                loopColors.add(colorBytes[colorBase + 2]);
+                loopColors.add(colorBytes[colorBase + 3]);
             }
 
             faceCounts.add(4);
@@ -639,8 +696,8 @@ public final class VxbSceneBuilder implements SceneSink {
                        BufferInfo uv1,
                        BufferInfo loop,
                        BufferInfo idx,
-                       BufferInfo faceCount,
-                       BufferInfo faceIndex) throws IOException {
+                       BufferInfo faceCountBuf,
+                       BufferInfo faceIndexBuf) throws IOException {
             long geoOffset = alignAndGetOffset(geoOut, geo);
             for (int i = 0; i < positions.size(); i++) {
                 geoOut.writeFloat(positions.get(i));
@@ -654,7 +711,7 @@ public final class VxbSceneBuilder implements SceneSink {
             idx.length = idxOut.getWritten();
 
             long uvOffset = alignAndGetOffset(uvOut, uv);
-            int loopCount = faceIndices.size();
+            int loopCount = uvLoop.size() / 4;
             for (int i = 0; i < uvLoop.size(); i++) {
                 uvOut.writeShort(uvLoop.get(i));
             }
@@ -678,21 +735,35 @@ public final class VxbSceneBuilder implements SceneSink {
             }
             loop.length = loopOut.getWritten();
 
-            long faceCountOffset = alignAndGetOffset(faceCountOut, faceCount);
+            long faceCountOffset = alignAndGetOffset(faceCountOut, faceCountBuf);
             for (int i = 0; i < faceCounts.size(); i++) {
                 faceCountOut.writeShort(faceCounts.get(i));
             }
-            faceCount.length = faceCountOut.getWritten();
+            faceCountBuf.length = faceCountOut.getWritten();
 
-            long faceIndexOffset = alignAndGetOffset(faceIndexOut, faceIndex);
+            long faceIndexOffset = alignAndGetOffset(faceIndexOut, faceIndexBuf);
             for (int i = 0; i < faceIndices.size(); i++) {
                 faceIndexOut.writeInt(faceIndices.get(i));
             }
-            faceIndex.length = faceIndexOut.getWritten();
+            faceIndexBuf.length = faceIndexOut.getWritten();
 
             return new SectionInfo(positions.size() / 3, indices.size(), faceCounts.size(),
                 faceIndices.size(), doubleSided, geoOffset, idxOffset, uvOffset, uv1Offset, loopOffset,
                 faceCountOffset, faceIndexOffset);
+        }
+
+        private int packUdimTile(int tileU, int tileV) {
+            // UDIM: tileU(0-9) + tileV*10, å…¨éƒ¨ç®—å–æ­£å€¼ï¼Œé˜²æ­¢è¶…å‡º u16
+            int page = tileU + tileV * 10;
+            if (page < 0) {
+                ExportLogger.log(String.format("[VXB] Warning: Negative UDIM page (%d,%d) clamped to 0", tileU, tileV));
+                return 0;
+            }
+            if (page > 65535) {
+                ExportLogger.log(String.format("[VXB] Warning: UDIM page overflow (%d,%d)=%d clamped to 65535", tileU, tileV, page));
+                return 65535;
+            }
+            return page;
         }
 
         private long alignAndGetOffset(BinaryWriter writer, BufferInfo buffer) throws IOException {
@@ -735,11 +806,67 @@ public final class VxbSceneBuilder implements SceneSink {
             return Math.round(n * 10000f);
         }
 
+        private int lookupOrInsertVertex(PositionKey key, float px, float py, float pz) {
+            // 焊接只基于位置，UV数据per-loop存储不受影响
+            List<VertexSlot> slots = positionLookup.get(key);
+            if (slots != null && !slots.isEmpty()) {
+                // 直接返回该位置的第一个顶点索引
+                return slots.get(0).index;
+            }
+
+            // 创建新顶点
+            int newIndex = positions.size() / 3;
+            positions.add(px);
+            positions.add(py);
+            positions.add(pz);
+
+            if (slots == null) {
+                slots = new ArrayList<>();
+                positionLookup.put(key, slots);
+            }
+            // 保存占位符
+            slots.add(new VertexSlot(newIndex));
+            return newIndex;
+        }
+
+        private static final class VertexSlot {
+            final int index;
+
+            VertexSlot(int index) {
+                this.index = index;
+            }
+        }
+
         private int resolveOverlayId(String overlaySpriteKey, SpriteIdResolver spriteResolver) {
             if (overlaySpriteKey == null || "voxelbridge:transparent".equals(overlaySpriteKey)) {
                 return NO_SPRITE_ID;
             }
             return spriteResolver.get(overlaySpriteKey);
+        }
+
+        private record FaceKey(int a, int b, int c, int d) {
+            // Store sorted vertex indices to ignore vertex order without allocations
+            static FaceKey of(int v0, int v1, int v2, int v3) {
+                int[] arr = {v0, v1, v2, v3};
+                Arrays.sort(arr);
+                return new FaceKey(arr[0], arr[1], arr[2], arr[3]);
+            }
+
+            @Override
+            public int hashCode() {
+                int h = a;
+                h = 31 * h + b;
+                h = 31 * h + c;
+                h = 31 * h + d;
+                return h;
+            }
+
+            @Override
+            public boolean equals(Object obj) {
+                if (this == obj) return true;
+                if (!(obj instanceof FaceKey other)) return false;
+                return a == other.a && b == other.b && c == other.c && d == other.d;
+            }
         }
 
         private record QuadKey(int spriteId, int overlayId, int[] pos, int nx, int ny, int nz) {

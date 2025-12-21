@@ -1,117 +1,122 @@
 package com.voxelbridge.util.debug;
 
-import java.io.BufferedWriter;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 
 /**
- * Lightweight timing logger for export phases.
- * Writes durations to a dedicated log file separate from the debug log.
+ * Legacy timing logger - now delegates to VoxelBridgeLogger.
+ *
+ * @deprecated Use {@link VoxelBridgeLogger} performance logging methods directly for new code.
+ *             This class is maintained for backward compatibility only.
  */
+@Deprecated
 public final class TimeLogger {
-    private static final boolean ENABLED = true;
-    private static final DateTimeFormatter TIMESTAMP =
-            DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS");
-
-    private static BufferedWriter writer;
 
     private TimeLogger() {}
 
+    /**
+     * Initializes the logging system.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param outDir Directory where log files will be created
+     * @throws IOException if log files cannot be created
+     * @deprecated Use {@link VoxelBridgeLogger#initialize(Path)}
+     */
+    @Deprecated
     public static synchronized void initialize(Path outDir) throws IOException {
-        writer = null;
-        if (ENABLED) {
-            close();
-            Path logPath = outDir.resolve("timelog.log");
-            writer = Files.newBufferedWriter(logPath, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-            logLine("Time log initialized");
-        }
+        VoxelBridgeLogger.initialize(outDir);
     }
 
+    /**
+     * Gets current time in nanoseconds.
+     *
+     * @return Current System.nanoTime()
+     */
     public static long now() {
         return System.nanoTime();
     }
 
+    /**
+     * Calculates elapsed time since a start point.
+     *
+     * @param startNanos Start time from now()
+     * @return Elapsed nanoseconds
+     */
     public static long elapsedSince(long startNanos) {
         return System.nanoTime() - startNanos;
     }
 
+    /**
+     * Logs a duration measurement.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param section Name of the timed section
+     * @param nanos Duration in nanoseconds
+     * @deprecated Use {@link VoxelBridgeLogger#duration(String, long)}
+     */
+    @Deprecated
     public static void logDuration(String section, long nanos) {
-        if (!ENABLED) return;
-        double ms = nanos / 1_000_000.0;
-        logLine(String.format("%s: %.3f ms", section, ms));
+        VoxelBridgeLogger.duration(section, nanos);
     }
 
     /**
-     * Log a numeric stat (e.g., counts).
+     * Logs a numeric statistic.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param label Label for the statistic
+     * @param value Numeric value
+     * @deprecated Use {@link VoxelBridgeLogger#stat(String, long)}
      */
+    @Deprecated
     public static void logStat(String label, long value) {
-        if (!ENABLED) return;
-        logLine(String.format("%s: %d", label, value));
+        VoxelBridgeLogger.stat(label, value);
     }
 
     /**
-     * Log a size in bytes with a human-readable MB view.
+     * Logs a size in bytes.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param label Label for the size
+     * @param bytes Size in bytes
+     * @deprecated Use {@link VoxelBridgeLogger#size(String, long)}
      */
+    @Deprecated
     public static void logSize(String label, long bytes) {
-        if (!ENABLED) return;
-        double mb = bytes / 1024.0 / 1024.0;
-        logLine(String.format("%s: %.2f MB (%,d bytes)", label, mb, bytes));
+        VoxelBridgeLogger.size(label, bytes);
     }
 
     /**
-     * Log a free-form informational message.
+     * Logs a free-form informational message.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param message The message to log
+     * @deprecated Use {@link VoxelBridgeLogger#logInfo(String)}
      */
+    @Deprecated
     public static void logInfo(String message) {
-        if (!ENABLED) return;
-        logLine(message);
+        VoxelBridgeLogger.logInfo(message);
     }
 
     /**
-     * Log current memory usage statistics.
-     * @param label Label for this memory snapshot (e.g., "before_atlas", "after_geometry")
+     * Logs current memory usage statistics.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param label Label for this memory snapshot
+     * @deprecated Use {@link VoxelBridgeLogger#memory(String)}
      */
+    @Deprecated
     public static void logMemory(String label) {
-        if (!ENABLED) return;
-        Runtime rt = Runtime.getRuntime();
-        long maxMemory = rt.maxMemory();
-        long totalMemory = rt.totalMemory();
-        long freeMemory = rt.freeMemory();
-        long usedMemory = totalMemory - freeMemory;
-
-        logLine(String.format("memory_%s: used=%.1f MB, total=%.1f MB, max=%.1f MB, usage=%.1f%%",
-            label,
-            usedMemory / 1024.0 / 1024.0,
-            totalMemory / 1024.0 / 1024.0,
-            maxMemory / 1024.0 / 1024.0,
-            (usedMemory * 100.0) / maxMemory));
+        VoxelBridgeLogger.memory(label);
     }
 
-    private static synchronized void logLine(String message) {
-        if (ENABLED && writer != null) {
-            try {
-                writer.write(String.format("[%s] %s%n", TIMESTAMP.format(LocalDateTime.now()), message));
-                writer.flush();
-            } catch (IOException e) {
-                System.err.printf("[TimeLogger] Failed to write log: %s%n", e.getMessage());
-            }
-        }
-    }
-
+    /**
+     * Closes the logging system.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @deprecated Use {@link VoxelBridgeLogger#close()}
+     */
+    @Deprecated
     public static synchronized void close() {
-        if (ENABLED && writer != null) {
-            try {
-                writer.flush();
-                writer.close();
-            } catch (IOException ignored) {
-            } finally {
-                writer = null;
-            }
-        }
+        VoxelBridgeLogger.close();
     }
 }

@@ -1,66 +1,55 @@
 package com.voxelbridge.util.debug;
 
-import java.io.BufferedWriter;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 
 /**
- * Dedicated debug logger for block-entity texture/UV diagnostics.
+ * Legacy BlockEntity debug logger - now delegates to VoxelBridgeLogger.
+ *
+ * @deprecated Use {@link VoxelBridgeLogger} with LogModule.BLOCKENTITY for new code.
+ *             This class is maintained for backward compatibility only.
  */
+@Deprecated
 public final class BlockEntityDebugLogger {
-
-    // Enabled for debugging BlockEntity export issues.
-    private static final boolean ENABLED = true;
-
-    private static final DateTimeFormatter TIMESTAMP =
-        DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS");
-
-    private static BufferedWriter writer;
 
     private BlockEntityDebugLogger() {}
 
+    /**
+     * Initializes the logging system.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @param outDir Directory where log files will be created
+     * @deprecated Use {@link VoxelBridgeLogger#initialize(Path)}
+     */
+    @Deprecated
     public static synchronized void initialize(Path outDir) {
-        writer = null;
-        if (ENABLED) {
-            try {
-                close();
-                Path logPath = outDir.resolve("blockentity-debug.log");
-                writer = Files.newBufferedWriter(logPath, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-                log("BlockEntity debug log initialized");
-            } catch (IOException e) {
-                System.err.printf("[BlockEntityDebugLogger] Failed to initialize: %s%n", e.getMessage());
-            }
+        try {
+            VoxelBridgeLogger.initialize(outDir);
+        } catch (IOException e) {
+            VoxelBridgeLogger.error(LogModule.BLOCKENTITY, "Failed to initialize: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Logs a BlockEntity debug message.
+     * Now delegates to VoxelBridgeLogger with BLOCKENTITY module.
+     *
+     * @param message The message to log
+     * @deprecated Use {@link VoxelBridgeLogger#debug(LogModule, String)} with LogModule.BLOCKENTITY
+     */
+    @Deprecated
     public static synchronized void log(String message) {
-        if (ENABLED && writer != null) {
-            try {
-                writer.write(String.format("[%s] %s%n", TIMESTAMP.format(LocalDateTime.now()), message));
-                writer.flush();
-            } catch (IOException e) {
-                System.err.printf("[BlockEntityDebugLogger] Failed to write log: %s%n", e.getMessage());
-            }
-        }
-        // Also write to main export log for convenience
-        ExportLogger.log(message);
+        VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, message);
     }
 
+    /**
+     * Closes the logging system.
+     * Now delegates to VoxelBridgeLogger.
+     *
+     * @deprecated Use {@link VoxelBridgeLogger#close()}
+     */
+    @Deprecated
     public static synchronized void close() {
-        if (ENABLED && writer != null) {
-            try {
-                writer.flush();
-                writer.close();
-            } catch (IOException ignored) {
-            } finally {
-                writer = null;
-            }
-        }
+        VoxelBridgeLogger.close();
     }
 }

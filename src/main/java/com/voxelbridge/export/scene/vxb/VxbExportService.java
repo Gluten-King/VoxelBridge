@@ -8,9 +8,10 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.client.ProgressNotifier;
-import com.voxelbridge.util.debug.BlockEntityDebugLogger;
 import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.TimeLogger;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -34,9 +35,9 @@ public final class VxbExportService {
                                     BlockPos pos2,
                                     Path outDir) throws IOException {
         String banner = "============================================================";
-        System.out.println(banner);
-        System.out.println("[VoxelBridge][VXB] *** VXB EXPORT STARTED ***");
-        System.out.println(banner);
+        VoxelBridgeLogger.info(LogModule.VXB, banner);
+        VoxelBridgeLogger.info(LogModule.VXB, "*** VXB EXPORT STARTED ***");
+        VoxelBridgeLogger.info(LogModule.VXB, banner);
 
         if (!Files.exists(outDir)) {
             Files.createDirectories(outDir);
@@ -57,9 +58,9 @@ public final class VxbExportService {
             Files.createDirectories(vxbDir);
         }
 
-        System.out.println("[VoxelBridge][VXB] Output directory: " + vxbDir);
-        System.out.printf("[VoxelBridge][VXB] Region: X[%d to %d], Y[%d to %d], Z[%d to %d]%n",
-            minX, maxX, minY, maxY, minZ, maxZ);
+        VoxelBridgeLogger.info(LogModule.VXB, "Output directory: " + vxbDir);
+        VoxelBridgeLogger.info(LogModule.VXB, String.format("Region: X[%d to %d], Y[%d to %d], Z[%d to %d]",
+            minX, maxX, minY, maxY, minZ, maxZ));
 
         Minecraft mc = Minecraft.getInstance();
         ExportContext ctx = new ExportContext(mc);
@@ -73,10 +74,9 @@ public final class VxbExportService {
         TextureAtlasManager.initializeReservedSlots(ctx);
         com.voxelbridge.export.texture.ColorMapManager.initializeReservedSlots(ctx);
 
+        // Initialize unified logging system
         ExportLogger.initialize(outDir);
-        TimeLogger.initialize(outDir);
         ExportLogger.log("[VXB] Starting VXB export with format-agnostic sampler");
-        BlockEntityDebugLogger.initialize(outDir);
         com.voxelbridge.export.texture.BlockEntityTextureManager.clear(ctx);
 
         long tTotal = TimeLogger.now();
@@ -118,24 +118,22 @@ public final class VxbExportService {
             ExportLogger.log("[VXB] Export complete: " + outputPath);
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "完成");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            System.out.println(banner);
-            System.out.println("[VoxelBridge][VXB] *** EXPORT COMPLETED SUCCESSFULLY ***");
-            System.out.println("[VoxelBridge][VXB] Output: " + outputPath);
-            System.out.println(banner);
+            VoxelBridgeLogger.info(LogModule.VXB, banner);
+            VoxelBridgeLogger.info(LogModule.VXB, "*** EXPORT COMPLETED SUCCESSFULLY ***");
+            VoxelBridgeLogger.info(LogModule.VXB, "Output: " + outputPath);
+            VoxelBridgeLogger.info(LogModule.VXB, banner);
         } catch (Exception e) {
-            String errorMsg = "[VXB][ERROR] Export failed: " + e.getClass().getName() + ": " + e.getMessage();
-            ExportLogger.log(errorMsg);
+            String errorMsg = "Export failed: " + e.getClass().getName() + ": " + e.getMessage();
+            ExportLogger.log("[VXB][ERROR] " + errorMsg);
             ExportLogger.log("[VXB][ERROR] Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {
                 ExportLogger.log("    at " + element.toString());
             }
-            System.err.println(errorMsg);
-            e.printStackTrace();
+            VoxelBridgeLogger.error(LogModule.VXB, errorMsg, e);
             throw new IOException("Export failed during write phase: " + e.getMessage(), e);
         } finally {
-            BlockEntityDebugLogger.close();
+            // Close unified logging system
             ExportLogger.close();
-            TimeLogger.close();
         }
 
         return outputPath;

@@ -2,7 +2,6 @@ package com.voxelbridge.export.exporter;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
-import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.util.color.ColorModeHandler;
 import com.voxelbridge.export.util.geometry.GeometryUtil;
@@ -10,7 +9,6 @@ import com.voxelbridge.export.util.geometry.VertexExtractor;
 import com.voxelbridge.util.pool.ObjectPool;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
@@ -23,7 +21,7 @@ import java.util.*;
 
 /**
  * Manages overlay quad detection, caching, and rendering.
- * Overlays are organized by base material key to ensure correct attribution.
+ * Overlays are organized by position to keep per-face overlay ordering stable.
  */
 public final class OverlayManager {
 
@@ -31,8 +29,8 @@ public final class OverlayManager {
     private final Level level;
     private final double offsetX, offsetY, offsetZ;
 
-    // Cache overlays by their source block (baseMaterialKey)
-    private final Map<String, List<OverlayQuadData>> overlayCacheByMaterial = new HashMap<>();
+    // Cache overlays by their position hash
+    private final Map<Long, List<OverlayQuadData>> overlayCacheByPosition = new HashMap<>();
 
     // Track which sprites have been processed as overlays
     private final Set<String> processedOverlaySprites = new HashSet<>();
@@ -52,15 +50,19 @@ public final class OverlayManager {
         final String spriteKey;
         final int color;
         final Direction direction;    // Direction for visibility culling
+        final String materialKey;     // Base material key for overlay material name
+        final String materialSuffix;  // Suffix to append to materialKey (e.g., "_overlay", "_hilight", or null)
 
         OverlayQuadData(float[] positions, float[] normal, float[] uv,
-                        String spriteKey, int color, Direction direction) {
+                        String spriteKey, int color, Direction direction, String materialKey, String materialSuffix) {
             this.positions = positions;
             this.normal = normal;
             this.uv = uv;
             this.spriteKey = spriteKey;
             this.color = color;
             this.direction = direction;
+            this.materialKey = materialKey;
+            this.materialSuffix = materialSuffix;
         }
     }
 
@@ -76,7 +78,7 @@ public final class OverlayManager {
      * Clears all overlay caches. Call this before processing each block.
      */
     public void clear() {
-        overlayCacheByMaterial.clear();
+        overlayCacheByPosition.clear();
         processedOverlaySprites.clear();
     }
 
@@ -140,11 +142,34 @@ public final class OverlayManager {
      */
     public void cacheOverlay(String baseMaterialKey, BlockState state, BlockPos pos,
                              BakedQuad quad, Vec3 randomOffset, String spriteKey) {
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_overlay");
+    }
+
+    /**
+     * Caches a hilight overlay quad.
+     * Uses "_hilight" suffix for material key.
+     */
+    public void cacheHilight(String baseMaterialKey, BlockState state, BlockPos pos,
+                             BakedQuad quad, Vec3 randomOffset, String spriteKey) {
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_hilight");
+    }
+
+    /**
+     * Caches an overlay quad without marking it as processed (for non-traditional overlays).
+     * Uses original materialKey instead of appending "_overlay".
+     */
+    public void cacheOverlayNoMarkup(String baseMaterialKey, BlockState state, BlockPos pos,
+                                     BakedQuad quad, Vec3 randomOffset, String spriteKey) {
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, null);
+    }
+
+    private void cacheOverlayInternal(String baseMaterialKey, BlockState state, BlockPos pos,
+                             BakedQuad quad, Vec3 randomOffset, String spriteKey, String materialSuffix) {
         if (baseMaterialKey == null || baseMaterialKey.isEmpty()) {
             baseMaterialKey = "unknown";
         }
 
-        // Mark sprite as processed
+        // Mark sprite as processed (all overlays skip PASS 2)
         processedOverlaySprites.add(spriteKey);
 
         var sprite = quad.getSprite();
@@ -156,6 +181,11 @@ public final class OverlayManager {
         boolean isDynamicTexture = spriteKey.contains("_overlay")
             || spriteKey.matches(".*\\d+$")
             || !ctx.getMaterialPaths().containsKey(spriteKey);
+        boolean isHilightSprite = spriteKey.toLowerCase().contains("_hilight");
+        String effectiveSuffix = materialSuffix;
+        if (isHilightSprite) {
+            effectiveSuffix = "_hilight";
+        }
 
         if (isDynamicTexture) {
             com.voxelbridge.export.texture.TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
@@ -219,12 +249,25 @@ public final class OverlayManager {
                 uv0[i * 2 + 1] = sv;
             }
 
-            // Get current overlay count for this material to determine z-offset index
-            List<OverlayQuadData> overlayList = overlayCacheByMaterial.computeIfAbsent(baseMaterialKey, k -> new ArrayList<>());
+            // Skip hilight quads that are fully transparent in the hilight texture
+            if (isHilightSprite && isQuadFullyTransparent(spriteKey, uv0)) {
+                return;
+            }
+
+            // Compute position hash before applying overlay offsets (per-face grouping)
+            float[] baseWorldPos = VertexExtractor.localToWorld(localPos, pos, offsetX, offsetY, offsetZ, randomOffset);
+            long posHash = computePositionHash(baseWorldPos);
+
+            // Get current overlay count for this position to determine z-offset index
+            List<OverlayQuadData> overlayList = overlayCacheByPosition.computeIfAbsent(posHash, k -> new ArrayList<>());
             int overlayIndex = overlayList.size();
 
             // Apply overlay offset in local coordinates to prevent z-fighting
-            VertexExtractor.applyOverlayOffset(localPos, overlayIndex);
+            // hilight 使用更大的偏移（2x）避免与 overlay 共面；按 sprite 名判断
+            boolean isHilight = isHilightSprite || "_hilight".equals(effectiveSuffix);
+            float offsetMultiplier = isHilight ? 2f : 1f;
+            int offsetIndex = isHilight ? 0 : overlayIndex;
+            VertexExtractor.applyOverlayOffset(localPos, offsetIndex, offsetMultiplier, dir);
 
             // Convert to world coordinates
             float[] worldPos = VertexExtractor.localToWorld(localPos, pos, offsetX, offsetY, offsetZ, randomOffset);
@@ -235,7 +278,7 @@ public final class OverlayManager {
 
             OverlayQuadData data = new OverlayQuadData(
                 positions.clone(), normal, uv0.clone(),
-                spriteKey, overlayColor, dir
+                spriteKey, overlayColor, dir, baseMaterialKey, effectiveSuffix
             );
             overlayList.add(data);
         } finally {
@@ -246,6 +289,37 @@ public final class OverlayManager {
         }
     }
 
+    private boolean isQuadFullyTransparent(String spriteKey, float[] uvNormalized) {
+        BufferedImage img = ctx.getCachedSpriteImage(spriteKey);
+        if (img == null) {
+            return false;
+        }
+        int w = img.getWidth();
+        int h = img.getHeight();
+        if (w <= 0 || h <= 0) return false;
+        float umin = 1f, umax = 0f, vmin = 1f, vmax = 0f;
+        for (int i = 0; i < 4; i++) {
+            float su = uvNormalized[i * 2];
+            float sv = uvNormalized[i * 2 + 1];
+            umin = Math.min(umin, su);
+            umax = Math.max(umax, su);
+            vmin = Math.min(vmin, sv);
+            vmax = Math.max(vmax, sv);
+        }
+        int minX = Math.max(0, (int) Math.floor(umin * (w - 1)));
+        int maxX = Math.min(w - 1, (int) Math.ceil(umax * (w - 1)));
+        int minY = Math.max(0, (int) Math.floor(vmin * (h - 1)));
+        int maxY = Math.min(h - 1, (int) Math.ceil(vmax * (h - 1)));
+        for (int y = minY; y <= maxY; y++) {
+            for (int x = minX; x <= maxX; x++) {
+                int alpha = (img.getRGB(x, y) >>> 24) & 0xFF;
+                if (alpha != 0) {
+                    return false; // found opaque pixel, keep quad
+                }
+            }
+        }
+        return true; // all covered pixels are transparent
+    }
     /**
      * Outputs all cached overlays to the scene sink with visibility culling.
      *
@@ -254,14 +328,14 @@ public final class OverlayManager {
      * @param cullChecker function to check if a face should be culled
      */
     public void outputOverlays(SceneSink sceneSink, BlockState state, CullChecker cullChecker) {
-        for (Map.Entry<String, List<OverlayQuadData>> entry : overlayCacheByMaterial.entrySet()) {
-            String materialKey = entry.getKey();
-            List<OverlayQuadData> overlays = entry.getValue();
+        for (List<OverlayQuadData> overlays : overlayCacheByPosition.values()) {
             if (overlays.isEmpty()) continue;
 
-            String overlayMaterialKey = materialKey + "_overlay";
-
             for (OverlayQuadData overlay : overlays) {
+                // Use suffix if provided (e.g., "_overlay", "_hilight"), otherwise use base materialKey
+                String overlayMaterialKey = overlay.materialSuffix != null
+                    ? overlay.materialKey + overlay.materialSuffix
+                    : overlay.materialKey;
                 Direction dir = overlay.direction;
 
                 // Apply occlusion culling
@@ -278,6 +352,27 @@ public final class OverlayManager {
                     overlayColorData.colors, doubleSided);
             }
         }
+    }
+
+    private long computePositionHash(float[] positions) {
+        Integer[] order = {0, 1, 2, 3};
+        java.util.Arrays.sort(order, (a, b) -> {
+            int ia = a * 3;
+            int ib = b * 3;
+            int cmpX = Float.compare(positions[ia], positions[ib]);
+            if (cmpX != 0) return cmpX;
+            int cmpY = Float.compare(positions[ia + 1], positions[ib + 1]);
+            if (cmpY != 0) return cmpY;
+            return Float.compare(positions[ia + 2], positions[ib + 2]);
+        });
+        long hash = 1125899906842597L;
+        for (int idx : order) {
+            int pi = idx * 3;
+            hash = 31 * hash + Math.round(positions[pi] * 100f);
+            hash = 31 * hash + Math.round(positions[pi + 1] * 100f);
+            hash = 31 * hash + Math.round(positions[pi + 2] * 100f);
+        }
+        return hash;
     }
 
     /**

@@ -129,10 +129,24 @@ public final class VertexExtractor {
      * @param overlayIndex overlay layer index (0-based, 0 = first overlay)
      */
     public static void applyOverlayOffset(float[] localPositions, int overlayIndex) {
+        applyOverlayOffset(localPositions, overlayIndex, 1f, null);
+    }
+
+    /**
+     * Applies overlay z-offset with an extra multiplier (e.g., hilight uses a larger offset).
+     */
+    public static void applyOverlayOffset(float[] localPositions, int overlayIndex, float multiplier) {
+        applyOverlayOffset(localPositions, overlayIndex, multiplier, null);
+    }
+
+    /**
+     * Applies overlay z-offset using explicit face direction when available.
+     */
+    public static void applyOverlayOffset(float[] localPositions, int overlayIndex, float multiplier, net.minecraft.core.Direction dir) {
         if (localPositions == null || localPositions.length < 12) return;
 
-        // Constants
-        final float OVERLAY_ZFIGHT_OFFSET = 3e-4f;
+        // Constants - increased offset for better separation (2-3x original)
+        final float OVERLAY_ZFIGHT_OFFSET = 8e-4f;  // 0.0008 (was 0.0003)
         final float LOCAL_CENTER = 0.5f;
 
         // Calculate quad center in local coordinate system
@@ -157,25 +171,31 @@ public final class VertexExtractor {
         float adz = Math.abs(dz);
 
         float nx, ny, nz;
-        if (adx >= ady && adx >= adz) {
-            // X-axis face (East/West)
-            nx = dx > 0 ? 1f : -1f;
-            ny = 0f;
-            nz = 0f;
-        } else if (ady >= adx && ady >= adz) {
-            // Y-axis face (Top/Bottom)
-            nx = 0f;
-            ny = dy > 0 ? 1f : -1f;
-            nz = 0f;
+        if (dir != null) {
+            nx = dir.getStepX();
+            ny = dir.getStepY();
+            nz = dir.getStepZ();
         } else {
-            // Z-axis face (North/South)
-            nx = 0f;
-            ny = 0f;
-            nz = dz > 0 ? 1f : -1f;
+            if (adx >= ady && adx >= adz) {
+                // X-axis face (East/West)
+                nx = dx > 0 ? 1f : -1f;
+                ny = 0f;
+                nz = 0f;
+            } else if (ady >= adx && ady >= adz) {
+                // Y-axis face (Top/Bottom)
+                nx = 0f;
+                ny = dy > 0 ? 1f : -1f;
+                nz = 0f;
+            } else {
+                // Z-axis face (North/South)
+                nx = 0f;
+                ny = 0f;
+                nz = dz > 0 ? 1f : -1f;
+            }
         }
 
         // Apply progressive offset based on overlay index
-        float offsetMultiplier = (overlayIndex + 1);
+        float offsetMultiplier = (overlayIndex + 1) * multiplier;
         float offset = OVERLAY_ZFIGHT_OFFSET * offsetMultiplier;
 
         // Apply offset to all vertices

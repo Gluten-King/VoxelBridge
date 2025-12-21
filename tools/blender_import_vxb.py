@@ -1,17 +1,21 @@
-import json
+﻿import json
 import os
+import re
 import struct
+import mmap
 from pathlib import Path
 
 # Blender-only imports
 import bpy
+from bpy.props import BoolProperty, StringProperty
+from bpy.types import Operator
 
-ROTATE_X_90 = False
+ROTATE_X_90 = True
 
 
 def _read_bytes(path):
     with open(path, "rb") as f:
-        return f.read()
+        return mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
 
 
 def _slice(buf, offset, length):
@@ -65,14 +69,42 @@ def _read_uv_loop(buf, loop_count, atlas_size, normalized=False):
     return uvs
 
 
-def import_vxb(json_path):
+def _read_uv1_loop(buf, loop_count, atlas_size, uv1_quant, colormap_mode):
+    uvs = [None] * loop_count
+    for i in range(loop_count):
+        base = i * 8
+        u = struct.unpack_from("<H", buf, base)[0]
+        v = struct.unpack_from("<H", buf, base + 2)[0]
+        packed = struct.unpack_from("<H", buf, base + 4)[0]
+        if uv1_quant == "atlas_u16":
+            uu = u / float(atlas_size)
+            vv = v / float(atlas_size)
+        else:
+            uu = u / 65535.0
+            vv = v / 65535.0
+        if colormap_mode:
+            tile_u = packed % 10
+            tile_v = packed // 10
+            uu = uu + tile_u
+            vv = vv - tile_v  
+        uvs[i] = (uu, vv)
+    return uvs
+
+
+def import_vxb(json_path, validate_mesh=False):
     json_path = Path(json_path)
-    data = json.loads(json_path.read_text(encoding="utf-8"))
+    try:
+        text = json_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"Failed to read {json_path} as UTF-8. Please ensure you selected the exported .vxb JSON file, not a binary buffer file.") from exc
+    data = json.loads(text)
     base_dir = json_path.parent
 
     buffers = {b["name"]: (base_dir / b["uri"]).resolve() for b in data["buffers"]}
     atlas_size = int(data.get("atlasSize", 8192))
     uv1_quant = data.get("uv1Quantization", "normalized_u16")
+    color_mode = data.get("colorMode", "VERTEX_COLOR")
+    colormap_mode = color_mode.upper() == "COLORMAP"
 
     bin_cache = {}
     for name, path in buffers.items():
@@ -84,6 +116,12 @@ def import_vxb(json_path):
     if collection is None:
         collection = bpy.data.collections.new("VXB")
         bpy.context.scene.collection.children.link(collection)
+
+    # merge_key -> accumulators
+    merged = {}
+
+    total_transparent_faces = 0
+    total_degenerate_faces = 0
 
     for mesh_idx, mesh_info in enumerate(data["meshes"]):
         base_name = mesh_info.get("name", f"mesh_{mesh_idx}")
@@ -135,44 +173,141 @@ def import_vxb(json_path):
                 indices = _read_u32(idx_buf, icount)
                 faces = [indices[i:i + 3] for i in range(0, len(indices), 3)]
 
-            mesh = bpy.data.meshes.new(name)
-            mesh.from_pydata(vertices, [], faces)
-            mesh.update()
+            # Strip chunk/section separators (e.g., "__" in the name)
+            base_merge = name.split("__", 1)[0]
+            # Remove trailing numeric suffixes (e.g., dirt1, dirt_2 -> dirt)
+            merge_key = re.sub(r"(?:_?\d+)+$", "", base_merge)
+            bucket = merged.setdefault(merge_key, {
+                "verts": [],
+                "faces": [],
+                "uv0": [],
+                "uv1": [],
+                "colors": [],
+                "has_uv1": False,
+            })
 
-            obj = bpy.data.objects.new(name, mesh)
-            collection.objects.link(obj)
+            base_idx = len(bucket["verts"])
+            bucket["verts"].extend(vertices)
 
-            # UV0
             loop_count = sum(len(f) for f in faces)
             uv_buf = _slice(bin_cache[uv_view["buffer"]], uv_view["offset"], loop_count * 8)
-            uv0 = _read_uv_loop(uv_buf, loop_count, atlas_size, normalized=False)
-            uv_layer = mesh.uv_layers.new(name="UV0")
-            for i, uv in enumerate(uv0):
-                uv_layer.data[i].uv = uv
+            uv0_raw = _read_uv_loop(uv_buf, loop_count, atlas_size, normalized=False)
 
-            # UV1 (overlay / colormap)
+            uv1_raw = None
             if uv1_view is not None:
                 uv1_buf = _slice(bin_cache[uv1_view["buffer"]], uv1_view["offset"], loop_count * 8)
-                if uv1_quant == "atlas_u16":
-                    uv1 = _read_uv_loop(uv1_buf, loop_count, atlas_size, normalized=False)
-                else:
-                    uv1 = _read_uv_loop(uv1_buf, loop_count, atlas_size, normalized=True)
-                uv1_layer = mesh.uv_layers.new(name="UV1")
-                for i, uv in enumerate(uv1):
-                    uv1_layer.data[i].uv = uv
+                uv1_raw = _read_uv1_loop(uv1_buf, loop_count, atlas_size, uv1_quant, colormap_mode)
+                bucket["has_uv1"] = True
 
-            # Vertex color from LOOP_ATTR
             loop_buf = _slice(bin_cache[loop_view["buffer"]], loop_view["offset"], loop_count * 16)
-            _, colors = _read_loop_attr(loop_buf, loop_count)
-            color_layer = mesh.color_attributes.new(name="Color", type='BYTE_COLOR', domain='CORNER')
-            for i, col in enumerate(colors):
-                color_layer.data[i].color = (col[0], col[1], col[2], col[3])
+            _, colors_raw = _read_loop_attr(loop_buf, loop_count)
+
+            # Iterate through faces, skip fully transparent and degenerate faces
+            loop_cursor = 0
+            for f in faces:
+                f_len = len(f)
+                face_colors = colors_raw[loop_cursor:loop_cursor + f_len]
+
+                # Check for fully transparent faces
+                is_transparent = all(c[3] == 0.0 for c in face_colors)
+
+                # Check for degenerate faces (duplicate vertex indices)
+                is_degenerate = len(set(f)) < f_len
+
+                if is_transparent:
+                    total_transparent_faces += 1
+                elif is_degenerate:
+                    total_degenerate_faces += 1
+                else:
+                    # Only accumulate valid face data
+                    face_uv0 = uv0_raw[loop_cursor:loop_cursor + f_len]
+                    if uv1_raw is not None:
+                        face_uv1 = uv1_raw[loop_cursor:loop_cursor + f_len]
+                    else:
+                        face_uv1 = [(0.0, 0.0)] * f_len
+
+                    bucket["faces"].append([idx + base_idx for idx in f])
+                    bucket["uv0"].extend(face_uv0)
+                    bucket["uv1"].extend(face_uv1)
+                    bucket["colors"].extend(face_colors)
+
+                loop_cursor += f_len
+
+    for merge_key, bucket in merged.items():
+        verts = bucket["verts"]
+        faces = bucket["faces"]
+        uv0 = bucket["uv0"]
+        uv1 = bucket["uv1"]
+        colors = bucket["colors"]
+        has_uv1 = bucket["has_uv1"]
+
+        mesh = bpy.data.meshes.new(merge_key)
+        mesh.from_pydata(verts, [], faces)
+
+        # Skip mesh.validate() - we already filtered degenerate and fully transparent faces during import
+        # validate() modifies mesh topology (removes degenerate faces, merges vertices, etc.),
+        # causing loop count mismatch with our prepared UV/color data
+
+        loop_total = len(mesh.loops)
+        if loop_total != len(uv0):
+            raise RuntimeError(f"UV0 loop count mismatch for {merge_key}: loops={loop_total}, uv0={len(uv0)}")
+
+        uv_layer0 = mesh.uv_layers.new(name="UV0")
+        uv_layer0.data.foreach_set("uv", [c for uv in uv0 for c in uv])
+
+        if has_uv1:
+            uv_layer1 = mesh.uv_layers.new(name="UV1")
+            uv_layer1.data.foreach_set("uv", [c for uv in uv1 for c in uv])
+
+        color_layer = mesh.color_attributes.new(name="Color", type='BYTE_COLOR', domain='CORNER')
+        color_layer.data.foreach_set("color", [c for col in colors for c in col])
+
+        mesh.update()
+
+        obj = bpy.data.objects.new(merge_key, mesh)
+        collection.objects.link(obj)
 
     print(f"Imported VXB from {json_path}")
+    if validate_mesh and (total_transparent_faces > 0 or total_degenerate_faces > 0):
+        print(f"  Skipped {total_transparent_faces} transparent faces and {total_degenerate_faces} degenerate faces")
 
 
-# Entry point for Blender Text Editor
-# Replace with your exported vxb.json path
-VXB_JSON_PATH = r"D:\\ModrinthApp\\profiles\\1.21.1\\export\\2025-12-18_08-33-03\\vxb\\region_7_20_30__7_20_30.vxb"
+class VXB_OT_import(Operator):
+    bl_idname = "wm.vxb_import"
+    bl_label = "Import VXB"
+    bl_options = {"REGISTER", "UNDO"}
 
-import_vxb(VXB_JSON_PATH)
+    filepath: StringProperty(subtype="FILE_PATH")
+    validate_mesh: BoolProperty(
+        name="Validate Mesh",
+        description="Call mesh.validate to clean degenerate geometry",
+        default=False,
+    )
+
+    def execute(self, context):
+        if not self.filepath:
+            self.report({"ERROR"}, "No VXB file selected")
+            return {"CANCELLED"}
+        try:
+            import_vxb(self.filepath, self.validate_mesh)
+        except Exception as exc:  # pragma: no cover - Blender runtime
+            self.report({"ERROR"}, f"Import failed: {exc}")
+            raise
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+
+def register():
+    bpy.utils.register_class(VXB_OT_import)
+
+
+def unregister():
+    bpy.utils.unregister_class(VXB_OT_import)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    register()
+    bpy.ops.wm.vxb_import("INVOKE_DEFAULT")
