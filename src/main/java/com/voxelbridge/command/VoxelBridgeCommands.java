@@ -306,7 +306,7 @@ public final class VoxelBridgeCommands {
                 Path outDir = IOUtil.ensureExportDir();
                 Thread exportThread = new ExportThread(level, pos1, pos2, outDir);
                 String formatName = ExportRuntimeConfig.getExportFormat().getDescription();
-                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Exporting to " + formatName + "..."));
+                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] 开始导出 (" + formatName + ") ..."));
                 exportThread.start();
                 return 1;
             } catch (Exception e) {

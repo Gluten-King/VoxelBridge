@@ -7,7 +7,6 @@ import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-
 @OnlyIn(Dist.CLIENT)
 public final class ProgressNotifier {
 
@@ -45,19 +44,17 @@ public final class ProgressNotifier {
         String mem = memoryStats();
         String eta = eta(p);
         String stage = stageLabel(p.stage(), p.stageDetail());
+        String format = ExportProgressTracker.getActiveFormat().getDescription();
 
-        // 分成两行，避免太宽被截断
-        String line1 = String.format("[VoxelBridge] %s %.1f%% %s", stage, p.percent(), bar);
-        String line2 = String.format("✔%d ▶%d ⧗%d ✖%d | 耗时%.1fs%s | %s",
+        String line1 = String.format("[VoxelBridge %s] %s %.1f%% %s", format, stage, p.percent(), bar);
+        String line2 = String.format("完成:%d 运行:%d 待:%d 失败:%d | %.1fs%s | %s",
             p.done(), p.running(), p.pending(), p.failed(), p.elapsedSeconds(), eta, mem);
 
-        return Component.literal(line1)
-            .append(Component.literal("\n").withStyle(ChatFormatting.RESET))
-            .append(Component.literal(line2));
+        return Component.literal(line1 + "\n" + line2).withStyle(ChatFormatting.RESET);
     }
 
     private static String buildBar(float percent) {
-        int segments = 12;
+        int segments = 10;
         int filled = Math.round(percent / 100f * segments);
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < segments; i++) {
@@ -72,7 +69,7 @@ public final class ProgressNotifier {
         long max = rt.maxMemory();
         double usedMb = used / 1024.0 / 1024.0;
         double maxMb = max / 1024.0 / 1024.0;
-        return String.format("内存%d/%dMB", Math.round(usedMb), Math.round(maxMb));
+        return String.format("Mem %d/%dMB", Math.round(usedMb), Math.round(maxMb));
     }
 
     private static String eta(ExportProgressTracker.Progress p) {
@@ -81,14 +78,14 @@ public final class ProgressNotifier {
         double rate = completed / Math.max(0.1, p.elapsedSeconds());
         int remaining = p.total() - completed;
         double etaSec = remaining / Math.max(0.1, rate);
-        return String.format(" | 预计%.1fs", etaSec);
+        return String.format(" ETA %.1fs", etaSec);
     }
 
     private static String stageLabel(ExportProgressTracker.Stage stage, String detail) {
         String base = switch (stage) {
             case SAMPLING -> "采样";
             case ATLAS -> "贴图";
-            case FINALIZE -> "写入";
+            case FINALIZE -> "写出";
             case COMPLETE -> "完成";
             default -> "准备";
         };

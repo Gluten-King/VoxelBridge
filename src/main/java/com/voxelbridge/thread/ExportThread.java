@@ -1,6 +1,7 @@
 package com.voxelbridge.thread;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
+import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.scene.gltf.GltfExportService;
 import com.voxelbridge.export.scene.vxb.VxbExportService;
 import net.minecraft.core.BlockPos;
@@ -26,7 +27,7 @@ public class ExportThread extends Thread {
         this.pos1 = pos1;
         this.pos2 = pos2;
         this.outDir = outDir;
-        setName("MineExporter-Export");
+        setName("VoxelBridge-Export");
     }
 
     @Override
@@ -37,6 +38,7 @@ public class ExportThread extends Thread {
 
             Path file;
             ExportRuntimeConfig.ExportFormat format = ExportRuntimeConfig.getExportFormat();
+            ExportProgressTracker.setActiveFormat(format);
             if (format == ExportRuntimeConfig.ExportFormat.VXB) {
                 file = VxbExportService.exportRegion(level, pos1, pos2, outDir);
             } else {

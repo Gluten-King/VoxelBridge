@@ -5,8 +5,12 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.TextureLoader;
+import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.debug.TimeLogger;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.resources.ResourceLocation;
 
 import java.awt.image.BufferedImage;
 import java.io.BufferedWriter;
@@ -40,7 +44,7 @@ public final class VxbSceneBuilder implements SceneSink {
     private final List<String> spriteKeys = new ArrayList<>();
     private final List<SpriteSize> spriteSizes = new ArrayList<>();
     private final Map<Long, ChunkState> chunkStates = new LinkedHashMap<>();
-    private final Map<String, MeshInfo> meshInfos = new LinkedHashMap<>();
+    private final Map<String, MeshInfo> meshInfos = new LinkedHashMap<>(); // bucketKey -> MeshInfo
     private final ThreadLocal<Long> currentChunk = new ThreadLocal<>();
     private final Object writeLock = new Object();
     private final BlockingQueue<QueueEvent> queue = new ArrayBlockingQueue<>(16384);
@@ -79,7 +83,8 @@ public final class VxbSceneBuilder implements SceneSink {
         if (materialGroupKey == null || spriteKey == null || positions == null || uv0 == null) return;
         startWriterThread();
         long chunkKey = currentChunk.get() != null ? currentChunk.get() : -1L;
-        enqueue(new QuadEvent(chunkKey, materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, normal, colors, doubleSided));
+        String animName = resolveAnimationName(spriteKey);
+        enqueue(new QuadEvent(chunkKey, materialGroupKey, spriteKey, overlaySpriteKey, positions, uv0, uv1, normal, colors, doubleSided, animName));
     }
 
     @Override
@@ -153,8 +158,9 @@ public final class VxbSceneBuilder implements SceneSink {
                 } catch (IOException e) {
                     throw new RuntimeException("Failed to flush VXB chunk section", e);
                 }
-                MeshInfo info = meshInfos.computeIfAbsent(mesh.materialKey, MeshInfo::new);
-                info.addSection(section);
+                MeshInfo info = meshInfos.computeIfAbsent(mesh.bucketKey,
+                    k -> new MeshInfo(mesh.materialKey, mesh.animationName));
+                info.addSection(section, mesh.animationName);
             }
         }
     }
@@ -178,7 +184,9 @@ public final class VxbSceneBuilder implements SceneSink {
                         }
                     } else if (ev instanceof QuadEvent qe) {
                         ChunkState state = getOrCreateChunkState(qe.chunkKey());
-                        MeshBuilder mesh = state.meshes.computeIfAbsent(qe.materialGroupKey(), MeshBuilder::new);
+                        String bucketKey = bucketKey(qe.materialGroupKey(), qe.animationName());
+                        MeshBuilder mesh = state.meshes.computeIfAbsent(bucketKey,
+                            k -> new MeshBuilder(k, qe.materialGroupKey(), qe.animationName()));
                         mesh.recordQuad(qe.spriteKey(), qe.overlaySpriteKey(), qe.positions(), qe.uv0(), qe.uv1(),
                             qe.normal(), qe.colors(), qe.doubleSided(), this::getSpriteId, this::getSpriteSize);
                     }
@@ -218,13 +226,18 @@ public final class VxbSceneBuilder implements SceneSink {
                              float[] uv1,
                              float[] normal,
                              float[] colors,
-                             boolean doubleSided) implements QueueEvent {}
+                             boolean doubleSided,
+                             String animationName) implements QueueEvent {}
     private record ChunkStartEvent(long chunkKey) implements QueueEvent {}
     private record ChunkEndEvent(long chunkKey, boolean successful) implements QueueEvent {}
     private enum PoisonEvent implements QueueEvent { INSTANCE }
 
     private long packChunkKey(int chunkX, int chunkZ) {
         return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
+    }
+
+    private String bucketKey(String materialKey, String animationName) {
+        return animationName == null ? materialKey : animationName;
     }
 
     private synchronized int getSpriteId(String spriteKey) {
@@ -252,6 +265,40 @@ public final class VxbSceneBuilder implements SceneSink {
             return new SpriteSize(16, 16);
         }
         return new SpriteSize(img.getWidth(), img.getHeight());
+    }
+
+    private String resolveAnimationName(String spriteKey) {
+        if (!ExportRuntimeConfig.isAnimationEnabled()) {
+            return null;
+        }
+        if (spriteKey == null) return null;
+        var repo = ctx.getTextureRepository();
+        if (!repo.hasAnimation(spriteKey)) {
+            detectAnimation(spriteKey, repo);
+        }
+        if (!repo.hasAnimation(spriteKey)) return null;
+        return animationBaseName(spriteKey);
+    }
+
+    private void detectAnimation(String spriteKey, com.voxelbridge.export.texture.TextureRepository repo) {
+        try {
+            // Try atlas sprite first (if already loaded)
+            TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            ResourceLocation spriteLoc = ResourceLocation.parse(spriteKey);
+            TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
+            if (sprite != null) {
+                AnimatedTextureHelper.extractFromSprite(spriteKey, sprite, repo);
+                if (repo.hasAnimation(spriteKey)) return;
+            }
+        } catch (Exception ignored) {
+            // Fallback to metadata scan below
+        }
+        try {
+            ResourceLocation texLoc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            AnimatedTextureHelper.detectFromMetadata(spriteKey, texLoc, repo);
+        } catch (Exception e) {
+            ExportLogger.logAnimation("[Animation][WARN] Detection failed for " + spriteKey + ": " + e.getMessage());
+        }
     }
 
     private void writeJson(Path jsonPath,
@@ -301,15 +348,17 @@ public final class VxbSceneBuilder implements SceneSink {
                 } else {
                     out.write("      \"atlas\": null\n");
                 }
+                out.write("      ,\"animation\": " + (meta.animationBase != null ? "\"" + escape(meta.animationBase) + "\"" : "null") + "\n");
                 out.write("    }" + (i + 1 < spriteKeys.size() ? "," : "") + "\n");
             }
             out.write("  ],\n");
 
             out.write("  \"meshes\": [\n");
             for (int i = 0; i < meshInfos.size(); i++) {
-                MeshInfo m = meshInfos.get(i);
-                out.write("    {\n");
-                out.write("      \"name\": \"" + escape(m.materialKey) + "\",\n");
+            MeshInfo m = meshInfos.get(i);
+            String name = m.animationName != null ? m.animationName : m.materialKey;
+            out.write("    {\n");
+            out.write("      \"name\": \"" + escape(name) + "\",\n");
                 out.write("      \"vertexCount\": " + m.vertexCount + ",\n");
                 out.write("      \"indexCount\": " + m.indexCount + ",\n");
                 out.write("      \"faceCount\": " + m.faceCount + ",\n");
@@ -374,7 +423,8 @@ public final class VxbSceneBuilder implements SceneSink {
         out.write("  \"nodes\": [\n");
         for (int i = 0; i < meshInfos.size(); i++) {
             MeshInfo m = meshInfos.get(i);
-            out.write("    {\"id\": " + i + ", \"name\": \"" + escape(m.materialKey) + "\", \"mesh\": " + i + "}");
+            String name = m.animationName != null ? m.animationName : m.materialKey;
+            out.write("    {\"id\": " + i + ", \"name\": \"" + escape(name) + "\", \"mesh\": " + i + "}");
             if (i + 1 < meshInfos.size()) {
                 out.write(",");
             }
@@ -406,7 +456,33 @@ public final class VxbSceneBuilder implements SceneSink {
                 placement = new AtlasPlacement(p.page(), p.x(), p.y(), p.w(), p.h());
             }
         }
-        return new SpriteMeta(size.width, size.height, texturePath, placement);
+        String animationBase = animationBaseName(spriteKey);
+        return new SpriteMeta(size.width, size.height, texturePath, placement, animationBase);
+    }
+
+    private String animationBaseName(String spriteKey) {
+        if (!ExportRuntimeConfig.isAnimationEnabled()) {
+            return null;
+        }
+        if (!ctx.getTextureRepository().hasAnimation(spriteKey)) {
+            return null;
+        }
+        String base = safe(spriteKey);
+        if (base.endsWith("_animated")) {
+            base = base.substring(0, base.length() - "_animated".length());
+        }
+        boolean overlay = spriteKey.endsWith("_overlay") || spriteKey.contains("/overlay") || spriteKey.contains(":overlay");
+        if (overlay && !base.endsWith("_overlay")) {
+            base = base + "_overlay";
+        }
+        return base + "_animated";
+    }
+
+    private static String safe(String spriteKey) {
+        if (spriteKey == null) {
+            return "unknown";
+        }
+        return spriteKey.replace(':', '_').replace('/', '_');
     }
 
     private void writeBuffer(BufferedWriter out, BufferInfo buffer, int index, int indent) throws IOException {
@@ -440,18 +516,23 @@ public final class VxbSceneBuilder implements SceneSink {
         int faceCount;
         int faceIndexCount;
         boolean doubleSided;
+        String animationName;
 
-        MeshInfo(String materialKey) {
+        MeshInfo(String materialKey, String animationName) {
             this.materialKey = materialKey;
+            this.animationName = animationName;
         }
 
-        void addSection(SectionInfo section) {
+        void addSection(SectionInfo section, String animationName) {
             sections.add(section);
             vertexCount += section.vertexCount;
             indexCount += section.indexCount;
             faceCount += section.faceCount;
             faceIndexCount += section.faceIndexCount;
             doubleSided |= section.doubleSided;
+            if (animationName != null && this.animationName == null) {
+                this.animationName = animationName;
+            }
         }
     }
 
@@ -511,18 +592,21 @@ public final class VxbSceneBuilder implements SceneSink {
         final int height;
         final String texturePath;
         final AtlasPlacement atlas;
+        final String animationBase;
 
-        SpriteMeta(int width, int height, String texturePath, AtlasPlacement atlas) {
+        SpriteMeta(int width, int height, String texturePath, AtlasPlacement atlas, String animationBase) {
             this.width = width;
             this.height = height;
             this.texturePath = texturePath;
             this.atlas = atlas;
+            this.animationBase = animationBase;
         }
     }
 
     private record AtlasPlacement(int page, int x, int y, int w, int h) {}
 
-    private static final class MeshBuilder {
+    private final class MeshBuilder {
+        private final String bucketKey;
         private final String materialKey;
         private final FloatList positions = new FloatList();
         private final IntList indices = new IntList();
@@ -537,9 +621,12 @@ public final class VxbSceneBuilder implements SceneSink {
         private final Map<QuadKey, Boolean> quadDedup = new HashMap<>(2048);
         private final Map<FaceKey, Boolean> faceDedup = new HashMap<>(2048); // Face index deduplication
         private boolean doubleSided;
+        private String animationName;
 
-        MeshBuilder(String materialKey) {
+        MeshBuilder(String bucketKey, String materialKey, String animationName) {
+            this.bucketKey = bucketKey;
             this.materialKey = materialKey;
+            this.animationName = animationName;
         }
 
         void recordQuad(String spriteKey,
@@ -558,6 +645,9 @@ public final class VxbSceneBuilder implements SceneSink {
             int spriteId16 = Math.min(65535, spriteId);
             boolean colormapMode = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP;
             int overlayId16 = Math.min(65535, overlaySpriteId);
+            if (animationName == null && ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(spriteKey)) {
+                animationName = animationBaseName(spriteKey);
+            }
             // Per-vertex UDIM page IDs (colormap) or overlay sprite ID (non-colormap)
             int[] uv1PageIds = new int[4];
             float nx = normal != null && normal.length >= 3 ? normal[0] : 0f;
@@ -573,6 +663,7 @@ public final class VxbSceneBuilder implements SceneSink {
             int[] uv1_u16 = new int[4];
             int[] uv1_v16 = new int[4];
             byte[] colorBytes = new byte[16]; // 4 verts * 4 channels
+            boolean animatedSprite = animationName != null;
 
             for (int i = 0; i < 4; i++) {
                 float px = pos[i * 3];
@@ -586,7 +677,11 @@ public final class VxbSceneBuilder implements SceneSink {
                 qp[i * 3 + 2] = qz;
 
                 uv0_u16[i] = quantizeUv(uv0[i * 2], size.width);
-                uv0_v16[i] = quantizeUv(uv0[i * 2 + 1], size.height);
+                float v0 = uv0[i * 2 + 1];
+                if (animatedSprite) {
+                    v0 = 1.0f - v0; // Animated textures are exported unflipped; flip V to keep orientation consistent
+                }
+                uv0_v16[i] = quantizeUv(v0, size.height);
 
                 if (uv1 != null && uv1.length >= 8) {
                     float uv1_u = uv1[i * 2];
@@ -610,14 +705,14 @@ public final class VxbSceneBuilder implements SceneSink {
                         }
 
                         uv1_u16[i] = quantizeUvNormalized(uFrac);
-                        uv1_v16[i] = quantizeUvNormalized(1.0f - vFrac);  // Flip V for Blender
+                        uv1_v16[i] = quantizeUvNormalized(vFrac);
                         uv1PageIds[i] = packUdimTile(vertexTileU, vertexTileV);
                     } else {
                         // UV1 for overlay/lightmap: convert UDIM to normalized [0,1] and flip V
                         float uNorm = uv1_u - (float)Math.floor(uv1_u);
                         float vNorm = uv1_v - (float)Math.floor(uv1_v);
                         uv1_u16[i] = quantizeUvNormalized(uNorm);
-                        uv1_v16[i] = quantizeUvNormalized(1.0f - vNorm);  // Flip V for Blender
+                        uv1_v16[i] = quantizeUvNormalized(vNorm);
                         uv1PageIds[i] = overlayId16;  // 使用overlay sprite ID
                     }
                 } else {
@@ -908,7 +1003,7 @@ public final class VxbSceneBuilder implements SceneSink {
     private record PositionKey(int x, int y, int z) {}
 
     private static final class ChunkState {
-        final Map<String, MeshBuilder> meshes = new LinkedHashMap<>();
+        final Map<String, MeshBuilder> meshes = new LinkedHashMap<>(); // bucketKey -> builder
     }
 
     private static final class FloatList {

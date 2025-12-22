@@ -7,11 +7,11 @@ import com.voxelbridge.export.StreamingRegionSampler;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.TextureAtlasManager;
-import com.voxelbridge.util.client.ProgressNotifier;
 import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.TimeLogger;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import com.voxelbridge.util.client.ProgressNotifier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -83,7 +83,7 @@ public final class VxbExportService {
         Path outputPath;
 
         try {
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "采样方块");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "Sampling blocks");
             SceneWriteRequest request = new SceneWriteRequest(baseName, vxbDir);
             SceneSink sceneSink = new VxbSceneBuilder(ctx, vxbDir, baseName);
             long tSampling = TimeLogger.now();
@@ -94,11 +94,17 @@ public final class VxbExportService {
             System.gc();
             try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
 
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "生成纹理");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating textures");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             long tAtlas = TimeLogger.now();
             TextureAtlasManager.generateAllAtlases(ctx, vxbDir);
             com.voxelbridge.export.texture.ColorMapManager.generateColorMaps(ctx, vxbDir);
+            if (ExportRuntimeConfig.isAnimationEnabled()) {
+                java.util.Set<String> animationWhitelist = new java.util.HashSet<>();
+                animationWhitelist.addAll(ctx.getAtlasBook().keySet());
+                animationWhitelist.addAll(ctx.getCachedSpriteKeys());
+                TextureAtlasManager.exportDetectedAnimations(ctx, vxbDir, animationWhitelist);
+            }
             TimeLogger.logDuration("texture_atlas_generation", TimeLogger.elapsedSince(tAtlas));
 
             System.gc();
@@ -116,8 +122,9 @@ public final class VxbExportService {
             }
 
             ExportLogger.log("[VXB] Export complete: " + outputPath);
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "完成");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "Complete");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+
             VoxelBridgeLogger.info(LogModule.VXB, banner);
             VoxelBridgeLogger.info(LogModule.VXB, "*** EXPORT COMPLETED SUCCESSFULLY ***");
             VoxelBridgeLogger.info(LogModule.VXB, "Output: " + outputPath);

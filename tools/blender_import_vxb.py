@@ -91,7 +91,7 @@ def _read_uv1_loop(buf, loop_count, atlas_size, uv1_quant, colormap_mode):
     return uvs
 
 
-def import_vxb(json_path, validate_mesh=False):
+def import_vxb(json_path, validate_mesh=True):
     json_path = Path(json_path)
     try:
         text = json_path.read_text(encoding="utf-8")
@@ -281,7 +281,7 @@ class VXB_OT_import(Operator):
     validate_mesh: BoolProperty(
         name="Validate Mesh",
         description="Call mesh.validate to clean degenerate geometry",
-        default=False,
+        default=True,
     )
 
     def execute(self, context):

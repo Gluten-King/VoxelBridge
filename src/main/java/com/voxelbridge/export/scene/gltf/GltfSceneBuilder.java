@@ -7,6 +7,8 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.export.texture.TextureAtlasManager;
+import com.voxelbridge.export.texture.TextureLoader;
+import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.client.ProgressNotifier;
 import com.voxelbridge.util.debug.TimeLogger;
@@ -15,6 +17,9 @@ import de.javagl.jgltf.model.io.GltfAsset;
 import de.javagl.jgltf.model.io.GltfAssetWriter;
 import de.javagl.jgltf.model.io.v2.GltfAssetV2;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.resources.ResourceLocation;
 
 import java.io.*;
 import java.nio.ByteBuffer;
@@ -48,7 +53,7 @@ public final class GltfSceneBuilder implements SceneSink {
     private final GeometryIndex geometryIndex;
 
     // Thread communication
-    private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, null, null, null, null, null, false);
+    private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, null, null, null, null, null, false, null);
     private final BlockingQueue<QuadBatch> queue = new ArrayBlockingQueue<>(16384);
     private final AtomicBoolean writerStarted = new AtomicBoolean(false);
     private Thread writerThread;
@@ -63,7 +68,8 @@ public final class GltfSceneBuilder implements SceneSink {
         float[] uv1,
         float[] normal,
         float[] colors,
-        boolean doubleSided
+        boolean doubleSided,
+        String bucketKey
     ) {}
 
     public GltfSceneBuilder(ExportContext ctx, Path outDir) throws IOException {
@@ -88,12 +94,14 @@ public final class GltfSceneBuilder implements SceneSink {
                         String spriteKey,
                         String overlaySpriteKey,
                         float[] positions,
-                        float[] uv0,
-                        float[] uv1,
-                        float[] normal,
-                        float[] colors,
-                        boolean doubleSided) {
+        float[] uv0,
+        float[] uv1,
+        float[] normal,
+        float[] colors,
+        boolean doubleSided) {
         if (materialGroupKey == null || spriteKey == null) return;
+        String animName = resolveAnimationName(spriteKey);
+        String bucketKey = animName != null ? animName : materialGroupKey;
 
         // Colormap mode: all quads must have TEXCOORD_1; non-tinted points to reserved white slot
         if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP) {
@@ -116,7 +124,7 @@ public final class GltfSceneBuilder implements SceneSink {
         try {
             queue.put(new QuadBatch(
                 materialGroupKey, spriteKey, overlaySpriteKey,
-                positions, uv0, uv1, normal, colors, doubleSided
+                positions, uv0, uv1, normal, colors, doubleSided, bucketKey
             ));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -230,7 +238,7 @@ public final class GltfSceneBuilder implements SceneSink {
 
                     // 写入流式文件
                     streamingWriter.writeQuad(
-                        batch.materialGroupKey,
+                        batch.bucketKey,
                         batch.spriteKey,
                         batch.overlaySpriteKey,
                         batch.positions,
@@ -846,5 +854,55 @@ public final class GltfSceneBuilder implements SceneSink {
             indices.add(textures.size() - 1);
         }
         return indices;
+    }
+
+    private String resolveAnimationName(String spriteKey) {
+        if (!ExportRuntimeConfig.isAnimationEnabled()) {
+            return null;
+        }
+        if (spriteKey == null) return null;
+        var repo = ctx.getTextureRepository();
+        if (!repo.hasAnimation(spriteKey)) {
+            detectAnimation(spriteKey, repo);
+        }
+        if (!repo.hasAnimation(spriteKey)) return null;
+        return animationBaseName(spriteKey);
+    }
+
+    private void detectAnimation(String spriteKey, com.voxelbridge.export.texture.TextureRepository repo) {
+        try {
+            TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            ResourceLocation spriteLoc = ResourceLocation.parse(spriteKey);
+            TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
+            if (sprite != null) {
+                AnimatedTextureHelper.extractFromSprite(spriteKey, sprite, repo);
+                if (repo.hasAnimation(spriteKey)) return;
+            }
+        } catch (Exception ignored) {
+            // fallback to metadata
+        }
+        try {
+            ResourceLocation texLoc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            AnimatedTextureHelper.detectFromMetadata(spriteKey, texLoc, repo);
+        } catch (Exception e) {
+            ExportLogger.logAnimation("[Animation][WARN] glTF detection failed for " + spriteKey + ": " + e.getMessage());
+        }
+    }
+
+    private String animationBaseName(String spriteKey) {
+        String base = safe(spriteKey);
+        boolean overlay = spriteKey.endsWith("_overlay") || spriteKey.contains("/overlay") || spriteKey.contains(":overlay");
+        if (overlay && !base.endsWith("_overlay")) {
+            base = base + "_overlay";
+        }
+        if (!base.endsWith("_animated")) {
+            base = base + "_animated";
+        }
+        return base;
+    }
+
+    private String safe(String spriteKey) {
+        if (spriteKey == null) return "unknown";
+        return spriteKey.replace(':', '_').replace('/', '_');
     }
 }

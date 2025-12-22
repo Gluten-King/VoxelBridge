@@ -1,5 +1,6 @@
 package com.voxelbridge.export;
 
+import com.voxelbridge.config.ExportRuntimeConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.neoforged.api.distmarker.Dist;
@@ -39,6 +40,7 @@ public final class ExportProgressTracker {
     private static volatile long startNanos = 0L;
     private static volatile Stage stage = Stage.IDLE;
     private static volatile String stageDetail = "";
+    private static volatile ExportRuntimeConfig.ExportFormat activeFormat = ExportRuntimeConfig.getExportFormat();
 
     private ExportProgressTracker() {}
 
@@ -51,6 +53,7 @@ public final class ExportProgressTracker {
         startNanos = 0L;
         stage = Stage.IDLE;
         stageDetail = "";
+        activeFormat = ExportRuntimeConfig.getExportFormat();
     }
 
     /**
@@ -87,7 +90,7 @@ public final class ExportProgressTracker {
         total = chunkStates.size();
         startNanos = System.nanoTime();
         stage = Stage.SAMPLING;
-        stageDetail = "采样方块";
+        stageDetail = "Sampling blocks";
     }
 
     public static void setStage(Stage newStage, String detail) {
@@ -170,6 +173,16 @@ public final class ExportProgressTracker {
 
     public static Progress progress() {
         return new Progress(completed.get(), failed.get(), total, running.get(), startNanos, stage, stageDetail);
+    }
+
+    public static ExportRuntimeConfig.ExportFormat getActiveFormat() {
+        return activeFormat;
+    }
+
+    public static void setActiveFormat(ExportRuntimeConfig.ExportFormat format) {
+        if (format != null) {
+            activeFormat = format;
+        }
     }
 
     public record Progress(int done, int failed, int total, int running, long startNanos, Stage stage, String stageDetail) {

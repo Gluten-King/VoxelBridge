@@ -677,6 +677,11 @@ public final class TextureAtlasManager {
         return spriteKey != null && (spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:"));
     }
 
+    /** Public wrapper to export detected animations to a target directory. */
+    public static void exportDetectedAnimations(ExportContext ctx, Path outDir, java.util.Set<String> whitelist) throws IOException {
+        exportAllDetectedAnimations(ctx, outDir, whitelist);
+    }
+
     /**
      * Export all animations detected by scanAllAnimations().
      * This ensures animations like campfire_fire are exported even if not in atlasBook.

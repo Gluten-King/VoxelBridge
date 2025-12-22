@@ -8,11 +8,11 @@ import com.voxelbridge.export.exporter.BlockExporter;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺失的类
 import com.voxelbridge.export.texture.TextureAtlasManager;
+import com.voxelbridge.util.client.ProgressNotifier;
 import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.TimeLogger;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
-import com.voxelbridge.util.client.ProgressNotifier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -103,7 +103,7 @@ public final class GltfExportService {
 
         // Single-pass sampling: collect geometry and texture usage together
         ctx.setDiscoveryMode(false);
-        ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "采样方块");
+        ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "Sampling blocks");
         SceneSink sceneSink = new GltfSceneBuilder(ctx, gltfDir);
         long tSampling = TimeLogger.now();
         StreamingRegionSampler.sampleRegion(level, pos1, pos2, sceneSink, ctx);
@@ -117,7 +117,7 @@ public final class GltfExportService {
         // Generate atlases if needed (place under gltf dir)
         SceneWriteRequest request = new SceneWriteRequest(baseName, gltfDir);
         if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "生成纹理图集");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating texture atlas");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             long tAtlas = TimeLogger.now();
             TextureAtlasManager.generateAllAtlases(ctx, gltfDir);
@@ -149,8 +149,9 @@ public final class GltfExportService {
             }
 
             ExportLogger.log("[GLTF] Export complete: " + outputPath);
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "完成");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "Complete");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+
             VoxelBridgeLogger.info(LogModule.GLTF, banner);
             VoxelBridgeLogger.info(LogModule.GLTF, "*** EXPORT COMPLETED SUCCESSFULLY ***");
             VoxelBridgeLogger.info(LogModule.GLTF, "Output: " + outputPath);
@@ -181,10 +182,10 @@ public final class GltfExportService {
             }
             VoxelBridgeLogger.error(LogModule.GLTF, errorMsg, e);
 
-            // 显示用户友好的错误消息
+            // Display user-friendly error message
             mc.execute(() -> {
                 if (mc.player != null) {
-                    String userMsg = "§c导出失败: " + e.getMessage();
+                    String userMsg = "§cExport failed: " + e.getMessage();
                     mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(userMsg), false);
                 }
             });
