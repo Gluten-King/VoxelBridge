@@ -40,6 +40,7 @@ public final class ExportProgressTracker {
     private static volatile long startNanos = 0L;
     private static volatile Stage stage = Stage.IDLE;
     private static volatile String stageDetail = "";
+    private static volatile Float phasePercent = null;
     private static volatile ExportRuntimeConfig.ExportFormat activeFormat = ExportRuntimeConfig.getExportFormat();
 
     private ExportProgressTracker() {}
@@ -53,6 +54,7 @@ public final class ExportProgressTracker {
         startNanos = 0L;
         stage = Stage.IDLE;
         stageDetail = "";
+        phasePercent = null;
         activeFormat = ExportRuntimeConfig.getExportFormat();
     }
 
@@ -84,6 +86,7 @@ public final class ExportProgressTracker {
         completed.set(0);
         failed.set(0);
         running.set(0);
+        activeFormat = ExportRuntimeConfig.getExportFormat();
         for (Long key : chunkKeys) {
             chunkStates.put(key, ChunkState.PENDING);
         }
@@ -91,11 +94,13 @@ public final class ExportProgressTracker {
         startNanos = System.nanoTime();
         stage = Stage.SAMPLING;
         stageDetail = "Sampling blocks";
+        phasePercent = null;
     }
 
     public static void setStage(Stage newStage, String detail) {
         stage = newStage;
         stageDetail = (detail != null) ? detail : "";
+        phasePercent = null;
     }
 
     public static void markRunning(int cx, int cz) {
@@ -172,7 +177,8 @@ public final class ExportProgressTracker {
     }
 
     public static Progress progress() {
-        return new Progress(completed.get(), failed.get(), total, running.get(), startNanos, stage, stageDetail);
+        Float phase = phasePercent;
+        return new Progress(completed.get(), failed.get(), total, running.get(), startNanos, stage, stageDetail, phase);
     }
 
     public static ExportRuntimeConfig.ExportFormat getActiveFormat() {
@@ -185,9 +191,25 @@ public final class ExportProgressTracker {
         }
     }
 
-    public record Progress(int done, int failed, int total, int running, long startNanos, Stage stage, String stageDetail) {
+    public static void setPhasePercent(Float percent) {
+        if (percent == null) {
+            phasePercent = null;
+            return;
+        }
+        float clamped = Math.max(0f, Math.min(1f, percent));
+        phasePercent = clamped;
+    }
+
+    public record Progress(int done, int failed, int total, int running, long startNanos, Stage stage, String stageDetail, Float phasePercent) {
         public float percent() {
             return total == 0 ? 0f : (done * 100f) / total;
+        }
+
+        public float displayPercent() {
+            if (phasePercent != null) {
+                return phasePercent * 100f;
+            }
+            return percent();
         }
 
         public int pending() {

@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.function.DoubleConsumer;
 
 final class VxbUvRemapper {
     private static final int BYTES_PER_LOOP = 8;
@@ -25,7 +26,8 @@ final class VxbUvRemapper {
                         List<VxbSceneBuilder.SpriteSize> spriteSizes,
                         List<VxbSceneBuilder.MeshInfo> meshes,
                         Path uvRawPath,
-                        Path uvPath) throws IOException {
+                        Path uvPath,
+                        DoubleConsumer progressCallback) throws IOException {
         if (!Files.exists(uvRawPath)) {
             throw new IOException("uvraw file missing: " + uvRawPath);
         }
@@ -67,8 +69,8 @@ final class VxbUvRemapper {
                 for (VxbSceneBuilder.SectionInfo section : mesh.sections) {
                     long loopCount = section.faceIndexCount;
                     long uvBytes = loopCount * BYTES_PER_LOOP;
-                    remapSegment(in, out, inBuf, outBuf, section.uvOffset, uvBytes, params, spriteSizes, atlasSize, atlasEnabled, false, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos);
-                    remapSegment(in, out, inBuf, outBuf, section.uv1Offset, uvBytes, params, spriteSizes, atlasSize, atlasEnabled, true, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos);
+                    remapSegment(in, out, inBuf, outBuf, section.uvOffset, uvBytes, params, spriteSizes, atlasSize, atlasEnabled, false, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos, totalBytes, progressCallback);
+                    remapSegment(in, out, inBuf, outBuf, section.uv1Offset, uvBytes, params, spriteSizes, atlasSize, atlasEnabled, true, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos, totalBytes, progressCallback);
                 }
             }
         }
@@ -97,7 +99,9 @@ final class VxbUvRemapper {
                                      Path uvPath,
                                      long[] readNanos,
                                      long[] processNanos,
-                                     long[] writeNanos) throws IOException {
+                                     long[] writeNanos,
+                                     long totalBytes,
+                                     DoubleConsumer progressCallback) throws IOException {
         if (length <= 0) return;
 
         long remaining = length;
@@ -174,6 +178,10 @@ final class VxbUvRemapper {
                     mb, uvPath.getFileName(), elapsedSec);
                 ExportLogger.log(msg);
                 TimeLogger.logInfo(msg);
+            }
+            if (progressCallback != null && totalBytes > 0) {
+                double frac = Math.min(1.0, processedBytes[0] / (double) totalBytes);
+                progressCallback.accept(frac);
             }
         }
     }

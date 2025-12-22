@@ -35,6 +35,9 @@ public final class StreamingRegionSampler {
 
     private StreamingRegionSampler() {}
 
+    // Throttle per-chunk sampling progress notifications (0.2s).
+    private static volatile long lastSamplingNotifyNanos = 0L;
+
     public static void sampleRegion(Level level,
                                     BlockPos pos1,
                                     BlockPos pos2,
@@ -213,13 +216,16 @@ public final class StreamingRegionSampler {
         }
 
         ExportProgressTracker.Progress finalProgress = ExportProgressTracker.progress();
+        String formatLabel = ExportProgressTracker.getActiveFormat().getDescription();
         String summary = String.format(
-            "[StreamingRegionSampler] 采样阶段完成 - Done: %d, Failed: %d, Total: %d (后续glTF生成中)",
-            finalProgress.done(), finalProgress.failed(), finalProgress.total()
+            "[StreamingRegionSampler] Sampling finished for %s - Done:%d Failed:%d Total:%d (scene build running)",
+            formatLabel, finalProgress.done(), finalProgress.failed(), finalProgress.total()
         );
         ExportLogger.log(summary);
         mc.execute(() -> {
-            if (mc.player != null) mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(summary), false);
+            if (mc.player != null) {
+                mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(summary), false);
+            }
         });
     }
 
@@ -337,6 +343,7 @@ public final class StreamingRegionSampler {
             }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
             finalSink.onChunkEnd(chunkPos.x, chunkPos.z, true);
+            notifySamplingProgress(mc);
             started = false;
 
         } catch (Exception e) {
@@ -345,6 +352,7 @@ public final class StreamingRegionSampler {
                 ExportLogger.log("    at " + el.toString());
             }
             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
+            notifySamplingProgress(mc);
             if (started) {
                 finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
                 started = false;
@@ -412,6 +420,7 @@ public final class StreamingRegionSampler {
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
             ExportLogger.log("[Streaming][Force] Chunk " + chunkPos + " force exported, blocksVisited=" + blockCount);
             finalSink.onChunkEnd(chunkPos.x, chunkPos.z, true);
+            notifySamplingProgress(mc);
             started = false;
 
         } catch (Exception e) {
@@ -420,6 +429,7 @@ public final class StreamingRegionSampler {
                 ExportLogger.log("    at " + el.toString());
             }
             ExportProgressTracker.markFailed(chunkPos.x, chunkPos.z);
+            notifySamplingProgress(mc);
             if (started) {
                 finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
                 started = false;
@@ -459,5 +469,15 @@ public final class StreamingRegionSampler {
         ClientChunkCache cache = clientLevel.getChunkSource();
         LevelChunk chunk = cache.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
         return chunk != null && !chunk.isEmpty();
+    }
+
+    private static void notifySamplingProgress(Minecraft mc) {
+        if (mc == null) return;
+        long now = System.nanoTime();
+        if (now - lastSamplingNotifyNanos < 200_000_000L) {
+            return;
+        }
+        lastSamplingNotifyNanos = now;
+        ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
     }
 }

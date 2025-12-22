@@ -6,6 +6,7 @@ import com.voxelbridge.thread.ExportThread;
 import com.voxelbridge.util.io.IOUtil;
 import com.voxelbridge.util.client.RayCastUtil;
 import com.voxelbridge.VoxelBridge;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -70,8 +71,9 @@ public class KeyInputHandler {
             try {
                 Path outDir = IOUtil.ensureExportDir();
                 Thread exportThread = new ExportThread(mc.level, pos1, pos2, outDir);
+                String format = ExportRuntimeConfig.getExportFormat().getDescription();
                 mc.player.displayClientMessage(
-                        Component.literal("[VoxelBridge] Exporting to glTF..."), false);
+                        Component.literal(String.format("[VoxelBridge] Exporting to %s...", format)), false);
                 exportThread.start();
             } catch (Exception e) {
                 e.printStackTrace();

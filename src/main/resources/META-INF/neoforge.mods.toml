@@ -9,11 +9,11 @@ license = "MIT"
 
 [[mods]]
 modId = "voxelbridge"               
-version = "1.0.0-alpha.1"
+version = "1.0.0-alpha.3"
 displayName = "VoxelBridge"        
 authors = "Gluten King"    
 logoFile = "assets/voxelbridge/logo.png"
-description = '''Exports Minecraft blocks, fluids, and block entities into glTF files.
+description = '''Exports Minecraft blocks, fluids, and block entities into glTF/vxb files.
 '''
 
 

@@ -11,6 +11,7 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.function.DoubleConsumer;
 
 /**
  * UV Remapper: Sequentially reads uvraw.bin, remaps UV coordinates based on atlas, and streams to finaluv.bin.
@@ -34,7 +35,8 @@ final class UVRemapper {
         Path uvrawBin,
         Path finaluvBin,
         SpriteIndex spriteIndex,
-        ExportContext ctx
+        ExportContext ctx,
+        DoubleConsumer progressCallback
     ) throws IOException {
         ExportLogger.log("[UVRemapper] Starting UV remapping...");
 
@@ -144,6 +146,9 @@ final class UVRemapper {
                     if (processedQuads % Math.max(1, totalQuads / 10) == 0 || processedQuads == totalQuads) {
                         ExportLogger.log(String.format("[UVRemapper] %.0f%% (%d/%d quads)",
                             progress, processedQuads, totalQuads));
+                    }
+                    if (progressCallback != null) {
+                        progressCallback.accept(Math.min(1.0, processedQuads / (double) totalQuads));
                     }
                 }
             }

@@ -137,7 +137,8 @@ public final class GltfSceneBuilder implements SceneSink {
 
         try {
             // 1. 结束采样，等待写线程完成
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "完成采样");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "Sampling complete");
+            ExportProgressTracker.setPhasePercent(null);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 1/4: Finalizing sampling...");
             long tFinalizeSampling = TimeLogger.now();
@@ -165,7 +166,8 @@ public final class GltfSceneBuilder implements SceneSink {
             }
 
             // 2. 生成图集
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "生成图集");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Building atlases");
+            ExportProgressTracker.setPhasePercent(null);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 2/4: Generating texture atlases...");
             long tAtlas = TimeLogger.now();
@@ -179,7 +181,8 @@ public final class GltfSceneBuilder implements SceneSink {
             TimeLogger.logDuration("gltf_atlas_generation", TimeLogger.elapsedSince(tAtlas));
 
             // 3. UV重映射
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "重映射UV");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Remapping UVs");
+            ExportProgressTracker.setPhasePercent(0.0f);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 3/4: Remapping UVs...");
             long tUvRemap = TimeLogger.now();
@@ -195,19 +198,30 @@ public final class GltfSceneBuilder implements SceneSink {
                 throw new IOException("uvraw.bin not found at: " + uvrawBin);
             }
 
-            UVRemapper.remapUVs(geometryBin, uvrawBin, finaluvBin, spriteIndex, ctx);
+            PhaseProgress phase = new PhaseProgress();
+            UVRemapper.remapUVs(geometryBin, uvrawBin, finaluvBin, spriteIndex, ctx, frac -> {
+                float mapped = (float) (0.6f * Math.max(0d, Math.min(1d, frac)));
+                if (phase.shouldPush(mapped)) {
+                    ExportProgressTracker.setPhasePercent(mapped);
+                    ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+                }
+            });
             ExportLogger.log("[GltfBuilder] UV remapping complete");
             TimeLogger.logDuration("gltf_uv_remap", TimeLogger.elapsedSince(tUvRemap));
+            ExportProgressTracker.setPhasePercent(0.6f);
+            ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
             // 4. 组装glTF
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "组装glTF");
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Assembling glTF");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             ExportLogger.log("[GltfBuilder] Stage 4/4: Assembling glTF...");
             long tAssemble = TimeLogger.now();
 
-            Path result = assembleGltf(request, geometryBin, finaluvBin);
+            Path result = assembleGltf(request, geometryBin, finaluvBin, phase);
             ExportLogger.log("[GltfBuilder] glTF assembly complete: " + result);
             TimeLogger.logDuration("gltf_assembly", TimeLogger.elapsedSince(tAssemble));
+            ExportProgressTracker.setPhasePercent(1.0f);
+            ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
             return result;
         } catch (Exception e) {
@@ -260,7 +274,7 @@ public final class GltfSceneBuilder implements SceneSink {
     /**
      * 从geometry.bin和finaluv.bin流式组装glTF
      */
-    private Path assembleGltf(SceneWriteRequest request, Path geometryBin, Path finaluvBin) throws IOException {
+    private Path assembleGltf(SceneWriteRequest request, Path geometryBin, Path finaluvBin, PhaseProgress phase) throws IOException {
         ExportLogger.log("[GltfBuilder] Starting glTF assembly...");
         TimeLogger.logMemory("before_gltf_assembly");
 
@@ -331,11 +345,13 @@ public final class GltfSceneBuilder implements SceneSink {
 
                         processedMaterials++;
 
-                        // 进度提示（每10%）
-                        if (totalMaterials > 10 && processedMaterials % Math.max(1, totalMaterials / 10) == 0) {
-                            double progress = processedMaterials * 100.0 / totalMaterials;
-                            ExportLogger.log(String.format("[GltfAssembly] %.0f%% (%d/%d materials)",
-                                progress, processedMaterials, totalMaterials));
+                        if (totalMaterials > 0) {
+                            float frac = processedMaterials / (float) totalMaterials;
+                            float mapped = 0.6f + 0.4f * frac;
+                            if (phase.shouldPush(mapped)) {
+                                ExportProgressTracker.setPhasePercent(mapped);
+                                ProgressNotifier.showDetailed(ctx.getMc(), ExportProgressTracker.progress());
+                            }
                         }
                     } catch (Exception e) {
                         ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
@@ -904,5 +920,25 @@ public final class GltfSceneBuilder implements SceneSink {
     private String safe(String spriteKey) {
         if (spriteKey == null) return "unknown";
         return spriteKey.replace(':', '_').replace('/', '_');
+    }
+
+    private static final class PhaseProgress {
+        private static final long INTERVAL_NANOS = 200_000_000L; // 0.2s
+        private long lastUpdate = 0L;
+        private float lastPercent = -1f;
+
+        boolean shouldPush(float percent) {
+            long now = System.nanoTime();
+            if (percent < 0f) percent = 0f;
+            if (percent > 1f) percent = 1f;
+            boolean enoughDelta = Math.abs(percent - lastPercent) >= 0.01f; // >=1%
+            boolean enoughTime = now - lastUpdate >= INTERVAL_NANOS;
+            if (enoughDelta || enoughTime) {
+                lastPercent = percent;
+                lastUpdate = now;
+                return true;
+            }
+            return false;
+        }
     }
 }

@@ -6,8 +6,11 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
+import com.voxelbridge.export.ExportProgressTracker;
+import com.voxelbridge.util.client.ProgressNotifier;
 import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.debug.TimeLogger;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
@@ -105,6 +108,7 @@ public final class VxbSceneBuilder implements SceneSink {
 
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
+        Minecraft mc = ctx.getMc();
         long tWrite = TimeLogger.now();
         // Signal writer thread to finish and wait for completion
         long tFinalizeSampling = TimeLogger.now();
@@ -119,16 +123,33 @@ public final class VxbSceneBuilder implements SceneSink {
         List<MeshInfo> meshList = new ArrayList<>(meshInfos.values());
 
         TimeLogger.logMemory("before_vxb_uv_remap");
+        PhaseProgress phase = new PhaseProgress();
         long tUvRemap = TimeLogger.now();
-        VxbUvRemapper.remapUv(ctx, spriteKeys, spriteSizes, meshList, uvRawPath, uvPath);
+        ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Remapping UVs");
+        ExportProgressTracker.setPhasePercent(0.0f);
+        ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+        VxbUvRemapper.remapUv(ctx, spriteKeys, spriteSizes, meshList, uvRawPath, uvPath, frac -> {
+            float mapped = (float) (0.6f * Math.max(0d, Math.min(1d, frac)));
+            if (phase.shouldPush(mapped)) {
+                ExportProgressTracker.setPhasePercent(mapped);
+                ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+            }
+        });
         Files.deleteIfExists(uvRawPath);
         TimeLogger.logDuration("vxb_uv_remap", TimeLogger.elapsedSince(tUvRemap));
+        ExportProgressTracker.setPhasePercent(0.6f);
+        ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
         long tAssembly = TimeLogger.now();
-        writeJson(jsonPath, request, bin, uv, meshList);
+        ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Assembling VXB");
+        ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+        int totalSections = meshList.stream().mapToInt(m -> m.sections.size()).sum();
+        writeJson(jsonPath, request, bin, uv, meshList, phase, totalSections, mc);
         TimeLogger.logDuration("vxb_write_json", TimeLogger.elapsedSince(tAssembly));
         TimeLogger.logDuration("vxb_assembly", TimeLogger.elapsedSince(tAssembly));
         TimeLogger.logDuration("vxb_write", TimeLogger.elapsedSince(tWrite));
+        ExportProgressTracker.setPhasePercent(1.0f);
+        ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
         return jsonPath;
     }
 
@@ -305,7 +326,10 @@ public final class VxbSceneBuilder implements SceneSink {
                            SceneWriteRequest request,
                            BufferInfo bin,
                            BufferInfo uv,
-                           List<MeshInfo> meshInfos) throws IOException {
+                           List<MeshInfo> meshInfos,
+                           PhaseProgress phase,
+                           int totalSections,
+                           Minecraft mc) throws IOException {
         try (BufferedWriter out = Files.newBufferedWriter(jsonPath, StandardCharsets.UTF_8)) {
             out.write("{\n");
             out.write("  \"version\": 1,\n");
@@ -354,6 +378,7 @@ public final class VxbSceneBuilder implements SceneSink {
             out.write("  ],\n");
 
             out.write("  \"meshes\": [\n");
+            int processedSections = 0;
             for (int i = 0; i < meshInfos.size(); i++) {
             MeshInfo m = meshInfos.get(i);
             String name = m.animationName != null ? m.animationName : m.materialKey;
@@ -383,6 +408,14 @@ public final class VxbSceneBuilder implements SceneSink {
                     out.write("            \"FACE_INDEX\": {\"buffer\": \"bin\", \"offset\": " + sec.faceIndexOffset + ", \"stride\": 4, \"type\": \"u32\"}\n");
                     out.write("          }\n");
                     out.write("        }" + (s + 1 < m.sections.size() ? "," : "") + "\n");
+                    if (totalSections > 0) {
+                        float frac = (++processedSections) / (float) totalSections;
+                        float mapped = 0.6f + 0.4f * frac;
+                        if (phase.shouldPush(mapped)) {
+                            ExportProgressTracker.setPhasePercent(mapped);
+                            ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+                        }
+                    }
                 }
                 out.write("      ]\n");
                 out.write("    }" + (i + 1 < meshInfos.size() ? "," : "") + "\n");
@@ -1143,6 +1176,25 @@ public final class VxbSceneBuilder implements SceneSink {
         @Override
         public void close() throws IOException {
             out.close();
+        }
+    }
+
+    private static final class PhaseProgress {
+        private static final long INTERVAL_NANOS = 200_000_000L; // 0.2s
+        private long lastUpdate = 0L;
+        private float lastPercent = -1f;
+
+        boolean shouldPush(float percent) {
+            long now = System.nanoTime();
+            float clamped = Math.max(0f, Math.min(1f, percent));
+            boolean enoughDelta = Math.abs(clamped - lastPercent) >= 0.01f;
+            boolean enoughTime = now - lastUpdate >= INTERVAL_NANOS;
+            if (enoughDelta || enoughTime) {
+                lastPercent = clamped;
+                lastUpdate = now;
+                return true;
+            }
+            return false;
         }
     }
 }
