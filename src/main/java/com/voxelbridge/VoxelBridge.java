@@ -1,11 +1,22 @@
+/**
+ * 
+ ██╗   ██╗ ██████╗ ██╗  ██╗███████╗██╗     ██████╗ ██████╗ ██╗██████╗  ██████╗ ███████╗
+ ██║   ██║██╔═══██╗╚██╗██╔╝██╔════╝██║     ██╔══██╗██╔══██╗██║██╔══██╗██╔════╝ ██╔════╝
+ ██║   ██║██║   ██║ ╚███╔╝ █████╗  ██║     ██████╔╝██████╔╝██║██║  ██║██║  ███╗█████╗  
+ ╚██╗ ██╔╝██║   ██║ ██╔██╗ ██╔══╝  ██║     ██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝  
+  ╚████╔╝ ╚██████╔╝██╔╝ ██╗███████╗███████╗██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗
+   ╚═══╝   ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝
+                                                                                      
+ */
 package com.voxelbridge;
-
 import com.voxelbridge.command.VoxelBridgeCommands;
+
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+
 
 @Mod(VoxelBridge.MODID)
 public class VoxelBridge {
