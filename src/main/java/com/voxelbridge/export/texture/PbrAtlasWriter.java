@@ -2,7 +2,6 @@ package com.voxelbridge.export.texture;
 
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
-import com.voxelbridge.export.texture.PngjWriter;
 
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;

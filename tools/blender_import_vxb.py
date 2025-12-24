@@ -59,11 +59,11 @@ def _read_loop_attr(buf, loop_count):
 def _read_uv_loop(buf, loop_count, atlas_size, normalized=False):
     uvs = [None] * loop_count
     for i in range(loop_count):
-        base = i * 8
-        u = struct.unpack_from("<H", buf, base)[0]
-        v = struct.unpack_from("<H", buf, base + 2)[0]
+        base = i * 12
+        u = struct.unpack_from("<f", buf, base)[0]
+        v = struct.unpack_from("<f", buf, base + 4)[0]
         if normalized:
-            uvs[i] = (u / 65535.0, v / 65535.0)
+            uvs[i] = (u, v)
         else:
             uvs[i] = (u / float(atlas_size), v / float(atlas_size))
     return uvs
@@ -72,16 +72,16 @@ def _read_uv_loop(buf, loop_count, atlas_size, normalized=False):
 def _read_uv1_loop(buf, loop_count, atlas_size, uv1_quant, colormap_mode):
     uvs = [None] * loop_count
     for i in range(loop_count):
-        base = i * 8
-        u = struct.unpack_from("<H", buf, base)[0]
-        v = struct.unpack_from("<H", buf, base + 2)[0]
-        packed = struct.unpack_from("<H", buf, base + 4)[0]
-        if uv1_quant == "atlas_u16":
+        base = i * 12
+        u = struct.unpack_from("<f", buf, base)[0]
+        v = struct.unpack_from("<f", buf, base + 4)[0]
+        packed = struct.unpack_from("<H", buf, base + 8)[0]
+        if uv1_quant == "atlas_f32":
             uu = u / float(atlas_size)
             vv = v / float(atlas_size)
         else:
-            uu = u / 65535.0
-            vv = v / 65535.0
+            uu = u
+            vv = v
         if colormap_mode:
             tile_u = packed % 10
             tile_v = packed // 10
@@ -102,7 +102,7 @@ def import_vxb(json_path, validate_mesh=True):
 
     buffers = {b["name"]: (base_dir / b["uri"]).resolve() for b in data["buffers"]}
     atlas_size = int(data.get("atlasSize", 8192))
-    uv1_quant = data.get("uv1Quantization", "normalized_u16")
+    uv1_quant = data.get("uv1Quantization", "normalized_f32")
     color_mode = data.get("colorMode", "VERTEX_COLOR")
     colormap_mode = color_mode.upper() == "COLORMAP"
 
@@ -190,12 +190,12 @@ def import_vxb(json_path, validate_mesh=True):
             bucket["verts"].extend(vertices)
 
             loop_count = sum(len(f) for f in faces)
-            uv_buf = _slice(bin_cache[uv_view["buffer"]], uv_view["offset"], loop_count * 8)
+            uv_buf = _slice(bin_cache[uv_view["buffer"]], uv_view["offset"], loop_count * 12)
             uv0_raw = _read_uv_loop(uv_buf, loop_count, atlas_size, normalized=False)
 
             uv1_raw = None
             if uv1_view is not None:
-                uv1_buf = _slice(bin_cache[uv1_view["buffer"]], uv1_view["offset"], loop_count * 8)
+                uv1_buf = _slice(bin_cache[uv1_view["buffer"]], uv1_view["offset"], loop_count * 12)
                 uv1_raw = _read_uv1_loop(uv1_buf, loop_count, atlas_size, uv1_quant, colormap_mode)
                 bucket["has_uv1"] = True
 

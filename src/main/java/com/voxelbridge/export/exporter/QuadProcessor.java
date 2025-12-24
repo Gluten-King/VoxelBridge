@@ -5,7 +5,6 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.util.color.ColorModeHandler;
-import com.voxelbridge.export.util.geometry.GeometryUtil;
 import com.voxelbridge.export.util.geometry.VertexExtractor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.model.BakedQuad;
@@ -18,7 +17,6 @@ import net.minecraft.world.phys.Vec3;
 
 import java.awt.image.BufferedImage;
 import java.util.HashSet;
-import java.util.Locale;
 import java.util.Set;
 
 /**

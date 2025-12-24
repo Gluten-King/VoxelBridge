@@ -1,8 +1,7 @@
 package com.voxelbridge.export.scene.gltf;
 
-import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
-import com.voxelbridge.export.texture.TextureAtlasManager;
+import com.voxelbridge.export.texture.UvRemapUtil;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
@@ -49,7 +48,7 @@ final class UVRemapper {
             VoxelBridgeLogger.info(LogModule.UV_REMAP, String.format("[UVRemapper] Total quads to process: %d", totalQuads));
         }
 
-        boolean atlasEnabled = ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS;
+        boolean atlasEnabled = UvRemapUtil.isAtlasEnabled();
         if (!atlasEnabled) {
             // No atlas mode, directly copy uvraw.bin to finaluv.bin
             if (logRemap) {
@@ -111,9 +110,9 @@ final class UVRemapper {
                     for (int j = 0; j < 8; j++) uv1[j] = uvInBuffer.getFloat();
 
                     // Remap uv0
-                    if (spriteKey != null && !isAnimated(ctx, spriteKey) && hasAtlasPlacement(ctx, spriteKey)) {
+                    if (UvRemapUtil.shouldRemap(ctx, spriteKey)) {
                         for (int v = 0; v < 4; v++) {
-                            float[] remapped = TextureAtlasManager.remapUV(ctx, spriteKey, 0xFFFFFF, uv0[v * 2], uv0[v * 2 + 1]);
+                            float[] remapped = UvRemapUtil.remapUv(ctx, spriteKey, uv0[v * 2], uv0[v * 2 + 1]);
                             uv0[v * 2] = remapped[0];
                             uv0[v * 2 + 1] = remapped[1];
                         }
@@ -122,13 +121,13 @@ final class UVRemapper {
                     // Remap uv1 (overlay)
                     // IMPORTANT: In colormap mode, uv1 contains color map coordinates (LUT UV), not sprite texture UV
                     // Color map UVs should NOT be remapped - they already point to the correct position in the color LUT texture
-                    boolean isColormapMode = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP;
-                    if (!isColormapMode && overlayKey != null && !isAnimated(ctx, overlayKey) && hasAtlasPlacement(ctx, overlayKey)) {
+                    boolean isColormapMode = UvRemapUtil.isColormapMode();
+                    if (!isColormapMode && UvRemapUtil.shouldRemap(ctx, overlayKey)) {
                         boolean hasUV1 = false;
                         for (float f : uv1) if (f != 0) { hasUV1 = true; break; }
                         if (hasUV1) {
                             for (int v = 0; v < 4; v++) {
-                                float[] remapped = TextureAtlasManager.remapUV(ctx, overlayKey, 0xFFFFFF, uv1[v * 2], uv1[v * 2 + 1]);
+                                float[] remapped = UvRemapUtil.remapUv(ctx, overlayKey, uv1[v * 2], uv1[v * 2 + 1]);
                                 uv1[v * 2] = remapped[0];
                                 uv1[v * 2 + 1] = remapped[1];
                             }
@@ -167,14 +166,6 @@ final class UVRemapper {
         }
     }
 
-    private static boolean isAnimated(ExportContext ctx, String spriteKey) {
-        return ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(spriteKey);
-    }
-
-    private static boolean hasAtlasPlacement(ExportContext ctx, String spriteKey) {
-        return ctx.getAtlasBook().containsKey(spriteKey)
-            || ctx.getBlockEntityAtlasPlacements().containsKey(spriteKey);
-    }
 }
 
 

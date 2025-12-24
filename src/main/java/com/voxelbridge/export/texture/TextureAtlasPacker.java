@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
 
-import com.voxelbridge.export.texture.PngjWriter;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 

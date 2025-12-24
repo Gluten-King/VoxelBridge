@@ -11,13 +11,9 @@ import net.minecraft.server.packs.resources.Resource;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Map;
 import java.util.Optional;
 
 @OnlyIn(Dist.CLIENT)
@@ -33,8 +29,7 @@ public final class EntityTextureManager {
         String spritePath = (texFinal.getNamespace() + "/" + texFinal.getPath()).replace(':', '/');
         String key = "entity:" + spritePath;
         String materialName = ctx.getMaterialNameForSprite(key);
-        String relativePath = ctx.getMaterialPaths()
-                .computeIfAbsent(key, k -> "entity_textures/" + safe(spritePath) + ".png");
+        String relativePath = TexturePathResolver.ensureEntityLikePath(ctx, key);
 
         ctx.getEntityTextures().computeIfAbsent(key, k -> loadTextureInfo(ctx, texFinal));
 
@@ -55,105 +50,6 @@ public final class EntityTextureManager {
         }
 
         return new TextureHandle(key, materialName, relativePath, texture);
-    }
-
-    public static void dumpAll(ExportContext ctx, Path outDir) throws IOException {
-        Minecraft mc = ctx.getMc();
-        boolean logTextures = VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE);
-        if (logTextures) {
-            VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager] Dumping " + ctx.getEntityTextures().size() + " entity textures");
-            VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager] Generated textures: " + ctx.getGeneratedEntityTextures().size());
-            VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager] Generated texture keys:");
-            for (String key : ctx.getGeneratedEntityTextures().keySet()) {
-                VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   - " + key);
-            }
-        }
-
-        writeGeneratedTextures(ctx, outDir);
-
-        Map<String, BufferedImage> generated = ctx.getGeneratedEntityTextures();
-        for (var entry : ctx.getEntityTextures().entrySet()) {
-            String spriteKey = entry.getKey();
-            ExportContext.EntityTexture texture = entry.getValue();
-            String relativePath = ctx.getMaterialPaths().get(spriteKey);
-
-            if (logTextures && (spriteKey.contains("banner") || spriteKey.contains("base"))) {
-                VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager] Processing: " + spriteKey);
-                VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   relativePath: " + relativePath);
-                VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   has generated: " + generated.containsKey(spriteKey));
-            }
-
-            if (generated.containsKey(spriteKey)) {
-                continue;
-            }
-
-            if (relativePath == null) {
-                if (logTextures && (spriteKey.contains("banner") || spriteKey.contains("base"))) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   SKIPPED: relativePath is null");
-                }
-                continue;
-            }
-            if (relativePath.startsWith("textures/atlas/")) {
-                if (logTextures && (spriteKey.contains("banner") || spriteKey.contains("base"))) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   SKIPPED: atlas path");
-                }
-                continue;
-            }
-            Path target = outDir.resolve(relativePath);
-            Files.createDirectories(target.getParent());
-            BufferedImage generatedImage = generated.get(spriteKey);
-            if (generatedImage != null) {
-                ImageIO.write(generatedImage, "png", target.toFile());
-                if (logTextures && (spriteKey.contains("banner") || spriteKey.contains("base"))) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   SAVED generated image to: " + target);
-                }
-                continue;
-            }
-            if (Files.exists(target)) {
-                continue;
-            }
-            Optional<Resource> resource = mc.getResourceManager().getResource(resolveTexturePath(texture.location()));
-            if (resource.isEmpty()) {
-                continue;
-            }
-            Resource res = resource.get();
-            try (InputStream in = res.open()) {
-                Files.copy(in, target);
-            }
-        }
-    }
-
-    private static void writeGeneratedTextures(ExportContext ctx, Path outDir) throws IOException {
-        for (var entry : ctx.getGeneratedEntityTextures().entrySet()) {
-            String spriteKey = entry.getKey();
-            BufferedImage image = entry.getValue();
-            if (image == null) {
-                continue;
-            }
-
-            String relativePath = ctx.getMaterialPaths()
-                    .computeIfAbsent(spriteKey, k -> "entity_textures/generated/" + safe(spriteKey) + ".png");
-            if (relativePath.startsWith("textures/atlas/")) {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE)) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager] Skipped generated atlas write: " + spriteKey);
-                }
-                continue;
-            }
-            Path target = outDir.resolve(relativePath);
-            Files.createDirectories(target.getParent());
-            ImageIO.write(image, "png", target.toFile());
-
-            ctx.getEntityTextures().computeIfAbsent(spriteKey,
-                    k -> new ExportContext.EntityTexture(generatedLocation(spriteKey), image.getWidth(), image.getHeight()));
-
-            if (spriteKey.contains("banner") || spriteKey.contains("base")) {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE)) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager] Processing (generated cache): " + spriteKey);
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   relativePath: " + relativePath);
-                    VoxelBridgeLogger.info(LogModule.TEXTURE, "[EntityTextureManager]   SAVED generated image to: " + target);
-                }
-            }
-        }
     }
 
     private static ExportContext.EntityTexture loadTextureInfo(ExportContext ctx, ResourceLocation texture) {

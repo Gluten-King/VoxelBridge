@@ -337,8 +337,8 @@ public final class VxbSceneBuilder implements SceneSink {
             out.write("  \"atlasSize\": " + ExportRuntimeConfig.getAtlasSize().getSize() + ",\n");
             out.write("  \"colorMode\": \"" + ExportRuntimeConfig.getColorMode().name() + "\",\n");
             String uv1Quant = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP
-                ? "normalized_u16"
-                : "atlas_u16";
+                ? "normalized_f32"
+                : "atlas_f32";
             out.write("  \"uv1Quantization\": \"" + uv1Quant + "\",\n");
             writeColormapTextures(out);
             out.write("  \"buffers\": [\n");
@@ -401,8 +401,8 @@ public final class VxbSceneBuilder implements SceneSink {
                     out.write("          \"views\": {\n");
                     out.write("            \"POSITION\": {\"buffer\": \"bin\", \"offset\": " + sec.geoOffset + ", \"stride\": 12, \"type\": \"f32x3\"},\n");
                     out.write("            \"INDEX\": {\"buffer\": \"bin\", \"offset\": " + sec.idxOffset + ", \"stride\": 4, \"type\": \"u32\"},\n");
-                    out.write("            \"UV_LOOP\": {\"buffer\": \"uv\", \"offset\": " + sec.uvOffset + ", \"stride\": 8, \"type\": \"u16x4\"},\n");
-                    out.write("            \"UV1_LOOP\": {\"buffer\": \"uv\", \"offset\": " + sec.uv1Offset + ", \"stride\": 8, \"type\": \"u16x4\"},\n");
+                    out.write("            \"UV_LOOP\": {\"buffer\": \"uv\", \"offset\": " + sec.uvOffset + ", \"stride\": 12, \"type\": \"f32x2_u16x2\"},\n");
+                    out.write("            \"UV1_LOOP\": {\"buffer\": \"uv\", \"offset\": " + sec.uv1Offset + ", \"stride\": 12, \"type\": \"f32x2_u16x2\"},\n");
                     out.write("            \"LOOP_ATTR\": {\"buffer\": \"bin\", \"offset\": " + sec.loopOffset + ", \"stride\": 16, \"type\": \"f32x3_u8x4\"},\n");
                     out.write("            \"FACE_COUNT\": {\"buffer\": \"bin\", \"offset\": " + sec.faceCountOffset + ", \"stride\": 2, \"type\": \"u16\"},\n");
                     out.write("            \"FACE_INDEX\": {\"buffer\": \"bin\", \"offset\": " + sec.faceIndexOffset + ", \"stride\": 4, \"type\": \"u32\"}\n");
@@ -643,8 +643,12 @@ public final class VxbSceneBuilder implements SceneSink {
         private final String materialKey;
         private final FloatList positions = new FloatList();
         private final IntList indices = new IntList();
-        private final IntList uvLoop = new IntList();
-        private final IntList uv1Loop = new IntList();
+        private final FloatList uvLoopU = new FloatList();
+        private final FloatList uvLoopV = new FloatList();
+        private final IntList uvLoopSprite = new IntList();
+        private final FloatList uv1LoopU = new FloatList();
+        private final FloatList uv1LoopV = new FloatList();
+        private final IntList uv1LoopPage = new IntList();
         private final FloatList loopNormals = new FloatList();
         private final ByteList loopColors = new ByteList();
         private final IntList faceCounts = new IntList();
@@ -691,10 +695,10 @@ public final class VxbSceneBuilder implements SceneSink {
             int qnz = quantizeNormal(nz);
             int[] v = new int[4];
             int[] qp = new int[12];
-            int[] uv0_u16 = new int[4];
-            int[] uv0_v16 = new int[4];
-            int[] uv1_u16 = new int[4];
-            int[] uv1_v16 = new int[4];
+            float[] uv0_u = new float[4];
+            float[] uv0_v = new float[4];
+            float[] uv1_u = new float[4];
+            float[] uv1_v = new float[4];
             byte[] colorBytes = new byte[16]; // 4 verts * 4 channels
             boolean animatedSprite = animationName != null;
 
@@ -709,48 +713,49 @@ public final class VxbSceneBuilder implements SceneSink {
                 qp[i * 3 + 1] = qy;
                 qp[i * 3 + 2] = qz;
 
-                uv0_u16[i] = quantizeUv(uv0[i * 2], size.width);
+                int uv0Scale = animatedSprite ? ExportRuntimeConfig.getAtlasSize().getSize() : size.width;
+                uv0_u[i] = uv0[i * 2] * uv0Scale;
                 float v0 = uv0[i * 2 + 1];
                 if (animatedSprite) {
                     v0 = 1.0f - v0; // Animated textures are exported unflipped; flip V to keep orientation consistent
                 }
-                uv0_v16[i] = quantizeUv(v0, size.height);
+                int uv0ScaleV = animatedSprite ? ExportRuntimeConfig.getAtlasSize().getSize() : size.height;
+                uv0_v[i] = v0 * uv0ScaleV;
 
                 if (uv1 != null && uv1.length >= 8) {
-                    float uv1_u = uv1[i * 2];
-                    float uv1_v = uv1[i * 2 + 1];
+                    float uv1_u_raw = uv1[i * 2];
+                    float uv1_v_raw = uv1[i * 2 + 1];
                     if (colormapMode) {
                         // Per-vertex UDIM extraction
-                        int vertexTileU = (int) Math.floor(uv1_u);
-                        // ColorMapManagerileVceil(-v)
-                        int vertexTileV = (int) Math.ceil(-uv1_v);
+                        int vertexTileU = (int) Math.floor(uv1_u_raw);
+                        // ColorMapManager stores V in UDIM space with negative tiles (see ColorMapManager).
+                        int vertexTileV = (int) Math.ceil(-uv1_v_raw);
 
-                        // ?
-                        float uFrac = uv1_u - vertexTileU;
-                        float vFrac = uv1_v + vertexTileV;
-
-                        // [0,1]
+                        // Fractional UV within the UDIM tile.
+                        float uFrac = uv1_u_raw - vertexTileU;
+                        float vFrac = uv1_v_raw + vertexTileV;
+                        // Keep fraction in [0,1].
                         if (uFrac < -0.001f || uFrac > 1.001f || vFrac < -0.001f || vFrac > 1.001f) {
                             VoxelBridgeLogger.info(LogModule.VXB, String.format(
                                 "[VXB] Warning: UV1 fractional out of range at vertex %d: " +
                                 "uFrac=%.4f, vFrac=%.4f, raw=(%.4f,%.4f), tile=(%d,%d)",
-                                i, uFrac, vFrac, uv1_u, uv1_v, vertexTileU, vertexTileV));
+                                i, uFrac, vFrac, uv1_u_raw, uv1_v_raw, vertexTileU, vertexTileV));
                         }
 
-                        uv1_u16[i] = quantizeUvNormalized(uFrac);
-                        uv1_v16[i] = quantizeUvNormalized(vFrac);
+                        uv1_u[i] = uFrac;
+                        uv1_v[i] = vFrac;
                         uv1PageIds[i] = packUdimTile(vertexTileU, vertexTileV);
                     } else {
                         // UV1 for overlay/lightmap: convert UDIM to normalized [0,1] and flip V
-                        float uNorm = uv1_u - (float)Math.floor(uv1_u);
-                        float vNorm = uv1_v - (float)Math.floor(uv1_v);
-                        uv1_u16[i] = quantizeUvNormalized(uNorm);
-                        uv1_v16[i] = quantizeUvNormalized(vNorm);
+                        float uNorm = uv1_u_raw - (float)Math.floor(uv1_u_raw);
+                        float vNorm = uv1_v_raw - (float)Math.floor(uv1_v_raw);
+                        uv1_u[i] = uNorm;
+                        uv1_v[i] = vNorm;
                         uv1PageIds[i] = overlayId16;  // overlay sprite ID
                     }
                 } else {
-                    uv1_u16[i] = 0;
-                    uv1_v16[i] = 0;
+                    uv1_u[i] = 0f;
+                    uv1_v[i] = 0f;
                     uv1PageIds[i] = colormapMode ? 0 : overlayId16;
                 }
 
@@ -784,15 +789,13 @@ public final class VxbSceneBuilder implements SceneSink {
 
             // Quad loop data4
             for (int i = 0; i < 4; i++) {
-                uvLoop.add(uv0_u16[i]);
-                uvLoop.add(uv0_v16[i]);
-                uvLoop.add(spriteId16);
-                uvLoop.add(0);
+                uvLoopU.add(uv0_u[i]);
+                uvLoopV.add(uv0_v[i]);
+                uvLoopSprite.add(spriteId16);
 
-                uv1Loop.add(uv1_u16[i]);
-                uv1Loop.add(uv1_v16[i]);
-                uv1Loop.add(uv1PageIds[i]);  // Per-vertex UDIMverlay sprite ID
-                uv1Loop.add(0);
+                uv1LoopU.add(uv1_u[i]);
+                uv1LoopV.add(uv1_v[i]);
+                uv1LoopPage.add(uv1PageIds[i]);  // Per-vertex UDIM/overlay sprite ID
 
                 loopNormals.add(nx);
                 loopNormals.add(ny);
@@ -839,15 +842,21 @@ public final class VxbSceneBuilder implements SceneSink {
             idx.length = idxOut.getWritten();
 
             long uvOffset = alignAndGetOffset(uvOut, uv);
-            int loopCount = uvLoop.size() / 4;
-            for (int i = 0; i < uvLoop.size(); i++) {
-                uvOut.writeShort(uvLoop.get(i));
+            int loopCount = uvLoopSprite.size();
+            for (int i = 0; i < loopCount; i++) {
+                uvOut.writeFloat(uvLoopU.get(i));
+                uvOut.writeFloat(uvLoopV.get(i));
+                uvOut.writeShort(uvLoopSprite.get(i));
+                uvOut.writeShort(0);
             }
             uv.length = uvOut.getWritten();
 
             long uv1Offset = alignAndGetOffset(uv1Out, uv1);
-            for (int i = 0; i < uv1Loop.size(); i++) {
-                uv1Out.writeShort(uv1Loop.get(i));
+            for (int i = 0; i < loopCount; i++) {
+                uv1Out.writeFloat(uv1LoopU.get(i));
+                uv1Out.writeFloat(uv1LoopV.get(i));
+                uv1Out.writeShort(uv1LoopPage.get(i));
+                uv1Out.writeShort(0);
             }
             uv1.length = uv1Out.getWritten();
 

@@ -6,7 +6,7 @@ import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.StreamingRegionSampler;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
-import com.voxelbridge.export.texture.EntityTextureManager;
+import com.voxelbridge.export.texture.TextureExportPipeline;
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
@@ -96,15 +96,7 @@ public final class VxbExportService {
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating textures");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
             long tAtlas = VoxelBridgeLogger.now();
-            TextureAtlasManager.generateAllAtlases(ctx, vxbDir);
-            com.voxelbridge.export.texture.ColorMapManager.generateColorMaps(ctx, vxbDir);
-            EntityTextureManager.dumpAll(ctx, vxbDir);
-            if (ExportRuntimeConfig.isAnimationEnabled()) {
-                java.util.Set<String> animationWhitelist = new java.util.HashSet<>();
-                animationWhitelist.addAll(ctx.getAtlasBook().keySet());
-                animationWhitelist.addAll(ctx.getCachedSpriteKeys());
-                TextureAtlasManager.exportDetectedAnimations(ctx, vxbDir, animationWhitelist);
-            }
+            TextureExportPipeline.build(ctx, vxbDir, ctx.getMaterialPaths().keySet());
             VoxelBridgeLogger.duration("texture_atlas_generation", VoxelBridgeLogger.elapsedSince(tAtlas));
 
             System.gc();

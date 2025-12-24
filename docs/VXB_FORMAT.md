@@ -24,11 +24,11 @@ Example (trimmed):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "endian": "LE",
   "atlasSize": 8192,
   "colorMode": "VERTEX_COLOR",
-  "uv1Quantization": "atlas_u16",
+  "uv1Quantization": "atlas_f32",
   "colormapTextures": ["textures/colormap/colormap_1001.png"],
   "buffers": [
     {"name": "bin", "uri": "region_*.bin", "byteLength": 123},
@@ -62,8 +62,8 @@ Example (trimmed):
           "views": {
             "POSITION": {"buffer": "bin", "offset": 0, "stride": 12, "type": "f32x3"},
             "INDEX": {"buffer": "bin", "offset": 0, "stride": 4, "type": "u32"},
-            "UV_LOOP": {"buffer": "uv", "offset": 0, "stride": 8, "type": "u16x4"},
-            "UV1_LOOP": {"buffer": "uv", "offset": 0, "stride": 8, "type": "u16x4"},
+            "UV_LOOP": {"buffer": "uv", "offset": 0, "stride": 12, "type": "f32x2_u16x2"},
+            "UV1_LOOP": {"buffer": "uv", "offset": 0, "stride": 12, "type": "f32x2_u16x2"},
             "LOOP_ATTR": {"buffer": "bin", "offset": 0, "stride": 16, "type": "f32x3_u8x4"},
             "FACE_COUNT": {"buffer": "bin", "offset": 0, "stride": 2, "type": "u16"},
             "FACE_INDEX": {"buffer": "bin", "offset": 0, "stride": 4, "type": "u32"}
@@ -87,7 +87,7 @@ Example (trimmed):
 - `endian`: `"LE"` for little-endian.
 - `atlasSize`: atlas tile size in pixels.
 - `colorMode`: `VERTEX_COLOR` or `COLORMAP`.
-- `uv1Quantization`: currently `"atlas_u16"`.
+- `uv1Quantization`: `"atlas_f32"` or `"normalized_f32"` (depending on color mode).
 - `colormapTextures`: list of colormap textures used when `colorMode = COLORMAP`.
 - `buffers`: list of named binary buffers.
 - `sprites`: per-sprite atlas metadata.
@@ -111,18 +111,18 @@ Example (trimmed):
 
 ### UV_LOOP (`uv.bin`)
 
-- Type: `uint16 u, uint16 v, uint16 spriteId, uint16 pad`
-- Stride: 8 bytes
+- Type: `float32 u, float32 v, uint16 spriteId, uint16 pad`
+- Stride: 12 bytes
 - Count: `faceIndexCount` (one entry per face corner)
-- `u,v` are atlas pixel coordinates (quantized to 0..atlasSize).
+- `u,v` are atlas pixel coordinates (float, not quantized).
 
 ### UV1_LOOP (`uv.bin`)
 
-- Type: `uint16 u, uint16 v, uint16 overlaySpriteId, uint16 pad`
-- Stride: 8 bytes
+- Type: `float32 u, float32 v, uint16 overlaySpriteId, uint16 pad`
+- Stride: 12 bytes
 - Count: `faceIndexCount`
-- Stored in atlas pixel coordinates (quantized).
-- If `colorMode = COLORMAP`, UV1 refers to colormap UVs.
+- If `colorMode = COLORMAP`, `u,v` are normalized [0,1] colormap UVs.
+- Otherwise, `u,v` are atlas pixel coordinates (float).
 
 ### LOOP_ATTR (`bin`)
 
@@ -147,9 +147,9 @@ Example (trimmed):
 ## UV Remapping Rules
 
 UVs are already remapped to atlas coordinates during export.
-For UV0, UVs are quantized using original sprite dimensions, then remapped to
-atlas placement. For UV1 (overlay), UVs are remapped to atlas unless `COLORMAP`
-mode is active.
+For UV0, UVs are stored as atlas pixel coordinates (float).
+For UV1, values are normalized [0,1] when `COLORMAP` is active; otherwise they
+are atlas pixel coordinates (float).
 
 ## Notes
 

@@ -4,7 +4,6 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.StreamingRegionSampler;
 import com.voxelbridge.export.ExportProgressTracker;
-import com.voxelbridge.export.exporter.BlockExporter;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺失的类
 import com.voxelbridge.export.texture.TextureAtlasManager;
@@ -111,20 +110,8 @@ public final class GltfExportService {
         System.gc();
         try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
 
-        // Generate atlases if needed (place under gltf dir)
+        // Texture export is handled by TextureExportPipeline in GltfSceneBuilder
         SceneWriteRequest request = new SceneWriteRequest(baseName, gltfDir);
-        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
-            ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating texture atlas");
-            ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            long tAtlas = VoxelBridgeLogger.now();
-            TextureAtlasManager.generateAllAtlases(ctx, gltfDir);
-            VoxelBridgeLogger.duration("texture_atlas_generation", VoxelBridgeLogger.elapsedSince(tAtlas));
-            VoxelBridgeLogger.info(LogModule.GLTF, "[GLTF] BlockEntity textures merged into main atlas (legacy packer skipped)");
-        } else {
-            long tBerExport = VoxelBridgeLogger.now();
-            com.voxelbridge.export.texture.BlockEntityTextureManager.exportTextures(ctx, gltfDir);
-            VoxelBridgeLogger.duration("blockentity_texture_export", VoxelBridgeLogger.elapsedSince(tBerExport));
-        }
 
         // Suggest GC between texture generation and geometry write
         System.gc();

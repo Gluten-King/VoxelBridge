@@ -5,10 +5,10 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
-import com.voxelbridge.export.texture.ColorMapManager;
-import com.voxelbridge.export.texture.TextureAtlasManager;
+import com.voxelbridge.export.texture.TextureExportPipeline;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
+import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.client.ProgressNotifier;
@@ -172,11 +172,7 @@ public final class GltfSceneBuilder implements SceneSink {
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Stage 2/4: Generating texture atlases...");
             long tAtlas = VoxelBridgeLogger.now();
 
-            for (String spriteKey : spriteIndex.getAllKeys()) {
-                TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
-            }
-            TextureAtlasManager.generateAllAtlases(ctx, request.outputDir());
-            ColorMapManager.generateColorMaps(ctx, request.outputDir());
+            TextureExportPipeline.build(ctx, request.outputDir(), spriteIndex.getAllKeys());
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Texture atlas generation complete");
             VoxelBridgeLogger.duration("gltf_atlas_generation", VoxelBridgeLogger.elapsedSince(tAtlas));
 

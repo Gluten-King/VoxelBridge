@@ -3,7 +3,6 @@ package com.voxelbridge.export.exporter;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;

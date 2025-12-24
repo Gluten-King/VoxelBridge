@@ -2,6 +2,7 @@ package com.voxelbridge.export.scene.vxb;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.texture.UvRemapUtil;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
@@ -16,7 +17,7 @@ import java.util.List;
 import java.util.function.DoubleConsumer;
 
 final class VxbUvRemapper {
-    private static final int BYTES_PER_LOOP = 8;
+    private static final int BYTES_PER_LOOP = 12;
     private static final int CHUNK_BYTES = 2 << 20; // 2MB
 
     private VxbUvRemapper() {}
@@ -33,8 +34,8 @@ final class VxbUvRemapper {
         }
         Files.deleteIfExists(uvPath);
 
-        boolean atlasEnabled = ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS;
-        boolean colormapMode = ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP;
+        boolean atlasEnabled = UvRemapUtil.isAtlasEnabled();
+        boolean colormapMode = UvRemapUtil.isColormapMode();
         int atlasSize = ExportRuntimeConfig.getAtlasSize().getSize();
 
         RemapParams[] params = buildParams(ctx, spriteKeys, atlasEnabled);
@@ -71,8 +72,8 @@ final class VxbUvRemapper {
                 for (VxbSceneBuilder.SectionInfo section : mesh.sections) {
                     long loopCount = section.faceIndexCount;
                     long uvBytes = loopCount * BYTES_PER_LOOP;
-                    remapSegment(in, out, inBuf, outBuf, section.uvOffset, uvBytes, params, spriteSizes, atlasSize, atlasEnabled, false, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos, totalBytes, progressCallback);
-                    remapSegment(in, out, inBuf, outBuf, section.uv1Offset, uvBytes, params, spriteSizes, atlasSize, atlasEnabled, true, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos, totalBytes, progressCallback);
+                    remapSegment(in, out, inBuf, outBuf, section.uvOffset, uvBytes, params, spriteKeys, spriteSizes, ctx, atlasSize, atlasEnabled, false, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos, totalBytes, progressCallback);
+                    remapSegment(in, out, inBuf, outBuf, section.uv1Offset, uvBytes, params, spriteKeys, spriteSizes, ctx, atlasSize, atlasEnabled, true, colormapMode, processedBytes, nextLogBytes, tRemap, uvPath, readNanos, processNanos, writeNanos, totalBytes, progressCallback);
                 }
             }
         }
@@ -92,7 +93,9 @@ final class VxbUvRemapper {
                                      long offset,
                                      long length,
                                      RemapParams[] params,
+                                     List<String> spriteKeys,
                                      List<VxbSceneBuilder.SpriteSize> spriteSizes,
+                                     ExportContext ctx,
                                      int atlasSize,
                                      boolean atlasEnabled,
                                      boolean isUv1,
@@ -126,33 +129,47 @@ final class VxbUvRemapper {
             long tProcess = com.voxelbridge.util.debug.VoxelBridgeLogger.now();
             int loops = chunk / BYTES_PER_LOOP;
             for (int i = 0; i < loops; i++) {
-                int u = inBuf.getShort() & 0xFFFF;
-                int v = inBuf.getShort() & 0xFFFF;
+                float u = inBuf.getFloat();
+                float v = inBuf.getFloat();
                 int spriteId = inBuf.getShort() & 0xFFFF;
                 int pad = inBuf.getShort() & 0xFFFF;
 
                 if (isUv1 && colormapMode) {
-                    // Keep colormap UVs in normalized u16
-                } else if (isUv1 && !colormapMode) {
-                    // UV1 (overlay/lightmap): no Y-axis flip, keep normalized
-                    u = quantizeUvAtlas(u / 65535f, atlasSize);
-                    v = quantizeUvAtlas(v / 65535f, atlasSize);
-                } else if (atlasEnabled && spriteId < params.length) {
-                    // UV0: apply atlas remapping with Y-axis flip only when placement exists.
-                    RemapParams p = params[spriteId];
-                    if (p != null) {
-                        VxbSceneBuilder.SpriteSize size = spriteSizes.get(spriteId);
-                        float uNorm = size.width > 0 ? u / (float) size.width : 0f;
-                        float vNorm = size.height > 0 ? v / (float) size.height : 0f;
-                        float uu = p.baseU + uNorm * p.scaleU;
-                        float vv = p.baseV + vNorm * p.scaleV;
-                        u = quantizeUvAtlas(uu, atlasSize);
-                        v = quantizeUvAtlas(vv, atlasSize);
+                    // Keep colormap UVs normalized (float), but flip V axis to match texture coordinates
+                    v = 1.0f - v;
+                } else if (isUv1 && !colormapMode && !atlasEnabled) {
+                    // No atlas: keep UV1 in atlas-size space for compatibility
+                    u = u * atlasSize;
+                    v = v * atlasSize;
+                } else if (atlasEnabled && spriteId < spriteKeys.size()) {
+                    String spriteKey = spriteKeys.get(spriteId);
+                    if (spriteKey != null) {
+                        if (isUv1 && !colormapMode) {
+                            if (UvRemapUtil.shouldRemap(ctx, spriteKey)) {
+                                float[] remapped = UvRemapUtil.remapUv(ctx, spriteKey, u, v);
+                                u = remapped[0] * atlasSize;
+                                v = remapped[1] * atlasSize;
+                            } else {
+                                u = u * atlasSize;
+                                v = v * atlasSize;
+                            }
+                        } else if (!isUv1) {
+                            RemapParams p = params[spriteId];
+                            if (p != null) {
+                                VxbSceneBuilder.SpriteSize size = spriteSizes.get(spriteId);
+                                float uNorm = size.width > 0 ? u / (float) size.width : 0f;
+                                float vNorm = size.height > 0 ? v / (float) size.height : 0f;
+                                float uu = p.baseU + uNorm * p.scaleU;
+                                float vv = p.baseV + vNorm * p.scaleV;
+                                u = uu * atlasSize;
+                                v = vv * atlasSize;
+                            }
+                        }
                     }
                 }
 
-                outBuf.putShort((short) u);
-                outBuf.putShort((short) v);
+                outBuf.putFloat(u);
+                outBuf.putFloat(v);
                 outBuf.putShort((short) spriteId);
                 outBuf.putShort((short) pad);
             }
@@ -196,6 +213,9 @@ final class VxbUvRemapper {
 
         for (int i = 0; i < spriteKeys.size(); i++) {
             String spriteKey = spriteKeys.get(i);
+            if (!UvRemapUtil.shouldRemap(ctx, spriteKey)) {
+                continue;
+            }
             ExportContext.TintAtlas atlas = ctx.getAtlasBook().get(spriteKey);
             if (atlas == null || atlas.texH <= 0 || atlas.placements.isEmpty()) {
                 continue;

@@ -1,6 +1,5 @@
 package com.voxelbridge.export.exporter.entity;
 
-import net.minecraft.core.Direction;
 import net.minecraft.world.entity.decoration.HangingEntity;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
