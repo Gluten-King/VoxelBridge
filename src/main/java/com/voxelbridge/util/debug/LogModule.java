@@ -1,55 +1,44 @@
 package com.voxelbridge.util.debug;
 
 /**
- * Log module enumeration defining the different logging categories in VoxelBridge.
- * Each module routes to its own dedicated log file.
+ * Log module enumeration defining the logging categories in VoxelBridge.
+ * Each module maps to a log4j2 logger name and a dedicated log file.
  */
 public enum LogModule {
-    /**
-     * General export operations (StreamingRegionSampler, BlockExporter, etc.)
-     */
-    EXPORT("export.log"),
+    EXPORT("export", "export.log"),
 
-    /**
-     * Texture loading and atlas packing (TextureAtlasManager, TextureLoader, etc.)
-     */
-    TEXTURE("texture.log"),
+    SAMPLER_BLOCK("sampler.block", "sampler_block.log"),
+    SAMPLER_BLOCKENTITY("sampler.blockentity", "sampler_blockentity.log"),
+    SAMPLER_ENTITY("sampler.entity", "sampler_entity.log"),
+    SAMPLER_FLUID("sampler.fluid", "sampler_fluid.log"),
 
-    /**
-     * Animation detection and frame extraction (AnimatedTextureHelper)
-     */
-    ANIMATION("animation.log"),
+    TEXTURE("texture", "texture.log"),
+    TEXTURE_RESOLVE("texture.resolve", "texture_resolve.log"),
+    TEXTURE_REGISTER("texture.register", "texture_register.log"),
+    TEXTURE_ATLAS("texture.atlas", "texture_atlas.log"),
 
-    /**
-     * Performance metrics (duration, memory, stats, sizes)
-     */
-    PERFORMANCE("performance.log"),
+    ANIMATION("animation", "animation.log"),
+    UV_REMAP("uv.remap", "uv_remap.log"),
 
-    /**
-     * Block entity rendering and textures (BlockEntityRenderer, BannerBlockEntityHandler)
-     */
-    BLOCKENTITY("blockentity.log"),
+    PERFORMANCE("performance", "performance.log"),
+    BLOCKENTITY("blockentity", "blockentity.log"),
+    ENTITY("entity", "entity.log"),
+    GLTF("gltf", "gltf.log"),
+    VXB("vxb", "vxb.log");
 
-    /**
-     * glTF-specific export operations (GltfExportService, GltfSceneBuilder)
-     */
-    GLTF("gltf.log"),
-
-    /**
-     * VXB-specific export operations (VxbExportService, VxbSceneBuilder)
-     */
-    VXB("vxb.log");
-
+    private final String loggerName;
     private final String fileName;
 
-    LogModule(String fileName) {
+    LogModule(String loggerName, String fileName) {
+        this.loggerName = loggerName;
         this.fileName = fileName;
     }
 
-    /**
-     * Gets the log file name for this module.
-     */
     public String getFileName() {
         return fileName;
+    }
+
+    public String getLoggerName() {
+        return loggerName;
     }
 }

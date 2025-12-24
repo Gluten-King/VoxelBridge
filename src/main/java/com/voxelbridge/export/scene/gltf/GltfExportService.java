@@ -9,9 +9,7 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺失的类
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.client.ProgressNotifier;
-import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.debug.LogModule;
-import com.voxelbridge.util.debug.TimeLogger;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -42,6 +40,7 @@ public final class GltfExportService {
                                     BlockPos pos1,
                                     BlockPos pos2,
                                     Path outDir) throws IOException {
+        VoxelBridgeLogger.initialize(outDir);
         String banner = "============================================================";
         VoxelBridgeLogger.info(LogModule.GLTF, banner);
         VoxelBridgeLogger.info(LogModule.GLTF, "*** GLTF EXPORT STARTED ***");
@@ -88,9 +87,7 @@ public final class GltfExportService {
         TextureAtlasManager.initializeReservedSlots(ctx);
         com.voxelbridge.export.texture.ColorMapManager.initializeReservedSlots(ctx);
 
-        // Initialize unified logging system
-        ExportLogger.initialize(outDir);
-        ExportLogger.log("[GLTF] Starting glTF export with format-agnostic sampler");
+        VoxelBridgeLogger.info(LogModule.GLTF, "[GLTF] Starting glTF export with format-agnostic sampler");
 
         // 修复: 初始化 CTM 调试日志
         // CTM debug logging is now handled internally by CtmDetector
@@ -99,15 +96,15 @@ public final class GltfExportService {
         // Clear BlockEntity texture registry for new export
         com.voxelbridge.export.texture.BlockEntityTextureManager.clear(ctx);
 
-        long tTotal = TimeLogger.now();
+        long tTotal = VoxelBridgeLogger.now();
 
         // Single-pass sampling: collect geometry and texture usage together
         ctx.setDiscoveryMode(false);
         ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "Sampling blocks");
         SceneSink sceneSink = new GltfSceneBuilder(ctx, gltfDir);
-        long tSampling = TimeLogger.now();
+        long tSampling = VoxelBridgeLogger.now();
         StreamingRegionSampler.sampleRegion(level, pos1, pos2, sceneSink, ctx);
-        TimeLogger.logDuration("block_sampling", TimeLogger.elapsedSince(tSampling));
+        VoxelBridgeLogger.duration("block_sampling", VoxelBridgeLogger.elapsedSince(tSampling));
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
         // Suggest GC between sampling and atlas generation to reduce peak memory
@@ -119,14 +116,14 @@ public final class GltfExportService {
         if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS) {
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating texture atlas");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            long tAtlas = TimeLogger.now();
+            long tAtlas = VoxelBridgeLogger.now();
             TextureAtlasManager.generateAllAtlases(ctx, gltfDir);
-            TimeLogger.logDuration("texture_atlas_generation", TimeLogger.elapsedSince(tAtlas));
-            ExportLogger.log("[GLTF] BlockEntity textures merged into main atlas (legacy packer skipped)");
+            VoxelBridgeLogger.duration("texture_atlas_generation", VoxelBridgeLogger.elapsedSince(tAtlas));
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GLTF] BlockEntity textures merged into main atlas (legacy packer skipped)");
         } else {
-            long tBerExport = TimeLogger.now();
+            long tBerExport = VoxelBridgeLogger.now();
             com.voxelbridge.export.texture.BlockEntityTextureManager.exportTextures(ctx, gltfDir);
-            TimeLogger.logDuration("blockentity_texture_export", TimeLogger.elapsedSince(tBerExport));
+            VoxelBridgeLogger.duration("blockentity_texture_export", VoxelBridgeLogger.elapsedSince(tBerExport));
         }
 
         // Suggest GC between texture generation and geometry write
@@ -136,19 +133,19 @@ public final class GltfExportService {
         // 同步写出，确保 glTF 文件生成
         Path outputPath = null;
         try {
-            TimeLogger.logMemory("before_geometry_write");
-            long tSceneWrite = TimeLogger.now();
+            VoxelBridgeLogger.memory("before_geometry_write");
+            long tSceneWrite = VoxelBridgeLogger.now();
             outputPath = sceneSink.write(request);
-            TimeLogger.logDuration("geometry_write", TimeLogger.elapsedSince(tSceneWrite));
-            TimeLogger.logMemory("after_geometry_write");
-            TimeLogger.logDuration("total_export", TimeLogger.elapsedSince(tTotal));
+            VoxelBridgeLogger.duration("geometry_write", VoxelBridgeLogger.elapsedSince(tSceneWrite));
+            VoxelBridgeLogger.memory("after_geometry_write");
+            VoxelBridgeLogger.duration("total_export", VoxelBridgeLogger.elapsedSince(tTotal));
 
             // 验证输出文件存在
             if (outputPath == null || !Files.exists(outputPath)) {
                 throw new IOException("Export failed: Output file does not exist at " + outputPath);
             }
 
-            ExportLogger.log("[GLTF] Export complete: " + outputPath);
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GLTF] Export complete: " + outputPath);
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "Complete");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
@@ -165,21 +162,11 @@ public final class GltfExportService {
             VoxelBridgeLogger.error(LogModule.GLTF, "Heap used: " + (used / 1024 / 1024) + " MB");
             VoxelBridgeLogger.error(LogModule.GLTF, "Heap max: " + (max / 1024 / 1024) + " MB");
             VoxelBridgeLogger.error(LogModule.GLTF, "Usage: " + ((used * 100) / max) + "%");
-            TimeLogger.logMemory("oom_crash");
-            ExportLogger.log("[GLTF][ERROR] OutOfMemoryError: " + e.getMessage());
-            ExportLogger.log("[GLTF][ERROR] Stack trace:");
-            for (StackTraceElement element : e.getStackTrace()) {
-                ExportLogger.log("    at " + element.toString());
-            }
-            VoxelBridgeLogger.error(LogModule.GLTF, "Full stack trace:", e);
+            VoxelBridgeLogger.memory("oom_crash");
+            VoxelBridgeLogger.error(LogModule.GLTF, "[GLTF][ERROR] OutOfMemoryError: " + e.getMessage(), e);
             throw e;  // Re-throw to propagate the error
         } catch (Exception e) {
             String errorMsg = "Export failed: " + e.getClass().getName() + ": " + e.getMessage();
-            ExportLogger.log("[GLTF][ERROR] " + errorMsg);
-            ExportLogger.log("[GLTF][ERROR] Stack trace:");
-            for (StackTraceElement element : e.getStackTrace()) {
-                ExportLogger.log("    at " + element.toString());
-            }
             VoxelBridgeLogger.error(LogModule.GLTF, errorMsg, e);
 
             // Display user-friendly error message
@@ -192,8 +179,7 @@ public final class GltfExportService {
 
             throw new IOException("Export failed during write phase: " + e.getMessage(), e);  // Re-throw as IOException
         } finally {
-            // Close unified logging system
-            ExportLogger.close();
+            VoxelBridgeLogger.close();
         }
 
         // 返回目标 glTF 路径（此时已同步写完）

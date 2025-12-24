@@ -9,6 +9,8 @@ import com.voxelbridge.export.texture.TextureRepository;
 import de.javagl.jgltf.impl.v2.Image;
 import de.javagl.jgltf.impl.v2.Texture;
 import net.minecraft.resources.ResourceLocation;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import com.voxelbridge.util.debug.LogModule;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -25,6 +27,7 @@ import java.util.Map;
 final class TextureRegistry {
     private final ExportContext ctx;
     private final Path texturesDir;
+    private final Path outputDir;
     private final Map<String, String> spriteRelativePaths = new HashMap<>();
     private final Map<String, Integer> spriteTextureIndices = new HashMap<>();
     private final TextureRepository repo;
@@ -32,6 +35,7 @@ final class TextureRegistry {
 
     TextureRegistry(ExportContext ctx, Path outDir) {
         this.ctx = ctx;
+        this.outputDir = outDir;
         this.texturesDir = outDir.resolve("textures");
         this.repo = ctx.getTextureRepository();
     }
@@ -39,24 +43,7 @@ final class TextureRegistry {
     void ensureSpriteExport(String spriteKey) {
         // Handle BlockEntity and Entity textures separately
         if (spriteKey.startsWith("blockentity:") || spriteKey.startsWith("entity:") || spriteKey.startsWith("base:")) {
-            if (spriteRelativePaths.containsKey(spriteKey)) {
-                return;
-            }
-            // Always use the path from ctx.getMaterialPaths() if available
-            String path = ctx.getMaterialPaths().get(spriteKey);
-            if (path != null) {
-                spriteRelativePaths.put(spriteKey, path);
-                return;
-            }
-            // Repository hit via registered location
-            ResourceLocation registered = com.voxelbridge.export.texture.BlockEntityTextureManager.getRegisteredLocation(ctx, spriteKey);
-            if (registered != null && repo.get(registered) != null) {
-                spriteRelativePaths.put(spriteKey, com.voxelbridge.export.texture.BlockEntityTextureManager.getTextureFilename(spriteKey));
-                return;
-            }
-            // Fallback to generated filename (should not happen in normal flow)
-            String filename = com.voxelbridge.export.texture.BlockEntityTextureManager.getTextureFilename(spriteKey);
-            spriteRelativePaths.put(spriteKey, filename);
+            ensureEntityLikeExport(spriteKey);
             return;
         }
 
@@ -65,6 +52,9 @@ final class TextureRegistry {
         if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS && !isAnimated) {
             String path = ctx.getMaterialPaths().get(spriteKey);
             if (path != null) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
+                    "[TextureRegistry][Sprite] spriteKey=%s using materialPath=%s (atlas reuse)",
+                    spriteKey, path));
                 spriteRelativePaths.put(spriteKey, path);
                 return;
             }
@@ -158,5 +148,63 @@ final class TextureRegistry {
 
     private String safe(String spriteKey) {
         return spriteKey.replace(':', '_').replace('/', '_');
+    }
+
+    /**
+     * Ensures entity/blockentity/base textures are written to disk using materialPaths or registered location.
+     */
+    private void ensureEntityLikeExport(String spriteKey) {
+        if (spriteRelativePaths.containsKey(spriteKey)) {
+            VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
+                "[TextureRegistry][EntityLike] spriteKey=%s already registered -> rel=%s",
+                spriteKey, spriteRelativePaths.get(spriteKey)));
+            return;
+        }
+        // Preferred path from ctx
+        String rel = ctx.getMaterialPaths().get(spriteKey);
+        if (rel == null) {
+            ResourceLocation registered = com.voxelbridge.export.texture.BlockEntityTextureManager.getRegisteredLocation(ctx, spriteKey);
+            if (registered != null && repo.get(registered) != null) {
+                rel = com.voxelbridge.export.texture.BlockEntityTextureManager.getTextureFilename(spriteKey);
+            }
+        }
+        if (rel == null) {
+            rel = "entity_textures/" + safe(spriteKey) + ".png";
+        }
+        spriteRelativePaths.put(spriteKey, rel);
+
+        // 如果已经是 atlas 路径（例如 textures/atlas/atlas_1001.png），直接使用现有 atlas 文件，不再重复导出
+        boolean isAtlasPath = rel.startsWith("textures/atlas/");
+        Path target = isAtlasPath ? outputDir.resolve(rel) : texturesDir.resolve(rel);
+        VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
+            "[TextureRegistry][EntityLike] spriteKey=%s -> rel=%s target=%s (isAtlas=%s)",
+            spriteKey, rel, target, isAtlasPath));
+        try {
+            Files.createDirectories(target.getParent());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        if (Files.exists(target) || isAtlasPath) {
+            return;
+        }
+
+        BufferedImage image = repo.getBySpriteKey(spriteKey);
+        if (image == null) {
+            image = ctx.getGeneratedEntityTextures().get(spriteKey);
+        }
+        if (image == null) {
+            // Try to load from resources directly via spriteKey
+            ResourceLocation loc = com.voxelbridge.export.texture.TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            image = com.voxelbridge.export.texture.TextureLoader.readTexture(loc, ExportRuntimeConfig.isAnimationEnabled());
+        }
+        if (image == null) {
+            VoxelBridgeLogger.error(LogModule.TEXTURE, String.format("[TextureRegistry][EntityLike][ERROR] Missing image for %s (target=%s)", spriteKey, target));
+            throw new RuntimeException("Failed to resolve entity texture for " + spriteKey);
+        }
+        try {
+            ImageIO.write(image, "PNG", target.toFile());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

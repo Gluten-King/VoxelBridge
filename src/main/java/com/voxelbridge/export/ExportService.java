@@ -2,7 +2,8 @@ package com.voxelbridge.export;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.scene.vxb.VxbExportService;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -62,15 +63,15 @@ public final class ExportService {
         int minChunkZ = minZ >> 4;
         int maxChunkZ = maxZ >> 4;
 
-        System.out.println("[VoxelBridge] Pre-scanning region for tint variants...");
-        ExportLogger.log("Pre-scanning region for tint variants...");
+        VoxelBridgeLogger.info(LogModule.EXPORT, "[VoxelBridge] Pre-scanning region for tint variants...");
+        VoxelBridgeLogger.info(LogModule.EXPORT, "Pre-scanning region for tint variants...");
 
         int scanned = 0;
         for (int cx = minChunkX; cx <= maxChunkX; cx++) {
             for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
                 LevelChunk chunk = chunkCache.getChunk(cx, cz, false);
                 if (chunk == null || chunk.isEmpty()) {
-                    System.err.printf("[VoxelBridge][WARN] Chunk (%d,%d) unavailable during tint scan%n", cx, cz);
+                    VoxelBridgeLogger.warn(LogModule.EXPORT, String.format("[VoxelBridge][WARN] Chunk (%d,%d) unavailable during tint scan", cx, cz));
                     continue;
                 }
                 scanned++;
@@ -79,7 +80,7 @@ public final class ExportService {
 
         ctx.resetConsumedBlocks();
         ctx.clearTextureState();
-        ExportLogger.log("Tint scan complete - scanned " + scanned + " chunks");
-        System.out.println("[VoxelBridge] Tint scan complete");
+        VoxelBridgeLogger.info(LogModule.EXPORT, "Tint scan complete - scanned " + scanned + " chunks");
+        VoxelBridgeLogger.info(LogModule.EXPORT, "[VoxelBridge] Tint scan complete");
     }
 }

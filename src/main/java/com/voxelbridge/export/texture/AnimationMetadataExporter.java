@@ -1,6 +1,7 @@
 package com.voxelbridge.export.texture;
 
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -25,7 +26,7 @@ public final class AnimationMetadataExporter {
      */
     public static void exportMetadata(Path outputDir, AnimationMetadata metadata, int frameCount) {
         if (metadata == null || outputDir == null) {
-            ExportLogger.log("[AnimationExport][WARN] Cannot export metadata: null input");
+            VoxelBridgeLogger.warn(LogModule.ANIMATION, "[AnimationExport][WARN] Cannot export metadata: null input");
             return;
         }
 
@@ -34,11 +35,11 @@ public final class AnimationMetadataExporter {
             String json = generateMcmetaJson(metadata, frameCount);
 
             Files.writeString(metaFile, json, StandardCharsets.UTF_8);
-            ExportLogger.log(String.format("[AnimationExport] Wrote metadata: %s (%d bytes)",
+            VoxelBridgeLogger.info(LogModule.ANIMATION, String.format("[AnimationExport] Wrote metadata: %s (%d bytes)",
                 metaFile.getFileName(), json.length()));
 
         } catch (IOException e) {
-            ExportLogger.log(String.format("[AnimationExport][ERROR] Failed to write metadata: %s",
+            VoxelBridgeLogger.error(LogModule.ANIMATION, String.format("[AnimationExport][ERROR] Failed to write metadata: %s",
                 e.getMessage()));
         }
     }
@@ -136,7 +137,7 @@ public final class AnimationMetadataExporter {
             Files.writeString(metaFile, json, StandardCharsets.UTF_8);
 
         } catch (IOException e) {
-            ExportLogger.log(String.format("[AnimationExport][WARN] Failed to write frame metadata for %s: %s",
+            VoxelBridgeLogger.warn(LogModule.ANIMATION, String.format("[AnimationExport][WARN] Failed to write frame metadata for %s: %s",
                 frameFile.getFileName(), e.getMessage()));
         }
     }
@@ -157,7 +158,7 @@ public final class AnimationMetadataExporter {
         if (metadata.hasCustomFrameOrder()) {
             for (AnimationMetadata.FrameTiming timing : metadata.frameTimings()) {
                 if (timing.index() < 0 || timing.index() >= frameCount) {
-                    ExportLogger.log(String.format(
+                    VoxelBridgeLogger.info(LogModule.ANIMATION, String.format(
                         "[AnimationExport][WARN] Frame timing references invalid index %d (max: %d)",
                         timing.index(), frameCount - 1
                     ));
@@ -169,3 +170,7 @@ public final class AnimationMetadataExporter {
         return true;
     }
 }
+
+
+
+

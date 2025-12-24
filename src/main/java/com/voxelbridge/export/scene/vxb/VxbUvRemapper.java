@@ -2,8 +2,8 @@ package com.voxelbridge.export.scene.vxb;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
-import com.voxelbridge.util.debug.ExportLogger;
-import com.voxelbridge.util.debug.TimeLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -40,7 +40,7 @@ final class VxbUvRemapper {
         RemapParams[] params = buildParams(ctx, spriteKeys, atlasEnabled);
         long[] processedBytes = {0L};
         long[] nextLogBytes = {64L << 20}; // 64MB
-        long tRemap = com.voxelbridge.util.debug.TimeLogger.now();
+        long tRemap = com.voxelbridge.util.debug.VoxelBridgeLogger.now();
         long[] readNanos = {0L};
         long[] processNanos = {0L};
         long[] writeNanos = {0L};
@@ -60,8 +60,10 @@ final class VxbUvRemapper {
         long uvRawSize = Files.size(uvRawPath);
         String startMsg = String.format("[VXB] UV remap start: sections=%d, loops=%d, est_bytes=%d, uvraw=%d bytes",
             sectionCount, totalLoops, totalBytes, uvRawSize);
-        ExportLogger.log(startMsg);
-        TimeLogger.logInfo(startMsg);
+        if (VoxelBridgeLogger.isDebugEnabled(LogModule.UV_REMAP)) {
+            VoxelBridgeLogger.info(LogModule.UV_REMAP, startMsg);
+            VoxelBridgeLogger.logInfo(startMsg);
+        }
 
         try (FileChannel in = FileChannel.open(uvRawPath, StandardOpenOption.READ);
              FileChannel out = FileChannel.open(uvPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
@@ -75,10 +77,12 @@ final class VxbUvRemapper {
             }
         }
 
-        ExportLogger.log("[VXB] UV remap complete: " + uvPath.getFileName());
-        TimeLogger.logDuration("vxb_uv_remap_read", readNanos[0]);
-        TimeLogger.logDuration("vxb_uv_remap_process", processNanos[0]);
-        TimeLogger.logDuration("vxb_uv_remap_write", writeNanos[0]);
+        if (VoxelBridgeLogger.isDebugEnabled(LogModule.UV_REMAP)) {
+            VoxelBridgeLogger.info(LogModule.UV_REMAP, "[VXB] UV remap complete: " + uvPath.getFileName());
+        }
+        VoxelBridgeLogger.duration("vxb_uv_remap_read", readNanos[0]);
+        VoxelBridgeLogger.duration("vxb_uv_remap_process", processNanos[0]);
+        VoxelBridgeLogger.duration("vxb_uv_remap_write", writeNanos[0]);
     }
 
     private static void remapSegment(FileChannel in,
@@ -114,12 +118,12 @@ final class VxbUvRemapper {
             inBuf.limit(chunk);
 
             in.position(pos);
-            long tRead = com.voxelbridge.util.debug.TimeLogger.now();
+            long tRead = com.voxelbridge.util.debug.VoxelBridgeLogger.now();
             readFully(in, inBuf);
-            readNanos[0] += com.voxelbridge.util.debug.TimeLogger.elapsedSince(tRead);
+            readNanos[0] += com.voxelbridge.util.debug.VoxelBridgeLogger.elapsedSince(tRead);
             inBuf.flip();
 
-            long tProcess = com.voxelbridge.util.debug.TimeLogger.now();
+            long tProcess = com.voxelbridge.util.debug.VoxelBridgeLogger.now();
             int loops = chunk / BYTES_PER_LOOP;
             for (int i = 0; i < loops; i++) {
                 int u = inBuf.getShort() & 0xFFFF;
@@ -134,7 +138,7 @@ final class VxbUvRemapper {
                     u = quantizeUvAtlas(u / 65535f, atlasSize);
                     v = quantizeUvAtlas(v / 65535f, atlasSize);
                 } else if (atlasEnabled && spriteId < params.length) {
-                    // UV0: apply atlas remapping with Y-axis flip
+                    // UV0: apply atlas remapping with Y-axis flip only when placement exists.
                     RemapParams p = params[spriteId];
                     if (p != null) {
                         VxbSceneBuilder.SpriteSize size = spriteSizes.get(spriteId);
@@ -144,12 +148,6 @@ final class VxbUvRemapper {
                         float vv = p.baseV + vNorm * p.scaleV;
                         u = quantizeUvAtlas(uu, atlasSize);
                         v = quantizeUvAtlas(vv, atlasSize);
-                    } else {
-                        VxbSceneBuilder.SpriteSize size = spriteSizes.get(spriteId);
-                        float uNorm = size.width > 0 ? u / (float) size.width : 0f;
-                        float vNorm = size.height > 0 ? v / (float) size.height : 0f;
-                        u = quantizeUvAtlas(uNorm, atlasSize);
-                        v = quantizeUvAtlas(vNorm, atlasSize);
                     }
                 }
 
@@ -158,13 +156,13 @@ final class VxbUvRemapper {
                 outBuf.putShort((short) spriteId);
                 outBuf.putShort((short) pad);
             }
-            processNanos[0] += com.voxelbridge.util.debug.TimeLogger.elapsedSince(tProcess);
+            processNanos[0] += com.voxelbridge.util.debug.VoxelBridgeLogger.elapsedSince(tProcess);
 
             outBuf.flip();
             out.position(pos);
-            long tWrite = com.voxelbridge.util.debug.TimeLogger.now();
+            long tWrite = com.voxelbridge.util.debug.VoxelBridgeLogger.now();
             out.write(outBuf);
-            writeNanos[0] += com.voxelbridge.util.debug.TimeLogger.elapsedSince(tWrite);
+            writeNanos[0] += com.voxelbridge.util.debug.VoxelBridgeLogger.elapsedSince(tWrite);
 
             remaining -= chunk;
             pos += chunk;
@@ -173,11 +171,13 @@ final class VxbUvRemapper {
             if (processedBytes[0] >= nextLogBytes[0]) {
                 nextLogBytes[0] += 64L << 20; // advance next log threshold
                 double mb = processedBytes[0] / 1024.0 / 1024.0;
-                double elapsedSec = com.voxelbridge.util.debug.TimeLogger.elapsedSince(tRemapStart) / 1_000_000_000.0;
+                double elapsedSec = com.voxelbridge.util.debug.VoxelBridgeLogger.elapsedSince(tRemapStart) / 1_000_000_000.0;
                 String msg = String.format("[VXB] UV remap progress %.1f MB for %s (elapsed %.3f s)",
                     mb, uvPath.getFileName(), elapsedSec);
-                ExportLogger.log(msg);
-                TimeLogger.logInfo(msg);
+                if (VoxelBridgeLogger.isDebugEnabled(LogModule.UV_REMAP)) {
+                    VoxelBridgeLogger.info(LogModule.UV_REMAP, msg);
+                    VoxelBridgeLogger.logInfo(msg);
+                }
             }
             if (progressCallback != null && totalBytes > 0) {
                 double frac = Math.min(1.0, processedBytes[0] / (double) totalBytes);
@@ -233,3 +233,7 @@ final class VxbUvRemapper {
 
     private record RemapParams(float baseU, float scaleU, float baseV, float scaleV) {}
 }
+
+
+
+

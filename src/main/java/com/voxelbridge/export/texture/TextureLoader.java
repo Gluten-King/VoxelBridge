@@ -1,6 +1,7 @@
 package com.voxelbridge.export.texture;
 
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -31,30 +32,46 @@ public final class TextureLoader {
      * Loads a PNG texture with optional preservation of animation strips.
      */
     public static BufferedImage readTexture(ResourceLocation png, boolean preserveAnimationStrip) {
-        ExportLogger.log(String.format("[TextureLoader] Resolving %s", png));
+        boolean logResolve = VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE);
+        if (logResolve) {
+            VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Resolving %s", png));
+        }
         try {
             var rm = Minecraft.getInstance().getResourceManager();
             var opt = rm.getResource(png);
             if (opt.isEmpty()) {
-                ExportLogger.log(String.format("[TextureLoader][WARN] Missing resource %s", png));
+                if (logResolve) {
+                    VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader][WARN] Missing resource %s", png));
+                }
+                BufferedImage dynamic = DynamicTextureReader.tryRead(png);
+                if (dynamic != null) {
+                    if (logResolve) {
+                        VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Loaded dynamic texture %s (%dx%d)", png, dynamic.getWidth(), dynamic.getHeight()));
+                    }
+                    return preserveAnimationStrip ? dynamic : extractFirstFrame(dynamic);
+                }
                 return null;
             }
             try (InputStream in = opt.get().open()) {
                 BufferedImage img = readPngNoColorConversion(in);
-                ExportLogger.log(String.format("[TextureLoader] Loaded %s (%dx%d)", png, img.getWidth(), img.getHeight()));
+                if (logResolve) {
+                    VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Loaded %s (%dx%d)", png, img.getWidth(), img.getHeight()));
+                }
                 if (preserveAnimationStrip) {
                     return img;
                 }
                 BufferedImage firstFrame = extractFirstFrame(img);
                 if (firstFrame != img) {
-                    ExportLogger.log(String.format("[TextureLoader] Extracted first frame for %s -> %dx%d",
-                            png, firstFrame.getWidth(), firstFrame.getHeight()));
+                    if (logResolve) {
+                        VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Extracted first frame for %s -> %dx%d",
+                                png, firstFrame.getWidth(), firstFrame.getHeight()));
+                    }
                 }
                 return firstFrame;
             }
         } catch (Throwable t) {
-            ExportLogger.log(String.format("[TextureLoader][ERROR] Failed to read %s: %s", png, t));
-            System.err.println("[VoxelBridge][WARN] readTexture failed: " + png + " :: " + t);
+            VoxelBridgeLogger.error(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader][ERROR] Failed to read %s: %s", png, t));
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, "[VoxelBridge][WARN] readTexture failed: " + png + " :: " + t);
             return null;
         }
     }
@@ -88,8 +105,10 @@ public final class TextureLoader {
         }
         BufferedImage firstFrame = extractFirstFrame(img);
         if (firstFrame != img) {
-            ExportLogger.log(String.format("[TextureLoader] Extracted first frame from sprite %s -> %dx%d",
-                    sprite.contents().name(), firstFrame.getWidth(), firstFrame.getHeight()));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Extracted first frame from sprite %s -> %dx%d",
+                        sprite.contents().name(), firstFrame.getWidth(), firstFrame.getHeight()));
+            }
         }
         return firstFrame;
     }
@@ -128,7 +147,7 @@ public final class TextureLoader {
         try {
             return img.getSubimage(0, 0, frameSize, frameSize);
         } catch (Exception e) {
-            System.err.println("[TextureLoader][WARN] Failed to extract first frame: " + e);
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, "[TextureLoader][WARN] Failed to extract first frame: " + e);
             return img;
         }
     }
@@ -174,6 +193,9 @@ public final class TextureLoader {
      * Converts a sprite key (e.g. "minecraft:block/grass_block_top") to a PNG resource location.
      */
     public static ResourceLocation spriteKeyToTexturePNG(String spriteKey) {
+        // Normalize/sanitize first to ensure a valid ResourceLocation layout.
+        spriteKey = com.voxelbridge.util.ResourceLocationUtil.sanitizeKey(spriteKey);
+
         int separator = spriteKey.indexOf(':');
         String namespace = separator > 0 ? spriteKey.substring(0, separator) : "minecraft";
         String rawPath = separator > 0 ? spriteKey.substring(separator + 1) : spriteKey;
@@ -181,13 +203,21 @@ public final class TextureLoader {
         // Handle blockentity: and entity: prefixes specially
         if ("blockentity".equals(namespace) || "entity".equals(namespace)) {
             // rawPath is like "minecraft/entity/chest/normal" or "minecraft/textures/atlas/signs.png"
-            // Extract the actual namespace and path
-            int secondSep = rawPath.indexOf('/');
-            if (secondSep > 0) {
-                String actualNamespace = rawPath.substring(0, secondSep);
-                String actualPath = rawPath.substring(secondSep + 1);
-                return ResourceLocation.fromNamespaceAndPath(actualNamespace, ensurePngExtension(actualPath));
+            // Extract the actual namespace and path, tolerating ":" inside the path
+            String normalized = rawPath.replace(':', '/');
+            normalized = normalized.startsWith("/") ? normalized.substring(1) : normalized;
+
+            int secondSep = normalized.indexOf('/');
+            String actualNamespace = secondSep > 0 ? normalized.substring(0, secondSep) : "minecraft";
+            String actualPath = secondSep > 0 ? normalized.substring(secondSep + 1) : normalized;
+
+            if (!actualPath.startsWith("textures/")) {
+                actualPath = "textures/" + actualPath;
             }
+
+            actualPath = sanitizePath(ensurePngExtension(actualPath));
+            actualNamespace = sanitizeNamespace(actualNamespace);
+            return ResourceLocation.fromNamespaceAndPath(actualNamespace, actualPath);
         }
 
         String normalizedPath = normalizeSpritePath(rawPath);
@@ -230,6 +260,19 @@ public final class TextureLoader {
         return sb.toString();
     }
 
+    private static String sanitizeNamespace(String namespace) {
+        StringBuilder sb = new StringBuilder(namespace.length());
+        for (int i = 0; i < namespace.length(); i++) {
+            char c = namespace.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '.' || c == '_' || c == '-';
+            sb.append(ok ? c : '_');
+        }
+        String out = sb.toString();
+        return out.isEmpty() ? "minecraft" : out;
+    }
+
     /**
      * Converts an ARGB integer color into RGB multipliers in the range [0, 1].
      */
@@ -241,3 +284,8 @@ public final class TextureLoader {
         };
     }
 }
+
+
+
+
+

@@ -7,9 +7,9 @@ import com.voxelbridge.export.ExportContext.BlockEntityAtlasPlacement;
 import com.voxelbridge.export.ExportContext.TexturePlacement;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.export.texture.PngjWriter;
-import com.voxelbridge.util.debug.TimeLogger;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
@@ -67,11 +67,11 @@ public final class TextureAtlasManager {
 
         // Force occupy the first slot (index 0)
         ExportContext.TintAtlas atlas = ctx.getOrCreateTintAtlas(transparentKey);
-        atlas.tintToIndex.put(0xFFFFFF, 0);  // tint 0xFFFFFF 鈫?slot 0
+        atlas.tintToIndex.put(0xFFFFFF, 0);  // tint 0xFFFFFF ?slot 0
         atlas.indexToTint.put(0, 0xFFFFFF);
         atlas.nextIndex.set(1);  // Next available slot starts from 1
 
-        ExportLogger.log("[TextureAtlas] Reserved slot 0 for transparent texture (16x16)");
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[TextureAtlas] Reserved slot 0 for transparent texture (16x16)");
     }
 
     public static void registerTint(ExportContext ctx, String spriteKey, int tint) {
@@ -80,8 +80,10 @@ public final class TextureAtlasManager {
         atlas.tintToIndex.computeIfAbsent(normalized, key -> {
             int slot = reserveTintSlot(atlas, key);
             int totalSlots = Math.max(1, Math.min(MAX_TINT_SLOTS, atlas.nextIndex.get()));
-            ExportLogger.log(String.format("[Tint] sprite=%s tint=%06X slot=%d totalSlots=%d",
-                    spriteKey, normalized, slot, totalSlots));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[Tint] sprite=%s tint=%06X slot=%d totalSlots=%d",
+                        spriteKey, normalized, slot, totalSlots));
+            }
             return slot;
         });
     }
@@ -125,33 +127,30 @@ public final class TextureAtlasManager {
         Files.createDirectories(texRoot);
 
         AtlasMode atlasMode = ExportRuntimeConfig.getAtlasMode();
-        System.out.println("[TextureAtlasManager] Generating atlases (mode=" + atlasMode + ")...");
-        ExportLogger.log("[AtlasGen] ===== ATLAS GENERATION START =====");
-        ExportLogger.log(String.format("[AtlasGen] Atlas mode: %s", atlasMode));
-        ExportLogger.log(String.format("[AtlasGen] Total sprites in atlasBook: %d", ctx.getAtlasBook().size()));
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[TextureAtlasManager] Generating atlases (mode=" + atlasMode + ")...");
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[AtlasGen] ===== ATLAS GENERATION START =====");
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Atlas mode: %s", atlasMode));
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Total sprites in atlasBook: %d", ctx.getAtlasBook().size()));
 
         // Phase 0: Animation scanning limited to current export set (if enabled)
         java.util.Set<String> animationWhitelist = new java.util.HashSet<>();
         animationWhitelist.addAll(ctx.getAtlasBook().keySet());
         animationWhitelist.addAll(ctx.getCachedSpriteKeys());
         if (ExportRuntimeConfig.isAnimationEnabled()) {
-            ExportLogger.log("[AtlasGen] Starting animation scan (whitelisted to export set)...");
+            VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[AtlasGen] Starting animation scan (whitelisted to export set)...");
 
-            // ✅ 新增日志：输出 whitelist 统计（输出到 animation-detection.log）
-            ExportLogger.logAnimation(String.format("[Animation] Whitelist built: %d sprites", animationWhitelist.size()));
-            ExportLogger.logAnimation("[Animation] AtlasBook entries: " + ctx.getAtlasBook().size());
-            ExportLogger.logAnimation("[Animation] CachedSprite entries: " + ctx.getCachedSpriteKeys().size());
+            VoxelBridgeLogger.info(LogModule.ANIMATION, String.format("[Animation] Whitelist built: %d sprites", animationWhitelist.size()));
+            VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] AtlasBook entries: " + ctx.getAtlasBook().size());
+            VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] CachedSprite entries: " + ctx.getCachedSpriteKeys().size());
 
-            // ✅ 新增日志：输出包含特定关键词的 sprite（便于查找 mod）
             int modCount = 0;
             for (String key : animationWhitelist) {
-                // 输出所有非 minecraft 命名空间的 sprite（即 mod sprite）
                 if (!key.startsWith("minecraft:")) {
-                    ExportLogger.logAnimation("[Animation] Whitelist mod sprite: " + key);
+                    VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] Whitelist mod sprite: " + key);
                     modCount++;
                 }
             }
-            ExportLogger.logAnimation("[Animation] Total mod sprites in whitelist: " + modCount);
+            VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] Total mod sprites in whitelist: " + modCount);
 
             AnimatedTextureHelper.scanAllAnimations(ctx, animationWhitelist);
 
@@ -163,7 +162,21 @@ public final class TextureAtlasManager {
         for (String cachedKey : ctx.getCachedSpriteKeys()) {
             if (!ctx.getAtlasBook().containsKey(cachedKey)) {
                 registerTint(ctx, cachedKey, DEFAULT_TINT);
-                ExportLogger.log("[AtlasGen] Auto-registered cached sprite: " + cachedKey);
+                if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                    VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[AtlasGen] Auto-registered cached sprite: " + cachedKey);
+                }
+            }
+        }
+
+        // Ensure entity/blockentity/base sprites participate in atlas packing when atlas mode is enabled.
+        if (atlasMode == AtlasMode.ATLAS) {
+            for (String spriteKey : ctx.getEntityTextures().keySet()) {
+                if (!ctx.getAtlasBook().containsKey(spriteKey)) {
+                    registerTint(ctx, spriteKey, DEFAULT_TINT);
+                    if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[AtlasGen] Registered entity sprite for atlas: " + spriteKey);
+                    }
+                }
             }
         }
 
@@ -173,8 +186,10 @@ public final class TextureAtlasManager {
                 ensureAnimationDetection(ctx, key);
             }
             boolean isInCache = ctx.getCachedSpriteImage(key) != null;
-            ExportLogger.log(String.format("[AtlasGen] Sprite registered: %s (inCache=%s, tints=%d)",
-                key, isInCache, atlas.nextIndex.get()));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Sprite registered: %s (inCache=%s, tints=%d)",
+                    key, isInCache, atlas.nextIndex.get()));
+            }
             // Only include base/albedo sprites; skip PBR companion keys
             boolean isAnimated = ExportRuntimeConfig.isAnimationEnabled() && ctx.getTextureRepository().hasAnimation(key);
             if (!isPbrSprite(key) && !isAnimated) {
@@ -182,7 +197,7 @@ public final class TextureAtlasManager {
             }
         });
 
-        ExportLogger.log(String.format("[AtlasGen] Block sprites to process: %d", blockEntries.size()));
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Block sprites to process: %d", blockEntries.size()));
 
         if (atlasMode == AtlasMode.INDIVIDUAL) {
             generateIndividualTextures(ctx, outDir, blockEntries, "textures/individual/");
@@ -200,7 +215,7 @@ public final class TextureAtlasManager {
             return;
         }
 
-        long tIndividual = TimeLogger.now();
+        long tIndividual = VoxelBridgeLogger.now();
         for (Map.Entry<String, ExportContext.TintAtlas> entry : entries.entrySet()) {
             String spriteKey = entry.getKey();
             ExportContext.TintAtlas atlas = entry.getValue();
@@ -217,7 +232,7 @@ public final class TextureAtlasManager {
             BufferedImage base = loadTextureForAtlas(ctx, spriteKey);
 
             if (base == null) {
-                ExportLogger.log(String.format("[AtlasGen][WARN] sprite=%s missing texture, using placeholder", spriteKey));
+                VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][WARN] sprite=%s missing texture, using placeholder", spriteKey));
                 base = createMissingTexture();
             }
 
@@ -234,7 +249,9 @@ public final class TextureAtlasManager {
             atlas.placements.clear();
             ctx.getMaterialPaths().put(spriteKey, relativePath);
 
-            ExportLogger.log(String.format("[AtlasGen] sprite=%s mode=individual path=%s", spriteKey, relativePath));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] sprite=%s mode=individual path=%s", spriteKey, relativePath));
+            }
 
             // Dump PBR companions if present in cache for debugging/inspection
             BufferedImage normal = ctx.getCachedSpriteImage(spriteKey + "_n");
@@ -243,7 +260,7 @@ public final class TextureAtlasManager {
                 Path normalTarget = outDir.resolve(normalRel);
                 Files.createDirectories(normalTarget.getParent());
                 PngjWriter.write(normal, normalTarget);
-                ExportLogger.log(String.format("[AtlasGen] sprite=%s normal exported: %s", spriteKey, normalRel));
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] sprite=%s normal exported: %s", spriteKey, normalRel));
                 ctx.getMaterialPaths().put(spriteKey + "_n", normalRel);
             }
             BufferedImage spec = ctx.getCachedSpriteImage(spriteKey + "_s");
@@ -252,11 +269,11 @@ public final class TextureAtlasManager {
                 Path specTarget = outDir.resolve(specRel);
                 Files.createDirectories(specTarget.getParent());
                 PngjWriter.write(spec, specTarget);
-                ExportLogger.log(String.format("[AtlasGen] sprite=%s specular exported: %s", spriteKey, specRel));
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] sprite=%s specular exported: %s", spriteKey, specRel));
                 ctx.getMaterialPaths().put(spriteKey + "_s", specRel);
             }
         }
-        TimeLogger.logDuration("individual_texture_write", TimeLogger.elapsedSince(tIndividual));
+        VoxelBridgeLogger.duration("individual_texture_write", VoxelBridgeLogger.elapsedSince(tIndividual));
     }
 
     private record AtlasRequest(String spriteKey, int tintIndex, BufferedImage image) {}
@@ -271,7 +288,7 @@ public final class TextureAtlasManager {
             return;
         }
 
-        ExportLogger.log(String.format("[AtlasGen] Generating packed atlas with %d sprites", entries.size()));
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Generating packed atlas with %d sprites", entries.size()));
 
         List<TintTask> tintTasks = new ArrayList<>();
         Map<Integer, String> pagePathMap = new java.util.HashMap<>();
@@ -291,7 +308,9 @@ public final class TextureAtlasManager {
             int tintSlots = Math.max(1, Math.min(MAX_TINT_SLOTS, atlas.nextIndex.get()));
             int[] tintBySlot = resolveTintSlots(atlas, tintSlots);
 
-            ExportLogger.log(String.format("[AtlasGen] Processing sprite: %s (tintSlots=%d)", spriteKey, tintSlots));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Processing sprite: %s (tintSlots=%d)", spriteKey, tintSlots));
+            }
 
             for (int i = 0; i < tintSlots; i++) {
                 tintTasks.add(new TintTask(spriteKey, i, tintBySlot[i]));
@@ -308,7 +327,7 @@ public final class TextureAtlasManager {
                 key -> {
                     BufferedImage base = loadTextureForAtlas(ctx, key);
                     if (base == null) {
-                        ExportLogger.log(String.format("[AtlasGen][WARN] sprite=%s missing texture, using placeholder", key));
+                        VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][WARN] sprite=%s missing texture, using placeholder", key));
                         base = createMissingTexture();
                     }
                     return base;
@@ -317,7 +336,7 @@ public final class TextureAtlasManager {
             ));
 
         // Parallel tinting to utilize multiple cores
-        long tTint = TimeLogger.now();
+        long tTint = VoxelBridgeLogger.now();
         List<AtlasRequest> requests = tintTasks.parallelStream()
             .map(task -> {
                 BufferedImage base = preloaded.get(task.spriteKey());
@@ -331,10 +350,10 @@ public final class TextureAtlasManager {
         requests.sort(Comparator
             .comparing((AtlasRequest r) -> r.spriteKey)
             .thenComparingInt(r -> r.tintIndex));
-        TimeLogger.logDuration("atlas_tinting", TimeLogger.elapsedSince(tTint));
+        VoxelBridgeLogger.duration("atlas_tinting", VoxelBridgeLogger.elapsedSince(tTint));
 
         // Pack using MaxRects (no rotation)
-        long tPack = TimeLogger.now();
+        long tPack = VoxelBridgeLogger.now();
         int atlasSize = ExportRuntimeConfig.getAtlasSize().getSize();
         TextureAtlasPacker packer = new TextureAtlasPacker(atlasSize, false);
         int counter = 0;
@@ -399,12 +418,12 @@ public final class TextureAtlasManager {
                 ctx.getMaterialPaths().put(entry.getKey(), rel);
             }
         }
-        TimeLogger.logDuration("atlas_packing_and_write", TimeLogger.elapsedSince(tPack));
+        VoxelBridgeLogger.duration("atlas_packing_and_write", VoxelBridgeLogger.elapsedSince(tPack));
 
         // Generate PBR atlases aligned to the same layout
-        long tPbr = TimeLogger.now();
+        long tPbr = VoxelBridgeLogger.now();
         generatePbrAtlases(ctx, outDir, entries, new HashSet<>(pageToUdim.keySet()), atlasSize, atlasDirName, atlasPrefix, pageToUdim);
-        TimeLogger.logDuration("pbr_atlas_generation", TimeLogger.elapsedSince(tPbr));
+        VoxelBridgeLogger.duration("pbr_atlas_generation", VoxelBridgeLogger.elapsedSince(tPbr));
     }
 
     public static float[] remapUV(ExportContext ctx, String spriteKey, int tint, float u, float v) {
@@ -417,11 +436,11 @@ public final class TextureAtlasManager {
         int tintIndex = getTintIndex(ctx, spriteKey, normalizedTint);
         ExportContext.TintAtlas atlas = ctx.getAtlasBook().get(spriteKey);
         if (atlas == null) {
-            ExportLogger.log(String.format("[RemapUV][WARN] No atlas found for %s", spriteKey));
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[RemapUV][WARN] No atlas found for %s", spriteKey));
             return new float[]{u, v};
         }
         if (atlas.placements.isEmpty()) {
-            ExportLogger.log(String.format("[RemapUV][WARN] Atlas for %s has no placements", spriteKey));
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[RemapUV][WARN] Atlas for %s has no placements", spriteKey));
             return new float[]{u, v};
         }
 
@@ -430,7 +449,7 @@ public final class TextureAtlasManager {
             placement = atlas.placements.values().stream().findFirst().orElse(null);
         }
         if (placement == null) {
-            ExportLogger.log(String.format("[RemapUV][ERROR] No placement for %s tintIndex=%d", spriteKey, tintIndex));
+            VoxelBridgeLogger.error(LogModule.TEXTURE_ATLAS, String.format("[RemapUV][ERROR] No placement for %s tintIndex=%d", spriteKey, tintIndex));
             return new float[]{u, v};
         }
 
@@ -567,6 +586,7 @@ public final class TextureAtlasManager {
         return key != null && (key.endsWith("_n") || key.endsWith("_s"));
     }
 
+
     /**
      * Generate PBR atlases (normal/specular) using the same layout as the albedo atlas.
      * Missing channels are filled with default tiles.
@@ -691,9 +711,8 @@ public final class TextureAtlasManager {
         Path animDir = outDir.resolve("textures").resolve("animated");
         Files.createDirectories(animDir);
 
-        // ✅ 新增日志：输出动画导出统计
-        ExportLogger.logAnimation("[Animation] Starting animation export...");
-        ExportLogger.logAnimation("[Animation] Total animations in repository: " + repo.getAnimatedCache().size());
+        VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] Starting animation export...");
+        VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] Total animations in repository: " + repo.getAnimatedCache().size());
 
         if (whitelist != null && !whitelist.isEmpty()) {
             int whitelistedCount = 0;
@@ -702,7 +721,7 @@ public final class TextureAtlasManager {
                     whitelistedCount++;
                 }
             }
-            ExportLogger.logAnimation("[Animation] Whitelisted animations: " + whitelistedCount);
+            VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation] Whitelisted animations: " + whitelistedCount);
         }
 
         int exportCount = 0;
@@ -731,7 +750,7 @@ public final class TextureAtlasManager {
                 try {
                     javax.imageio.ImageIO.write(frames.frames().get(i), "PNG", framePath.toFile());
                 } catch (IOException e) {
-                    ExportLogger.logAnimation("[Animation][ERROR] Failed to write frame " + framePath + ": " + e.getMessage());
+                    VoxelBridgeLogger.error(LogModule.ANIMATION, "[Animation][ERROR] Failed to write frame " + framePath + ": " + e.getMessage());
                 }
             }
 
@@ -745,7 +764,7 @@ public final class TextureAtlasManager {
                     try {
                         javax.imageio.ImageIO.write(normalFrames.frames().get(normalIdx), "PNG", framePath.toFile());
                     } catch (IOException e) {
-                        ExportLogger.logAnimation("[Animation][ERROR] Failed to write normal frame " + framePath);
+                        VoxelBridgeLogger.error(LogModule.ANIMATION, "[Animation][ERROR] Failed to write normal frame " + framePath);
                     }
                 }
             }
@@ -759,7 +778,7 @@ public final class TextureAtlasManager {
                     try {
                         javax.imageio.ImageIO.write(specFrames.frames().get(specIdx), "PNG", framePath.toFile());
                     } catch (IOException e) {
-                        ExportLogger.logAnimation("[Animation][ERROR] Failed to write spec frame " + framePath);
+                        VoxelBridgeLogger.error(LogModule.ANIMATION, "[Animation][ERROR] Failed to write spec frame " + framePath);
                     }
                 }
             }
@@ -768,16 +787,15 @@ public final class TextureAtlasManager {
             copyOriginalMcmeta(ctx, spriteKey, spriteDir, baseName);
 
             exportCount++;
-            com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
+            com.voxelbridge.util.debug.VoxelBridgeLogger.info(LogModule.ANIMATION, String.format(
                 "[Animation] Exported %s: %d frames to %s",
                 spriteKey, frameCount, spriteDir.getFileName()
             ));
         }
 
-        // ✅ 新增日志：输出导出成功统计
-        ExportLogger.logAnimation(String.format("[Animation] Export completed: %d animations", exportCount));
+        VoxelBridgeLogger.info(LogModule.ANIMATION, String.format("[Animation] Export completed: %d animations", exportCount));
 
-        com.voxelbridge.util.debug.ExportLogger.logAnimation(String.format(
+        com.voxelbridge.util.debug.VoxelBridgeLogger.info(LogModule.ANIMATION, String.format(
             "[Animation] ===== EXPORT COMPLETE: %d animations exported =====", exportCount
         ));
     }
@@ -792,7 +810,7 @@ public final class TextureAtlasManager {
         // Try atlas sprite first to leverage SpriteContents metadata
         try {
             TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
-            ResourceLocation spriteLoc = ResourceLocation.parse(spriteKey);
+            ResourceLocation spriteLoc = com.voxelbridge.util.ResourceLocationUtil.sanitize(spriteKey);
             TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
             if (sprite != null) {
                 AnimatedTextureHelper.extractFromSprite(spriteKey, sprite, ctx.getTextureRepository());
@@ -801,7 +819,7 @@ public final class TextureAtlasManager {
                 }
             }
         } catch (Exception e) {
-            ExportLogger.logAnimation("[Animation][WARN] Atlas probe failed for " + spriteKey + ": " + e.getMessage());
+            VoxelBridgeLogger.warn(LogModule.ANIMATION, "[Animation][WARN] Atlas probe failed for " + spriteKey + ": " + e.getMessage());
         }
         ResourceLocation textureLocation = TextureLoader.spriteKeyToTexturePNG(spriteKey);
         // Prefer metadata-driven detection to catch animations even when frame strips are square
@@ -819,19 +837,27 @@ public final class TextureAtlasManager {
             cached = ctx.getCachedSpriteImage(spriteKey);
         }
         if (cached != null) {
-            ExportLogger.log(String.format("[AtlasGen][CACHE HIT] Loaded %s from cache (%dx%d)",
-                spriteKey, cached.getWidth(), cached.getHeight()));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][CACHE HIT] Loaded %s from cache (%dx%d)",
+                    spriteKey, cached.getWidth(), cached.getHeight()));
+            }
             return cached;
         }
 
-        ExportLogger.log(String.format("[AtlasGen][CACHE MISS] %s not in cache, trying disk", spriteKey));
+        if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+            VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][CACHE MISS] %s not in cache, trying disk", spriteKey));
+        }
         BufferedImage diskImage = TextureLoader.readTexture(textureLocation, ExportRuntimeConfig.isAnimationEnabled());
         if (diskImage != null) {
-            ExportLogger.log(String.format("[AtlasGen][DISK HIT] Loaded %s from disk (%dx%d)",
-                spriteKey, diskImage.getWidth(), diskImage.getHeight()));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][DISK HIT] Loaded %s from disk (%dx%d)",
+                    spriteKey, diskImage.getWidth(), diskImage.getHeight()));
+            }
             ctx.getTextureRepository().put(textureLocation, spriteKey, diskImage);
         } else {
-            ExportLogger.log(String.format("[AtlasGen][DISK MISS] Failed to load %s from disk", spriteKey));
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][DISK MISS] Failed to load %s from disk", spriteKey));
+            }
         }
         return diskImage;
     }
@@ -873,9 +899,14 @@ public final class TextureAtlasManager {
             try (var in = res.open()) {
                 Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
-            ExportLogger.logAnimation(String.format("[Animation] Copied original mcmeta for %s -> %s", spriteKey, target.getFileName()));
+            VoxelBridgeLogger.info(LogModule.ANIMATION, String.format("[Animation] Copied original mcmeta for %s -> %s", spriteKey, target.getFileName()));
         } catch (Exception e) {
-            ExportLogger.logAnimation(String.format("[Animation][WARN] Failed to copy mcmeta for %s: %s", spriteKey, e.getMessage()));
+            VoxelBridgeLogger.warn(LogModule.ANIMATION, String.format("[Animation][WARN] Failed to copy mcmeta for %s: %s", spriteKey, e.getMessage()));
         }
     }
 }
+
+
+
+
+

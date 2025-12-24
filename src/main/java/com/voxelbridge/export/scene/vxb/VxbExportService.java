@@ -6,10 +6,9 @@ import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.StreamingRegionSampler;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
+import com.voxelbridge.export.texture.EntityTextureManager;
 import com.voxelbridge.export.texture.TextureAtlasManager;
-import com.voxelbridge.util.debug.ExportLogger;
 import com.voxelbridge.util.debug.LogModule;
-import com.voxelbridge.util.debug.TimeLogger;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.util.client.ProgressNotifier;
 import net.minecraft.client.Minecraft;
@@ -34,6 +33,7 @@ public final class VxbExportService {
                                     BlockPos pos1,
                                     BlockPos pos2,
                                     Path outDir) throws IOException {
+        VoxelBridgeLogger.initialize(outDir);
         String banner = "============================================================";
         VoxelBridgeLogger.info(LogModule.VXB, banner);
         VoxelBridgeLogger.info(LogModule.VXB, "*** VXB EXPORT STARTED ***");
@@ -75,20 +75,19 @@ public final class VxbExportService {
         com.voxelbridge.export.texture.ColorMapManager.initializeReservedSlots(ctx);
 
         // Initialize unified logging system
-        ExportLogger.initialize(outDir);
-        ExportLogger.log("[VXB] Starting VXB export with format-agnostic sampler");
+        VoxelBridgeLogger.info(LogModule.VXB, "[VXB] Starting VXB export with format-agnostic sampler");
         com.voxelbridge.export.texture.BlockEntityTextureManager.clear(ctx);
 
-        long tTotal = TimeLogger.now();
+        long tTotal = VoxelBridgeLogger.now();
         Path outputPath;
 
         try {
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "Sampling blocks");
             SceneWriteRequest request = new SceneWriteRequest(baseName, vxbDir);
             SceneSink sceneSink = new VxbSceneBuilder(ctx, vxbDir, baseName);
-            long tSampling = TimeLogger.now();
+            long tSampling = VoxelBridgeLogger.now();
             StreamingRegionSampler.sampleRegion(level, pos1, pos2, sceneSink, ctx);
-            TimeLogger.logDuration("block_sampling", TimeLogger.elapsedSince(tSampling));
+            VoxelBridgeLogger.duration("block_sampling", VoxelBridgeLogger.elapsedSince(tSampling));
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
             System.gc();
@@ -96,32 +95,33 @@ public final class VxbExportService {
 
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating textures");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            long tAtlas = TimeLogger.now();
+            long tAtlas = VoxelBridgeLogger.now();
             TextureAtlasManager.generateAllAtlases(ctx, vxbDir);
             com.voxelbridge.export.texture.ColorMapManager.generateColorMaps(ctx, vxbDir);
+            EntityTextureManager.dumpAll(ctx, vxbDir);
             if (ExportRuntimeConfig.isAnimationEnabled()) {
                 java.util.Set<String> animationWhitelist = new java.util.HashSet<>();
                 animationWhitelist.addAll(ctx.getAtlasBook().keySet());
                 animationWhitelist.addAll(ctx.getCachedSpriteKeys());
                 TextureAtlasManager.exportDetectedAnimations(ctx, vxbDir, animationWhitelist);
             }
-            TimeLogger.logDuration("texture_atlas_generation", TimeLogger.elapsedSince(tAtlas));
+            VoxelBridgeLogger.duration("texture_atlas_generation", VoxelBridgeLogger.elapsedSince(tAtlas));
 
             System.gc();
             try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
 
-            TimeLogger.logMemory("before_vxb_write");
-            long tWrite = TimeLogger.now();
+            VoxelBridgeLogger.memory("before_vxb_write");
+            long tWrite = VoxelBridgeLogger.now();
             outputPath = sceneSink.write(request);
-            TimeLogger.logDuration("vxb_write", TimeLogger.elapsedSince(tWrite));
-            TimeLogger.logMemory("after_vxb_write");
-            TimeLogger.logDuration("total_export", TimeLogger.elapsedSince(tTotal));
+            VoxelBridgeLogger.duration("vxb_write", VoxelBridgeLogger.elapsedSince(tWrite));
+            VoxelBridgeLogger.memory("after_vxb_write");
+            VoxelBridgeLogger.duration("total_export", VoxelBridgeLogger.elapsedSince(tTotal));
 
             if (outputPath == null || !Files.exists(outputPath)) {
                 throw new IOException("Export failed: Output file does not exist at " + outputPath);
             }
 
-            ExportLogger.log("[VXB] Export complete: " + outputPath);
+            VoxelBridgeLogger.info(LogModule.VXB, "[VXB] Export complete: " + outputPath);
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.COMPLETE, "Complete");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
@@ -131,18 +131,21 @@ public final class VxbExportService {
             VoxelBridgeLogger.info(LogModule.VXB, banner);
         } catch (Exception e) {
             String errorMsg = "Export failed: " + e.getClass().getName() + ": " + e.getMessage();
-            ExportLogger.log("[VXB][ERROR] " + errorMsg);
-            ExportLogger.log("[VXB][ERROR] Stack trace:");
+            VoxelBridgeLogger.error(LogModule.VXB, "[VXB][ERROR] " + errorMsg);
+            VoxelBridgeLogger.error(LogModule.VXB, "[VXB][ERROR] Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {
-                ExportLogger.log("    at " + element.toString());
+                VoxelBridgeLogger.info(LogModule.VXB, "    at " + element.toString());
             }
             VoxelBridgeLogger.error(LogModule.VXB, errorMsg, e);
             throw new IOException("Export failed during write phase: " + e.getMessage(), e);
         } finally {
             // Close unified logging system
-            ExportLogger.close();
+            VoxelBridgeLogger.close();
         }
 
         return outputPath;
     }
 }
+
+
+

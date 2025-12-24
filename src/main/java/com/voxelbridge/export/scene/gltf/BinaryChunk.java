@@ -1,6 +1,6 @@
 package com.voxelbridge.export.scene.gltf;
 
-import com.voxelbridge.util.debug.TimeLogger;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -134,8 +134,8 @@ final class BinaryChunk implements Closeable {
     public void close() throws IOException {
         flushBuffer();
         channel.close();
-        TimeLogger.logStat("binary_flush_count", flushCount);
-        TimeLogger.logSize("binary_buffer_size", DEFAULT_BUFFER_SIZE);
+        VoxelBridgeLogger.stat("binary_flush_count", flushCount);
+        VoxelBridgeLogger.size("binary_buffer_size", DEFAULT_BUFFER_SIZE);
     }
 
     private int align(int alignment) throws IOException {
@@ -181,3 +181,5 @@ final class BinaryChunk implements Closeable {
         flushCount++;
     }
 }
+
+

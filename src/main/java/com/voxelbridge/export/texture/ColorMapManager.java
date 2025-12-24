@@ -2,7 +2,8 @@ package com.voxelbridge.export.texture;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.ExportContext.TexturePlacement;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -41,7 +42,7 @@ public final class ColorMapManager {
         // Other colors start from slot 1
         ctx.getNextColorSlot().set(1);
 
-        ExportLogger.log("[ColorMap] Reserved slot 0 for white color (4x4)");
+        VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] Reserved slot 0 for white color (4x4)");
     }
 
     /**
@@ -91,7 +92,7 @@ public final class ColorMapManager {
     public static void generateColorMaps(ExportContext ctx, Path outDir) throws IOException {
         // Skip colormap generation in VertexColor mode
         if (com.voxelbridge.config.ExportRuntimeConfig.getColorMode() == com.voxelbridge.config.ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
-            ExportLogger.log("[ColorMap] Skipping colormap generation (VertexColor mode)");
+            VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] Skipping colormap generation (VertexColor mode)");
             return;
         }
 
@@ -106,7 +107,7 @@ public final class ColorMapManager {
 
         int pageSize = com.voxelbridge.config.ExportRuntimeConfig.getAtlasSize().getSize();
         
-        ExportLogger.log("[ColorMap] entries=" + ctx.getColorMap().size()
+        VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] entries=" + ctx.getColorMap().size()
                 + " nextSlot=" + ctx.getNextColorSlot().get()
                 + " pages=" + (maxPage + 1)
                 + " pageSize=" + pageSize);
@@ -128,7 +129,7 @@ public final class ColorMapManager {
             }
             if (sampleCount[0] < 10) {
                 sampleCount[0]++;
-                ExportLogger.log(String.format("[ColorMap] sample #%d color=%08X page=%d xy=(%d,%d) uv=[(%.4f,%.4f)-(%.4f,%.4f)]",
+                VoxelBridgeLogger.info(LogModule.TEXTURE, String.format("[ColorMap] sample #%d color=%08X page=%d xy=(%d,%d) uv=[(%.4f,%.4f)-(%.4f,%.4f)]",
                         sampleCount[0], color, placement.page(), placement.x(), placement.y(),
                         placement.u0(), placement.v0(), placement.u1(), placement.v1()));
             }
@@ -140,7 +141,7 @@ public final class ColorMapManager {
             String name = "colormap_" + udim + ".png";
             Path target = dir.resolve(name);
             ImageIO.write(pages[i], "png", target.toFile());
-            ExportLogger.log("[ColorMap] page=" + i + " -> " + target);
+            VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] page=" + i + " -> " + target);
         }
     }
 
@@ -157,3 +158,6 @@ public final class ColorMapManager {
         return new float[] { placement.u0(), placement.v0(), placement.u1(), placement.v1() };
     }
 }
+
+
+

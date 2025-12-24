@@ -3,7 +3,8 @@ package com.voxelbridge.export.scene.gltf;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.texture.TextureAtlasManager;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -38,15 +39,22 @@ final class UVRemapper {
         ExportContext ctx,
         DoubleConsumer progressCallback
     ) throws IOException {
-        ExportLogger.log("[UVRemapper] Starting UV remapping...");
+        boolean logRemap = VoxelBridgeLogger.isDebugEnabled(LogModule.UV_REMAP);
+        if (logRemap) {
+            VoxelBridgeLogger.info(LogModule.UV_REMAP, "[UVRemapper] Starting UV remapping...");
+        }
 
         long totalQuads = spriteIndex.getTotalQuadCount();
-        ExportLogger.log(String.format("[UVRemapper] Total quads to process: %d", totalQuads));
+        if (logRemap) {
+            VoxelBridgeLogger.info(LogModule.UV_REMAP, String.format("[UVRemapper] Total quads to process: %d", totalQuads));
+        }
 
         boolean atlasEnabled = ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS;
         if (!atlasEnabled) {
             // No atlas mode, directly copy uvraw.bin to finaluv.bin
-            ExportLogger.log("[UVRemapper] Atlas disabled, copying uvraw.bin -> finaluv.bin");
+            if (logRemap) {
+                VoxelBridgeLogger.info(LogModule.UV_REMAP, "[UVRemapper] Atlas disabled, copying uvraw.bin -> finaluv.bin");
+            }
             java.nio.file.Files.copy(uvrawBin, finaluvBin, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             return;
         }
@@ -143,8 +151,8 @@ final class UVRemapper {
                 // Progress logging (every 10% or last)
                 if (totalQuads > 0) {
                     double progress = processedQuads * 100.0 / totalQuads;
-                    if (processedQuads % Math.max(1, totalQuads / 10) == 0 || processedQuads == totalQuads) {
-                        ExportLogger.log(String.format("[UVRemapper] %.0f%% (%d/%d quads)",
+                    if (logRemap && (processedQuads % Math.max(1, totalQuads / 10) == 0 || processedQuads == totalQuads)) {
+                        VoxelBridgeLogger.info(LogModule.UV_REMAP, String.format("[UVRemapper] %.0f%% (%d/%d quads)",
                             progress, processedQuads, totalQuads));
                     }
                     if (progressCallback != null) {
@@ -153,7 +161,9 @@ final class UVRemapper {
                 }
             }
 
-            ExportLogger.log(String.format("[UVRemapper] Completed. Output: %.2f MB", uvOutChannel.size() / 1024.0 / 1024.0));
+            if (logRemap) {
+                VoxelBridgeLogger.info(LogModule.UV_REMAP, String.format("[UVRemapper] Completed. Output: %.2f MB", uvOutChannel.size() / 1024.0 / 1024.0));
+            }
         }
     }
 
@@ -166,3 +176,7 @@ final class UVRemapper {
             || ctx.getBlockEntityAtlasPlacements().containsKey(spriteKey);
     }
 }
+
+
+
+

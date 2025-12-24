@@ -1,6 +1,7 @@
 package com.voxelbridge.export.scene.gltf;
 
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -50,9 +51,9 @@ final class StreamingGeometryWriter implements AutoCloseable {
         this.uvBuffer = ByteBuffer.allocateDirect(UV_BUFFER_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN);
 
-        ExportLogger.log("[StreamingWriter] Initialized geometry writer");
-        ExportLogger.log("[StreamingWriter] geometry.bin: " + geometryBin);
-        ExportLogger.log("[StreamingWriter] uvraw.bin: " + uvrawBin);
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Initialized geometry writer");
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] geometry.bin: " + geometryBin);
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] uvraw.bin: " + uvrawBin);
     }
 
     /**
@@ -191,9 +192,9 @@ final class StreamingGeometryWriter implements AutoCloseable {
         flushUV();
 
         long totalQuads = spriteIndex.getTotalQuadCount();
-        ExportLogger.log(String.format("[StreamingWriter] Finalized. Total quads: %d", totalQuads));
-        ExportLogger.log(String.format("[StreamingWriter] geometry.bin size: %.2f MB", geometryChannel.size() / 1024.0 / 1024.0));
-        ExportLogger.log(String.format("[StreamingWriter] uvraw.bin size: %.2f MB", uvChannel.size() / 1024.0 / 1024.0));
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] Finalized. Total quads: %d", totalQuads));
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] geometry.bin size: %.2f MB", geometryChannel.size() / 1024.0 / 1024.0));
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] uvraw.bin size: %.2f MB", uvChannel.size() / 1024.0 / 1024.0));
     }
 
     SpriteIndex getSpriteIndex() {
@@ -213,6 +214,9 @@ final class StreamingGeometryWriter implements AutoCloseable {
         geometryChannel.close();
         uvChannel.close();
 
-        ExportLogger.log("[StreamingWriter] Closed");
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Closed");
     }
 }
+
+
+

@@ -10,7 +10,8 @@ import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import com.voxelbridge.modhandler.ModHandlerRegistry;
 import com.voxelbridge.modhandler.frapi.FabricApiHelper;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.export.util.geometry.VertexExtractor;
 import net.fabricmc.fabric.api.renderer.v1.model.FabricBakedModel;
 import net.fabricmc.fabric.api.renderer.v1.model.SpriteFinder;
@@ -112,7 +113,7 @@ public final class BlockExporter {
     public void sampleBlock(BlockState state, BlockPos pos) {
         // Check neighbor chunks are loaded
         if (!isNeighborChunksLoadedForBlock(pos)) {
-            ExportLogger.log("[BlockExporter] Neighbor chunks missing for block at " + pos.toShortString());
+            VoxelBridgeLogger.debug(LogModule.SAMPLER_BLOCK, "[BlockExporter] Neighbor chunks missing for block at " + pos.toShortString());
             missingNeighborDetected = true;
             return;
         }
@@ -136,13 +137,13 @@ public final class BlockExporter {
         // Export block entity
         BlockEntity be = level.getBlockEntity(pos);
         if (be != null) {
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockExporter] Found BlockEntity: " + be.getClass().getSimpleName() + " at " + pos.toShortString() + ", isExportEnabled=" + ctx.isBlockEntityExportEnabled());
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockExporter] Found BlockEntity: " + be.getClass().getSimpleName() + " at " + pos.toShortString() + ", isExportEnabled=" + ctx.isBlockEntityExportEnabled());
         }
         if (be != null && ctx.isBlockEntityExportEnabled()) {
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockExporter] Calling BlockEntityExporter.export for " + be.getClass().getSimpleName());
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockExporter] Calling BlockEntityExporter.export for " + be.getClass().getSimpleName());
             BlockEntityExportResult beResult = BlockEntityExporter.export(ctx, level, state, be, pos,
                 blockEntitySceneSink, offsetX, offsetY, offsetZ, blockEntityBatch);
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockExporter] BlockEntityExporter.export returned: rendered=" + beResult.rendered() + ", replaceBlockModel=" + beResult.replaceBlockModel());
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockExporter] BlockEntityExporter.export returned: rendered=" + beResult.rendered() + ", replaceBlockModel=" + beResult.replaceBlockModel());
             if (beResult.replaceBlockModel()) return;
         }
 

@@ -8,8 +8,8 @@ import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.util.client.ProgressNotifier;
-import com.voxelbridge.util.debug.ExportLogger;
-import com.voxelbridge.util.debug.TimeLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -58,7 +58,7 @@ public final class VxbSceneBuilder implements SceneSink {
     private final BufferInfo bin;
     private final BufferInfo uv;
     private final Path uvRawPath;
-    private static final int BUFFER_SIZE = 32 << 20; // 32MB，大缓冲减少 IO 次数
+    private static final int BUFFER_SIZE = 32 << 20; // 32MB IO 
 
     public VxbSceneBuilder(ExportContext ctx, Path outputDir, String baseName) throws IOException {
         this.ctx = ctx;
@@ -109,22 +109,22 @@ public final class VxbSceneBuilder implements SceneSink {
     @Override
     public Path write(SceneWriteRequest request) throws IOException {
         Minecraft mc = ctx.getMc();
-        long tWrite = TimeLogger.now();
+        long tWrite = VoxelBridgeLogger.now();
         // Signal writer thread to finish and wait for completion
-        long tFinalizeSampling = TimeLogger.now();
+        long tFinalizeSampling = VoxelBridgeLogger.now();
         startWriterThread();
         enqueue(PoisonEvent.INSTANCE);
         joinWriter();
         closeWriters();
-        TimeLogger.logDuration("vxb_finalize_sampling", TimeLogger.elapsedSince(tFinalizeSampling));
+        VoxelBridgeLogger.duration("vxb_finalize_sampling", VoxelBridgeLogger.elapsedSince(tFinalizeSampling));
 
         Path uvPath = uv.path;
         Path jsonPath = outputDir.resolve(baseName + ".vxb");
         List<MeshInfo> meshList = new ArrayList<>(meshInfos.values());
 
-        TimeLogger.logMemory("before_vxb_uv_remap");
+        VoxelBridgeLogger.memory("before_vxb_uv_remap");
         PhaseProgress phase = new PhaseProgress();
-        long tUvRemap = TimeLogger.now();
+        long tUvRemap = VoxelBridgeLogger.now();
         ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Remapping UVs");
         ExportProgressTracker.setPhasePercent(0.0f);
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
@@ -136,18 +136,18 @@ public final class VxbSceneBuilder implements SceneSink {
             }
         });
         Files.deleteIfExists(uvRawPath);
-        TimeLogger.logDuration("vxb_uv_remap", TimeLogger.elapsedSince(tUvRemap));
+        VoxelBridgeLogger.duration("vxb_uv_remap", VoxelBridgeLogger.elapsedSince(tUvRemap));
         ExportProgressTracker.setPhasePercent(0.6f);
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
-        long tAssembly = TimeLogger.now();
+        long tAssembly = VoxelBridgeLogger.now();
         ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Assembling VXB");
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
         int totalSections = meshList.stream().mapToInt(m -> m.sections.size()).sum();
         writeJson(jsonPath, request, bin, uv, meshList, phase, totalSections, mc);
-        TimeLogger.logDuration("vxb_write_json", TimeLogger.elapsedSince(tAssembly));
-        TimeLogger.logDuration("vxb_assembly", TimeLogger.elapsedSince(tAssembly));
-        TimeLogger.logDuration("vxb_write", TimeLogger.elapsedSince(tWrite));
+        VoxelBridgeLogger.duration("vxb_write_json", VoxelBridgeLogger.elapsedSince(tAssembly));
+        VoxelBridgeLogger.duration("vxb_assembly", VoxelBridgeLogger.elapsedSince(tAssembly));
+        VoxelBridgeLogger.duration("vxb_write", VoxelBridgeLogger.elapsedSince(tWrite));
         ExportProgressTracker.setPhasePercent(1.0f);
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
         return jsonPath;
@@ -305,7 +305,7 @@ public final class VxbSceneBuilder implements SceneSink {
         try {
             // Try atlas sprite first (if already loaded)
             TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
-            ResourceLocation spriteLoc = ResourceLocation.parse(spriteKey);
+            ResourceLocation spriteLoc = com.voxelbridge.util.ResourceLocationUtil.sanitize(spriteKey);
             TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
             if (sprite != null) {
                 AnimatedTextureHelper.extractFromSprite(spriteKey, sprite, repo);
@@ -318,7 +318,7 @@ public final class VxbSceneBuilder implements SceneSink {
             ResourceLocation texLoc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
             AnimatedTextureHelper.detectFromMetadata(spriteKey, texLoc, repo);
         } catch (Exception e) {
-            ExportLogger.logAnimation("[Animation][WARN] Detection failed for " + spriteKey + ": " + e.getMessage());
+            VoxelBridgeLogger.warn(LogModule.ANIMATION, "[Animation][WARN] Detection failed for " + spriteKey + ": " + e.getMessage());
         }
     }
 
@@ -649,7 +649,7 @@ public final class VxbSceneBuilder implements SceneSink {
         private final ByteList loopColors = new ByteList();
         private final IntList faceCounts = new IntList();
         private final IntList faceIndices = new IntList();
-        // 焊接：只按位置合并顶点，UV数据per-loop存储不受影响
+        // UVper-loop
         private final Map<PositionKey, List<VertexSlot>> positionLookup = new HashMap<>(1024);
         private final Map<QuadKey, Boolean> quadDedup = new HashMap<>(2048);
         private final Map<FaceKey, Boolean> faceDedup = new HashMap<>(2048); // Face index deduplication
@@ -722,16 +722,16 @@ public final class VxbSceneBuilder implements SceneSink {
                     if (colormapMode) {
                         // Per-vertex UDIM extraction
                         int vertexTileU = (int) Math.floor(uv1_u);
-                        // ColorMapManager使用负值tileV，这里取ceil(-v)得到整页索引
+                        // ColorMapManagerileVceil(-v)
                         int vertexTileV = (int) Math.ceil(-uv1_v);
 
-                        // 计算小数部分（使用当前顶点的页码）
+                        // ?
                         float uFrac = uv1_u - vertexTileU;
                         float vFrac = uv1_v + vertexTileV;
 
-                        // 验证小数部分（调试用，应该在[0,1]范围内）
+                        // [0,1]
                         if (uFrac < -0.001f || uFrac > 1.001f || vFrac < -0.001f || vFrac > 1.001f) {
-                            ExportLogger.log(String.format(
+                            VoxelBridgeLogger.info(LogModule.VXB, String.format(
                                 "[VXB] Warning: UV1 fractional out of range at vertex %d: " +
                                 "uFrac=%.4f, vFrac=%.4f, raw=(%.4f,%.4f), tile=(%d,%d)",
                                 i, uFrac, vFrac, uv1_u, uv1_v, vertexTileU, vertexTileV));
@@ -746,7 +746,7 @@ public final class VxbSceneBuilder implements SceneSink {
                         float vNorm = uv1_v - (float)Math.floor(uv1_v);
                         uv1_u16[i] = quantizeUvNormalized(uNorm);
                         uv1_v16[i] = quantizeUvNormalized(vNorm);
-                        uv1PageIds[i] = overlayId16;  // 使用overlay sprite ID
+                        uv1PageIds[i] = overlayId16;  // overlay sprite ID
                     }
                 } else {
                     uv1_u16[i] = 0;
@@ -754,7 +754,7 @@ public final class VxbSceneBuilder implements SceneSink {
                     uv1PageIds[i] = colormapMode ? 0 : overlayId16;
                 }
 
-                // 焊接：只基于位置（UV数据per-loop存储，不受焊接影响）
+                // Vper-loop
                 PositionKey key = new PositionKey(qx, qy, qz);
                 v[i] = lookupOrInsertVertex(key, px, py, pz);
 
@@ -765,7 +765,7 @@ public final class VxbSceneBuilder implements SceneSink {
                 colorBytes[colorBase + 3] = (byte) colorToByte(colors != null ? colors[colorBase + 3] : 1f);
             }
 
-            // Colormap模式下不使用overlayId16进行去重（每个顶点有独立的页码）
+            // ColormapoverlayId16
             int dedupOverlayId = colormapMode ? 0 : overlayId16;
             QuadKey qk = new QuadKey(spriteId16, dedupOverlayId, qp, qnx, qny, qnz);
             if (quadDedup.containsKey(qk)) {
@@ -782,7 +782,7 @@ public final class VxbSceneBuilder implements SceneSink {
             }
             faceDedup.put(faceKey, Boolean.TRUE);
 
-            // Quad loop data按顺序写4个角
+            // Quad loop data4
             for (int i = 0; i < 4; i++) {
                 uvLoop.add(uv0_u16[i]);
                 uvLoop.add(uv0_v16[i]);
@@ -791,7 +791,7 @@ public final class VxbSceneBuilder implements SceneSink {
 
                 uv1Loop.add(uv1_u16[i]);
                 uv1Loop.add(uv1_v16[i]);
-                uv1Loop.add(uv1PageIds[i]);  // Per-vertex UDIM页码或overlay sprite ID
+                uv1Loop.add(uv1PageIds[i]);  // Per-vertex UDIMverlay sprite ID
                 uv1Loop.add(0);
 
                 loopNormals.add(nx);
@@ -881,14 +881,14 @@ public final class VxbSceneBuilder implements SceneSink {
         }
 
         private int packUdimTile(int tileU, int tileV) {
-            // UDIM: tileU(0-9) + tileV*10, å…¨éƒ¨ç®—å–æ­£å€¼ï¼Œé˜²æ­¢è¶…å‡º u16
+            // UDIM: tileU(0-9) + tileV*10, ?u16
             int page = tileU + tileV * 10;
             if (page < 0) {
-                ExportLogger.log(String.format("[VXB] Warning: Negative UDIM page (%d,%d) clamped to 0", tileU, tileV));
+                VoxelBridgeLogger.info(LogModule.VXB, String.format("[VXB] Warning: Negative UDIM page (%d,%d) clamped to 0", tileU, tileV));
                 return 0;
             }
             if (page > 65535) {
-                ExportLogger.log(String.format("[VXB] Warning: UDIM page overflow (%d,%d)=%d clamped to 65535", tileU, tileV, page));
+                VoxelBridgeLogger.info(LogModule.VXB, String.format("[VXB] Warning: UDIM page overflow (%d,%d)=%d clamped to 65535", tileU, tileV, page));
                 return 65535;
             }
             return page;
@@ -935,14 +935,14 @@ public final class VxbSceneBuilder implements SceneSink {
         }
 
         private int lookupOrInsertVertex(PositionKey key, float px, float py, float pz) {
-            // 焊接只基于位置，UV数据per-loop存储不受影响
+            // UVper-loop
             List<VertexSlot> slots = positionLookup.get(key);
             if (slots != null && !slots.isEmpty()) {
-                // 直接返回该位置的第一个顶点索引
+                // ?
                 return slots.get(0).index;
             }
 
-            // 创建新顶点
+            // ?
             int newIndex = positions.size() / 3;
             positions.add(px);
             positions.add(py);
@@ -952,7 +952,7 @@ public final class VxbSceneBuilder implements SceneSink {
                 slots = new ArrayList<>();
                 positionLookup.put(key, slots);
             }
-            // 保存占位符
+            // ?
             slots.add(new VertexSlot(newIndex));
             return newIndex;
         }
@@ -1198,3 +1198,7 @@ public final class VxbSceneBuilder implements SceneSink {
         }
     }
 }
+
+
+
+

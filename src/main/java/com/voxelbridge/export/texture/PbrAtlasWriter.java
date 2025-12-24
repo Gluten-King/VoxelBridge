@@ -1,6 +1,7 @@
 package com.voxelbridge.export.texture;
 
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.export.texture.PngjWriter;
 
 import java.awt.Graphics2D;
@@ -129,7 +130,7 @@ public final class PbrAtlasWriter {
             return;
         }
 
-        ExportLogger.log(String.format("[PbrAtlasWriter] Generating PBR atlas: %s (%d pages)",
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter] Generating PBR atlas: %s (%d pages)",
                 config.filePrefix(), config.usedPages().size()));
 
         // Create atlas pages filled with default color
@@ -151,7 +152,7 @@ public final class PbrAtlasWriter {
 
             BufferedImage page = pages.get(placement.page());
             if (page == null) {
-                ExportLogger.log(String.format("[PbrAtlasWriter][WARN] No page %d for sprite %s",
+                VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter][WARN] No page %d for sprite %s",
                         placement.page(), spriteKey));
                 continue;
             }
@@ -168,7 +169,7 @@ public final class PbrAtlasWriter {
             }
         }
 
-        ExportLogger.log(String.format("[PbrAtlasWriter] Placed %d textures, %d missing (using default fill)",
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter] Placed %d textures, %d missing (using default fill)",
                 textureCount, missingCount));
 
         // Write atlas pages to disk
@@ -181,7 +182,7 @@ public final class PbrAtlasWriter {
             BufferedImage page = pages.get(pageIndex);
             if (page != null) {
                 PngjWriter.write(page, outputPath);
-                ExportLogger.log(String.format("[PbrAtlasWriter] Wrote %s", filename));
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter] Wrote %s", filename));
             }
         }
     }
@@ -269,3 +270,7 @@ public final class PbrAtlasWriter {
         @Override public int height() { return placement.height(); }
     }
 }
+
+
+
+

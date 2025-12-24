@@ -4,6 +4,8 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.scene.gltf.GltfExportService;
 import com.voxelbridge.export.scene.vxb.VxbExportService;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.Level;
@@ -55,15 +57,14 @@ public class ExportThread extends Thread {
                     mc.player.displayClientMessage(Component.literal(msg), false);
             });
 
-            // Console output.
-            System.out.println(msg);
+            VoxelBridgeLogger.info(LogModule.EXPORT, msg);
 
         } catch (Throwable e) {
             e.printStackTrace();
             StringWriter sw = new StringWriter();
             e.printStackTrace(new PrintWriter(sw));
-            com.voxelbridge.util.debug.ExportLogger.log("[Export][ERROR] Export failed: " + e.getMessage());
-            com.voxelbridge.util.debug.ExportLogger.log(sw.toString());
+            VoxelBridgeLogger.error(LogModule.EXPORT, "[Export][ERROR] Export failed: " + e.getMessage());
+            VoxelBridgeLogger.error(LogModule.EXPORT, sw.toString());
             mc.execute(() -> {
                 if (mc.player != null)
                     mc.player.displayClientMessage(Component.literal("[VoxelBridge] Export failed: " + e.getMessage()), false);

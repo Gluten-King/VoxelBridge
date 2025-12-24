@@ -4,6 +4,8 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -32,17 +34,23 @@ public final class RenderTypeTextureResolver {
 
         ResourceLocation fromState = extractFromState(renderType);
         if (fromState != null) {
-            return fromState;
+            return sanitize(fromState);
         }
 
         try {
             // Try to get the texture from the RenderType
             // This uses reflection since RenderType internals are not part of the public API
-            return extractTextureViaReflection(renderType);
+            ResourceLocation extracted = extractTextureViaReflection(renderType);
+            if (extracted != null) {
+                return sanitize(extracted);
+            }
         } catch (Exception e) {
-            // Reflection failed, return null
-            return null;
+            // Log reflection failure for debugging
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, "[RenderTypeTextureResolver] Reflection failed for " +
+                renderType + ": " + e.getClass().getSimpleName() + " - " + e.getMessage());
         }
+
+        return null;
     }
 
     /**
@@ -136,5 +144,21 @@ public final class RenderTypeTextureResolver {
             // Ignore
         }
         return null;
+    }
+
+    private static ResourceLocation sanitize(ResourceLocation loc) {
+        if (loc == null) return null;
+        String namespace = loc.getNamespace();
+        String path = loc.getPath();
+        if (namespace.contains(":")) {
+            namespace = namespace.replace(':', '_');
+        }
+        if (path.contains(":")) {
+            path = path.replace(':', '/');
+        }
+        if (namespace.equals(loc.getNamespace()) && path.equals(loc.getPath())) {
+            return loc;
+        }
+        return ResourceLocation.fromNamespaceAndPath(namespace, path);
     }
 }

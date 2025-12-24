@@ -1,7 +1,8 @@
 package com.voxelbridge.export.texture;
 
 import com.voxelbridge.export.ExportContext;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
@@ -57,7 +58,7 @@ public final class PbrTextureHelper {
                 normalImg = normalResult.image;
                 normalLoc = normalResult.location;
                 ctx.cacheSpriteImage(normalKey, normalImg);
-                ExportLogger.log("[PBR] Cached normal for " + spriteKey + " -> " + normalLoc);
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[PBR] Cached normal for " + spriteKey + " -> " + normalLoc);
             }
         }
 
@@ -69,7 +70,7 @@ public final class PbrTextureHelper {
                 specImg = specResult.image;
                 specLoc = specResult.location;
                 ctx.cacheSpriteImage(specKey, specImg);
-                ExportLogger.log("[PBR] Cached specular for " + spriteKey + " -> " + specLoc);
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[PBR] Cached specular for " + spriteKey + " -> " + specLoc);
             }
         }
 
@@ -124,7 +125,7 @@ public final class PbrTextureHelper {
             ResourceLocation loc = ResourceLocation.fromNamespaceAndPath(namespace, candidate);
             BufferedImage result = TextureLoader.readTexture(loc);
             if (result != null) {
-                ExportLogger.log(String.format("[PBR] Found %s at: %s", suffix, loc));
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PBR] Found %s at: %s", suffix, loc));
                 return new PbrLoadResult(result, loc);
             }
         }
@@ -162,3 +163,6 @@ public final class PbrTextureHelper {
         return null;
     }
 }
+
+
+

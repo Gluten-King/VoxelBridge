@@ -2,7 +2,8 @@ package com.voxelbridge.export.texture;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityTextureResolver;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.export.texture.AnimatedFrameSet;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
 import com.voxelbridge.export.texture.TextureAtlasManager;
@@ -54,7 +55,7 @@ public final class BlockEntityTextureManager {
         // Register into main atlas (merged atlas path)
         TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
 
-        ExportLogger.log("[BlockEntityTex] Registered generated texture: " + spriteKey + " -> " + loc);
+        VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Registered generated texture: " + spriteKey + " -> " + loc);
         return spriteKey;
     }
 
@@ -64,10 +65,10 @@ public final class BlockEntityTextureManager {
      * Returns the sprite key that should be used.
      */
     public static String registerTexture(ExportContext ctx, BlockEntityTextureResolver.ResolvedTexture textureRes) {
-        ResourceLocation textureLoc = textureRes.texture();
+        ResourceLocation textureLoc = com.voxelbridge.util.ResourceLocationUtil.sanitize(textureRes.texture().toString());
         String spriteKey = "blockentity:" + textureLoc.getNamespace() + "/" + textureLoc.getPath();
 
-        ExportLogger.log("[BlockEntityTex] Registering texture: " + spriteKey + " from " + textureLoc);
+        VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Registering texture: " + spriteKey + " from " + textureLoc);
 
         ResourceLocation pngLocation = ensurePngLocation(textureLoc);
 
@@ -75,9 +76,9 @@ public final class BlockEntityTextureManager {
         BufferedImage texture = repo.computeIfAbsent(pngLocation, loc -> {
             BufferedImage img = loadTextureFromResolved(textureRes, loc);
             if (img != null) {
-                ExportLogger.log("[BlockEntityTex] Loaded texture: " + loc + " (" + img.getWidth() + "x" + img.getHeight() + ")");
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Loaded texture: " + loc + " (" + img.getWidth() + "x" + img.getHeight() + ")");
             } else {
-                ExportLogger.log("[BlockEntityTex] Failed to load texture: " + loc);
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Failed to load texture: " + loc);
             }
             return img;
         });
@@ -102,7 +103,7 @@ public final class BlockEntityTextureManager {
             ctx.getEntityTextures().computeIfAbsent(spriteKey,
                 k -> new ExportContext.EntityTexture(locRef, texRef.getWidth(), texRef.getHeight()));
 
-            ExportLogger.log("[BlockEntityTex] Registered: " + spriteKey + " -> " + relativePath);
+            VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Registered: " + spriteKey + " -> " + relativePath);
             // Register into shared atlas flow (default tint)
             TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
 
@@ -176,7 +177,7 @@ public final class BlockEntityTextureManager {
             return;
         }
 
-        ExportLogger.log("[BlockEntityTex] Exporting " + registeredTextures.size() + " textures");
+        VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Exporting " + registeredTextures.size() + " textures");
 
         for (Map.Entry<String, ResourceLocation> entry : registeredTextures.entrySet()) {
             String spriteKey = entry.getKey();
@@ -184,7 +185,7 @@ public final class BlockEntityTextureManager {
             String relativePath = ctx.getMaterialPaths().get(spriteKey);
 
             if (relativePath == null) {
-                ExportLogger.log("[BlockEntityTex][WARN] No relative path for: " + spriteKey);
+                VoxelBridgeLogger.warn(LogModule.TEXTURE, "[BlockEntityTex][WARN] No relative path for: " + spriteKey);
                 continue;
             }
 
@@ -192,7 +193,7 @@ public final class BlockEntityTextureManager {
 
             // Skip if already exists
             if (java.nio.file.Files.exists(target)) {
-                ExportLogger.log("[BlockEntityTex] Already exists: " + target);
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Already exists: " + target);
                 continue;
             }
 
@@ -202,7 +203,7 @@ public final class BlockEntityTextureManager {
                 // Write cached texture
                 java.nio.file.Files.createDirectories(target.getParent());
                 javax.imageio.ImageIO.write(img, "png", target.toFile());
-                ExportLogger.log("[BlockEntityTex] Exported: " + target);
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Exported: " + target);
             } else {
                 // Try to copy from resource manager (fallback)
                 try {
@@ -213,12 +214,12 @@ public final class BlockEntityTextureManager {
                         try (java.io.InputStream in = resource.get().open()) {
                             java.nio.file.Files.copy(in, target);
                         }
-                        ExportLogger.log("[BlockEntityTex] Copied from resources: " + target);
+                        VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Copied from resources: " + target);
                     } else {
-                        ExportLogger.log("[BlockEntityTex][WARN] Texture not found: " + pngLocation);
+                        VoxelBridgeLogger.warn(LogModule.TEXTURE, "[BlockEntityTex][WARN] Texture not found: " + pngLocation);
                     }
                 } catch (Exception e) {
-                    ExportLogger.log("[BlockEntityTex][ERROR] Failed to export " + spriteKey + ": " + e.getMessage());
+                    VoxelBridgeLogger.error(LogModule.TEXTURE, "[BlockEntityTex][ERROR] Failed to export " + spriteKey + ": " + e.getMessage());
                 }
             }
         }
@@ -226,13 +227,13 @@ public final class BlockEntityTextureManager {
 
     private static BufferedImage loadTextureFromResource(ResourceLocation location) {
         try {
-            ExportLogger.log("[BlockEntityTex] Trying to load: " + location);
+            VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Trying to load: " + location);
 
             // Load using TextureLoader to avoid gamma/ICC tweaks and to honor resource packs
             return com.voxelbridge.export.texture.TextureLoader.readTexture(location);
 
         } catch (Exception e) {
-            ExportLogger.log("[BlockEntityTex] Error loading texture " + location + ": " + e.getMessage());
+            VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Error loading texture " + location + ": " + e.getMessage());
             return null;
         }
     }
@@ -241,7 +242,7 @@ public final class BlockEntityTextureManager {
         if (textureRes.isAtlasTexture()) {
             TextureAtlasSprite sprite = textureRes.sprite();
             if (sprite != null) {
-                ExportLogger.log("[BlockEntityTex] Loading atlas sprite " + sprite.contents().name() +
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Loading atlas sprite " + sprite.contents().name() +
                     " from atlas " + sprite.atlasLocation());
                 return loadAtlasSprite(sprite);
             }
@@ -253,7 +254,7 @@ public final class BlockEntityTextureManager {
         try {
             return com.voxelbridge.export.texture.TextureLoader.fromSprite(sprite);
         } catch (Exception e) {
-            ExportLogger.log("[BlockEntityTex] Error loading atlas sprite " + sprite.contents().name() + ": " + e.getMessage());
+            VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex] Error loading atlas sprite " + sprite.contents().name() + ": " + e.getMessage());
             return null;
         }
     }
@@ -314,7 +315,7 @@ public final class BlockEntityTextureManager {
                     "entity_textures/" + safe(spriteKey) + "_n.png");
                 ctx.getEntityTextures().putIfAbsent(normalKey(spriteKey),
                     new ExportContext.EntityTexture(genLoc, cropped.getWidth(), cropped.getHeight()));
-                ExportLogger.log("[BlockEntityTex][PBR] Cropped normal from atlas " + atlasNormal + " for " + spriteKey);
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex][PBR] Cropped normal from atlas " + atlasNormal + " for " + spriteKey);
             }
         }
         // Specular
@@ -328,7 +329,7 @@ public final class BlockEntityTextureManager {
                     "entity_textures/" + safe(spriteKey) + "_s.png");
                 ctx.getEntityTextures().putIfAbsent(specKey(spriteKey),
                     new ExportContext.EntityTexture(genLoc, cropped.getWidth(), cropped.getHeight()));
-                ExportLogger.log("[BlockEntityTex][PBR] Cropped specular from atlas " + atlasSpec + " for " + spriteKey);
+                VoxelBridgeLogger.info(LogModule.TEXTURE, "[BlockEntityTex][PBR] Cropped specular from atlas " + atlasSpec + " for " + spriteKey);
             }
         }
     }
@@ -398,7 +399,7 @@ public final class BlockEntityTextureManager {
         try {
             return src.getSubimage(x0, y0, cw, ch);
         } catch (Exception e) {
-            ExportLogger.log("[BlockEntityTex][WARN] Crop failed: " + e.getMessage());
+            VoxelBridgeLogger.warn(LogModule.TEXTURE, "[BlockEntityTex][WARN] Crop failed: " + e.getMessage());
             return null;
         }
     }
@@ -407,3 +408,6 @@ public final class BlockEntityTextureManager {
         return s.replace(':', '_').replace('/', '_');
     }
 }
+
+
+

@@ -2,7 +2,8 @@ package com.voxelbridge.export.exporter.blockentity;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
-import com.voxelbridge.util.debug.BlockEntityDebugLogger;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.util.color.ColorModeHandler;
 import com.voxelbridge.export.util.geometry.GeometryUtil;
@@ -95,18 +96,18 @@ public final class BlockEntityRenderer {
         double offsetZ,
         TextureOverrideMap overrides
     ) {
-        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
+        com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
         BlockEntityRenderDispatcher dispatcher = ctx.getMc().getBlockEntityRenderDispatcher();
         net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer =
             (net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity>)
             dispatcher.getRenderer(blockEntity);
 
         if (renderer == null) {
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] No renderer found for: " + blockEntity.getClass().getSimpleName());
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] No renderer found for: " + blockEntity.getClass().getSimpleName());
             return null;
         }
 
-        com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Found renderer: " + renderer.getClass().getSimpleName());
+        com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Found renderer: " + renderer.getClass().getSimpleName());
         BlockPos pos = blockEntity.getBlockPos();
         int chunkX = pos.getX() >> 4;
         int chunkZ = pos.getZ() >> 4;
@@ -127,7 +128,7 @@ public final class BlockEntityRenderer {
         net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer
     ) {
         try {
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer][renderDirect] Starting render for " + blockEntity.getClass().getSimpleName());
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] Starting render for " + blockEntity.getClass().getSimpleName());
             if (overrides != null) {
                 OVERRIDES.set(overrides);
             }
@@ -136,7 +137,7 @@ public final class BlockEntityRenderer {
 
             CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, offsetX, offsetY, offsetZ, blockEntity);
 
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer][renderDirect] Calling renderer.render()...");
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] Calling renderer.render()...");
             renderer.render(
                 blockEntity,
                 0.0f,
@@ -146,17 +147,17 @@ public final class BlockEntityRenderer {
                 OverlayTexture.NO_OVERLAY
             );
 
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer][renderDirect] renderer.render() returned, flushing buffer...");
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] renderer.render() returned, flushing buffer...");
             captureBuffer.flush();
 
             boolean hadGeometry = captureBuffer.hadGeometry();
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Render complete: hadGeometry=" + hadGeometry);
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Final result: " + hadGeometry);
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Render complete: hadGeometry=" + hadGeometry);
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Final result: " + hadGeometry);
             return hadGeometry;
         } catch (Exception e) {
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Render error: " + e.getMessage());
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Render error: " + e.getMessage());
             e.printStackTrace();
-            com.voxelbridge.util.debug.BlockEntityDebugLogger.log("[BlockEntityRenderer] Final result: false");
+            com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Final result: false");
             return false;
         } finally {
             OVERRIDES.remove();
@@ -242,7 +243,7 @@ public final class BlockEntityRenderer {
 
         @Override
         public VertexConsumer getBuffer(RenderType renderType) {
-            BlockEntityDebugLogger.log("[CaptureBuffer] getBuffer() called for RenderType: " + renderType);
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[CaptureBuffer] getBuffer() called for RenderType: " + renderType);
             return collectors.computeIfAbsent(renderType, rt -> new VertexCollector(this, rt));
         }
 
@@ -270,11 +271,19 @@ public final class BlockEntityRenderer {
         private static class VertexCollector implements VertexConsumer {
             private final CaptureBuffer parent;
             private final RenderType renderType;
-            private final List<Vertex> vertices = new ArrayList<>(4);
+            private final java.util.ArrayDeque<Vertex> vertices = new java.util.ArrayDeque<>(8);
+            private final com.mojang.blaze3d.vertex.VertexFormat.Mode mode;
+            private final int vertsPerPrimitive;
 
             VertexCollector(CaptureBuffer parent, RenderType renderType) {
                 this.parent = parent;
                 this.renderType = renderType;
+                this.mode = renderType.mode();
+                this.vertsPerPrimitive = switch (mode) {
+                    case TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN -> 3;
+                    case QUADS -> 4;
+                    default -> 4;
+                };
             }
 
             private static class Vertex {
@@ -291,16 +300,14 @@ public final class BlockEntityRenderer {
 
             @Override
             public VertexConsumer addVertex(float x, float y, float z) {
-                if (vertices.size() < 4) {
-                    vertices.add(new Vertex(x, y, z));
-                }
+                vertices.addLast(new Vertex(x, y, z));
                 return this;
             }
 
             @Override
             public VertexConsumer setColor(int r, int g, int b, int a) {
-                if (!vertices.isEmpty()) {
-                    Vertex last = vertices.get(vertices.size() - 1);
+                Vertex last = vertices.peekLast();
+                if (last != null) {
                     last.color = (a << 24) | (r << 16) | (g << 8) | b;
                 }
                 return this;
@@ -308,8 +315,8 @@ public final class BlockEntityRenderer {
 
             @Override
             public VertexConsumer setUv(float u, float v) {
-                if (!vertices.isEmpty()) {
-                    Vertex last = vertices.get(vertices.size() - 1);
+                Vertex last = vertices.peekLast();
+                if (last != null) {
                     last.u = u;
                     last.v = v;
                 }
@@ -323,44 +330,54 @@ public final class BlockEntityRenderer {
             @Override
             public VertexConsumer setNormal(float nx, float ny, float nz) {
                 // Normal will be computed from positions, so we ignore the input
-                BlockEntityDebugLogger.log("[VertexCollector] setNormal called, vertices.size=" + vertices.size());
-
-                // When we have 4 vertices with all attributes set, emit the quad
-                if (vertices.size() >= 4) {
-                    BlockEntityDebugLogger.log("[VertexCollector] All 4 vertices complete, emitting quad");
-                    emitQuad();
+                if (VoxelBridgeLogger.isDebugEnabled(LogModule.BLOCKENTITY)) {
+                    VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[VertexCollector] setNormal called, vertices.size=" + vertices.size());
                 }
+
+                emitReadyPrimitives(false);
 
                 return this;
             }
 
-            private void emitQuad() {
-                if (vertices.size() >= 4) {
-                    outputQuad();
-                    vertices.clear();
-                } else {
-                    BlockEntityDebugLogger.log("[VertexCollector][WARN] emitQuad called but only " + vertices.size() + " vertices collected!");
-                }
-            }
-
             void flush() {
-                if (vertices.size() >= 3) {
-                    outputQuad();
-                    vertices.clear();
+                emitReadyPrimitives(true);
+            }
+
+            private void emitReadyPrimitives(boolean flushRemainder) {
+                // Emit full primitives (quads or triangles depending on renderType.mode())
+                while (vertices.size() >= vertsPerPrimitive) {
+                    outputQuad(extractPrimitive(vertsPerPrimitive));
+                }
+                // On final flush, if renderer left an incomplete primitive (>=3 verts), output best-effort
+                if (flushRemainder && vertices.size() >= 3) {
+                    outputQuad(extractPrimitive(vertices.size()));
                 }
             }
 
-            private void outputQuad() {
-                if (vertices.size() < 3) return;
+            private List<Vertex> extractPrimitive(int count) {
+                List<Vertex> prim = new ArrayList<>(count);
+                for (int i = 0; i < count && !vertices.isEmpty(); i++) {
+                    prim.add(vertices.removeFirst());
+                }
+                return prim;
+            }
 
-                BlockEntityDebugLogger.log("[VertexCollector] ========== OUTPUT QUAD START ==========");
-                BlockEntityDebugLogger.log("[VertexCollector] Vertices count: " + vertices.size());
+            private void outputQuad(List<Vertex> verts) {
+                if (verts.size() < 3) return;
+
+                boolean logQuads = VoxelBridgeLogger.isDebugEnabled(LogModule.BLOCKENTITY);
+                if (logQuads) {
+                    VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[VertexCollector] ========== OUTPUT QUAD START ==========");
+                    VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[VertexCollector] Vertices count: " + verts.size());
+                }
 
                 // Check for degenerate quad (zero or near-zero area)
-                if (vertices.size() >= 3) {
-                    float area = computeQuadArea(vertices);
+                if (verts.size() >= 3) {
+                    float area = computeQuadArea(verts);
                     if (area < 0.0001f) {
-                        BlockEntityDebugLogger.log("[VertexCollector] Skipping degenerate quad (area=" + area + ")");
+                        if (logQuads) {
+                            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[VertexCollector] Skipping degenerate quad (area=" + area + ")");
+                        }
                         return;
                     }
                 }
@@ -372,8 +389,8 @@ public final class BlockEntityRenderer {
                 float[] uv0 = new float[8];
                 float[] colors = new float[16];
 
-                for (int i = 0; i < Math.min(4, vertices.size()); i++) {
-                    Vertex v = vertices.get(i);
+                for (int i = 0; i < Math.min(4, verts.size()); i++) {
+                    Vertex v = verts.get(i);
                     positions[i * 3] = v.x;
                     positions[i * 3 + 1] = v.y;
                     positions[i * 3 + 2] = v.z;
@@ -393,14 +410,14 @@ public final class BlockEntityRenderer {
                 float u0 = 0f, u1 = 1f, v0 = 0f, v1 = 1f;
                 ResourceLocation atlasLocation = textureRes != null ? textureRes.atlasLocation() : null;
 
-                int vertCount = Math.min(4, vertices.size());
+                int vertCount = Math.min(4, verts.size());
                 float[] rawU = new float[vertCount];
                 float[] rawV = new float[vertCount];
                 float minU = Float.POSITIVE_INFINITY, maxU = Float.NEGATIVE_INFINITY;
                 float minV = Float.POSITIVE_INFINITY, maxV = Float.NEGATIVE_INFINITY;
                 for (int i = 0; i < vertCount; i++) {
-                    rawU[i] = vertices.get(i).u;
-                    rawV[i] = vertices.get(i).v;
+                    rawU[i] = verts.get(i).u;
+                    rawV[i] = verts.get(i).v;
                     minU = Math.min(minU, rawU[i]); maxU = Math.max(maxU, rawU[i]);
                     minV = Math.min(minV, rawV[i]); maxV = Math.max(maxV, rawV[i]);
                 }
@@ -453,7 +470,7 @@ public final class BlockEntityRenderer {
                         // may still have UVs in atlas-space that need denormalization.
                         // (keep original isAtlasTexture, u0, u1, v0, v1 values from textureRes)
 
-                        fillUvs(vertices, uv0, isAtlasTexture, u0, u1, v0, v1);
+                        fillUvs(verts, uv0, isAtlasTexture, u0, u1, v0, v1);
 
                         float[] uv1 = EMPTY_UV;
                         if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
@@ -495,7 +512,7 @@ public final class BlockEntityRenderer {
                     }
                 }
 
-                fillUvs(vertices, uv0, isAtlasTexture, u0, u1, v0, v1);
+                fillUvs(verts, uv0, isAtlasTexture, u0, u1, v0, v1);
 
                 // NOTE: UV remapping to atlas space is handled by GltfSceneBuilder.remapUV()
                 // to avoid double transformation. Do NOT remap UVs here.
@@ -595,3 +612,7 @@ public final class BlockEntityRenderer {
         }
     }
 }
+
+
+
+

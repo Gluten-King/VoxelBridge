@@ -9,9 +9,9 @@ import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.texture.AnimatedTextureHelper;
-import com.voxelbridge.util.debug.ExportLogger;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.client.ProgressNotifier;
-import com.voxelbridge.util.debug.TimeLogger;
 import de.javagl.jgltf.impl.v2.*;
 import de.javagl.jgltf.model.io.GltfAsset;
 import de.javagl.jgltf.model.io.GltfAssetWriter;
@@ -86,7 +86,7 @@ public final class GltfSceneBuilder implements SceneSink {
         Path uvrawBin = outDir.resolve("uvraw.bin");
         this.streamingWriter = new StreamingGeometryWriter(geometryBin, uvrawBin, spriteIndex, geometryIndex);
 
-        ExportLogger.log("[GltfBuilder] Initialized streaming geometry pipeline");
+        VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Initialized streaming geometry pipeline");
     }
 
     @Override
@@ -136,12 +136,12 @@ public final class GltfSceneBuilder implements SceneSink {
         Minecraft mc = ctx.getMc();
 
         try {
-            // 1. 结束采样，等待写线程完成
+            // 1. 
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.SAMPLING, "Sampling complete");
             ExportProgressTracker.setPhasePercent(null);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            ExportLogger.log("[GltfBuilder] Stage 1/4: Finalizing sampling...");
-            long tFinalizeSampling = TimeLogger.now();
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Stage 1/4: Finalizing sampling...");
+            long tFinalizeSampling = VoxelBridgeLogger.now();
 
             try {
                 queue.put(POISON_PILL);
@@ -156,36 +156,36 @@ public final class GltfSceneBuilder implements SceneSink {
             streamingWriter.finalizeWrite();
 
             long totalQuads = spriteIndex.getTotalQuadCount();
-            ExportLogger.log(String.format("[GltfBuilder] Sampling complete. Total quads: %d", totalQuads));
-            ExportLogger.log(String.format("[GltfBuilder] Materials: %d", geometryIndex.size()));
-            ExportLogger.log(String.format("[GltfBuilder] Sprites: %d", spriteIndex.size()));
-            TimeLogger.logDuration("gltf_finalize_sampling", TimeLogger.elapsedSince(tFinalizeSampling));
+            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Sampling complete. Total quads: %d", totalQuads));
+            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Materials: %d", geometryIndex.size()));
+            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Sprites: %d", spriteIndex.size()));
+            VoxelBridgeLogger.duration("gltf_finalize_sampling", VoxelBridgeLogger.elapsedSince(tFinalizeSampling));
 
             if (totalQuads == 0) {
                 throw new IOException("No geometry data was written during sampling phase");
             }
 
-            // 2. 生成图集
+            // 2. 
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Building atlases");
             ExportProgressTracker.setPhasePercent(null);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            ExportLogger.log("[GltfBuilder] Stage 2/4: Generating texture atlases...");
-            long tAtlas = TimeLogger.now();
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Stage 2/4: Generating texture atlases...");
+            long tAtlas = VoxelBridgeLogger.now();
 
             for (String spriteKey : spriteIndex.getAllKeys()) {
                 TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
             }
             TextureAtlasManager.generateAllAtlases(ctx, request.outputDir());
             ColorMapManager.generateColorMaps(ctx, request.outputDir());
-            ExportLogger.log("[GltfBuilder] Texture atlas generation complete");
-            TimeLogger.logDuration("gltf_atlas_generation", TimeLogger.elapsedSince(tAtlas));
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Texture atlas generation complete");
+            VoxelBridgeLogger.duration("gltf_atlas_generation", VoxelBridgeLogger.elapsedSince(tAtlas));
 
-            // 3. UV重映射
+            // 3. UV?
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Remapping UVs");
             ExportProgressTracker.setPhasePercent(0.0f);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            ExportLogger.log("[GltfBuilder] Stage 3/4: Remapping UVs...");
-            long tUvRemap = TimeLogger.now();
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Stage 3/4: Remapping UVs...");
+            long tUvRemap = VoxelBridgeLogger.now();
 
             Path geometryBin = request.outputDir().resolve("geometry.bin");
             Path uvrawBin = request.outputDir().resolve("uvraw.bin");
@@ -206,34 +206,34 @@ public final class GltfSceneBuilder implements SceneSink {
                     ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
                 }
             });
-            ExportLogger.log("[GltfBuilder] UV remapping complete");
-            TimeLogger.logDuration("gltf_uv_remap", TimeLogger.elapsedSince(tUvRemap));
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] UV remapping complete");
+            VoxelBridgeLogger.duration("gltf_uv_remap", VoxelBridgeLogger.elapsedSince(tUvRemap));
             ExportProgressTracker.setPhasePercent(0.6f);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
-            // 4. 组装glTF
+            // 4. glTF
             ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Assembling glTF");
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
-            ExportLogger.log("[GltfBuilder] Stage 4/4: Assembling glTF...");
-            long tAssemble = TimeLogger.now();
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Stage 4/4: Assembling glTF...");
+            long tAssemble = VoxelBridgeLogger.now();
 
             Path result = assembleGltf(request, geometryBin, finaluvBin, phase);
-            ExportLogger.log("[GltfBuilder] glTF assembly complete: " + result);
-            TimeLogger.logDuration("gltf_assembly", TimeLogger.elapsedSince(tAssemble));
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] glTF assembly complete: " + result);
+            VoxelBridgeLogger.duration("gltf_assembly", VoxelBridgeLogger.elapsedSince(tAssemble));
             ExportProgressTracker.setPhasePercent(1.0f);
             ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
             return result;
         } catch (Exception e) {
-            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Export failed in write() method: " + e.getClass().getName() + ": " + e.getMessage());
-            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Stack trace:");
+            VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Export failed in write() method: " + e.getClass().getName() + ": " + e.getMessage());
+            VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {
-                ExportLogger.log("    at " + element.toString());
+                VoxelBridgeLogger.info(LogModule.GLTF, "    at " + element.toString());
             }
             if (e.getCause() != null) {
-                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
+                VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
                 for (StackTraceElement element : e.getCause().getStackTrace()) {
-                    ExportLogger.log("    at " + element.toString());
+                    VoxelBridgeLogger.info(LogModule.GLTF, "    at " + element.toString());
                 }
             }
             e.printStackTrace();
@@ -250,7 +250,7 @@ public final class GltfSceneBuilder implements SceneSink {
                     QuadBatch batch = queue.take();
                     if (batch == POISON_PILL) break;
 
-                    // 写入流式文件
+                    // 
                     streamingWriter.writeQuad(
                         batch.bucketKey,
                         batch.spriteKey,
@@ -264,7 +264,7 @@ public final class GltfSceneBuilder implements SceneSink {
                     );
                 }
             } catch (Exception e) {
-                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
+                VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
                 e.printStackTrace();
             }
         }, "VoxelBridge-StreamingWriter");
@@ -272,11 +272,11 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     /**
-     * 从geometry.bin和finaluv.bin流式组装glTF
+     * eometry.bininaluv.binglTF
      */
     private Path assembleGltf(SceneWriteRequest request, Path geometryBin, Path finaluvBin, PhaseProgress phase) throws IOException {
-        ExportLogger.log("[GltfBuilder] Starting glTF assembly...");
-        TimeLogger.logMemory("before_gltf_assembly");
+        VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Starting glTF assembly...");
+        VoxelBridgeLogger.memory("before_gltf_assembly");
 
         try {
             GlTF gltf = new GlTF();
@@ -305,37 +305,37 @@ public final class GltfSceneBuilder implements SceneSink {
             samplers.add(sampler);
             gltf.setSamplers(samplers);
 
-            ExportLogger.log("[GltfBuilder] Registering colormap textures...");
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Registering colormap textures...");
             List<Integer> colorMapIndices = registerColorMapTextures(request.outputDir(), textures, images, 0);
-            ExportLogger.log("[GltfBuilder] Colormap textures registered: " + colorMapIndices.size());
-            long tMaterialAssembly = TimeLogger.now();
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Colormap textures registered: " + colorMapIndices.size());
+            long tMaterialAssembly = VoxelBridgeLogger.now();
 
         try (MultiBinaryChunk chunk = new MultiBinaryChunk(binPath, gltf);
              MultiBinaryChunk uvChunk = new MultiBinaryChunk(uvBinPath, gltf);
              FileChannel geometryChannel = FileChannel.open(geometryBin, StandardOpenOption.READ);
              FileChannel uvChannel = FileChannel.open(finaluvBin, StandardOpenOption.READ)) {
 
-                ExportLogger.log("[GltfBuilder] Opened binary files for reading");
-                ExportLogger.log("[GltfBuilder] geometry.bin size: " + geometryChannel.size() + " bytes");
-                ExportLogger.log("[GltfBuilder] finaluv.bin size: " + uvChannel.size() + " bytes");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Opened binary files for reading");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] geometry.bin size: " + geometryChannel.size() + " bytes");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] finaluv.bin size: " + uvChannel.size() + " bytes");
 
                 // Process materials sequentially (parallel processing causes buffer corruption)
                 List<String> materialKeys = geometryIndex.getAllMaterialKeys();
                 int totalMaterials = materialKeys.size();
                 int processedMaterials = 0;
 
-                ExportLogger.log("[GltfBuilder] Processing " + totalMaterials + " materials...");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Processing " + totalMaterials + " materials...");
 
                 for (String matKey : materialKeys) {
                     try {
                         GeometryIndex.MaterialChunk matChunk = geometryIndex.getMaterial(matKey);
 
                         if (matChunk != null && processedMaterials % 100 == 0) {
-                            ExportLogger.log(String.format("[GltfBuilder] Processing material: %s (quads: %d, hash: %d)",
+                            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Processing material: %s (quads: %d, hash: %d)",
                                 matKey, matChunk.quadCount(), matKey.hashCode()));
                         }
 
-                        // 从geometry.bin和finaluv.bin读取该material的数据
+                        // eometry.bininaluv.binaterial?
                         assembleMaterialPrimitive(
                             matKey, matChunk,
                             geometryChannel, uvChannel,
@@ -354,14 +354,14 @@ public final class GltfSceneBuilder implements SceneSink {
                             }
                         }
                     } catch (Exception e) {
-                        ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
-                        ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
+                        VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
+                        VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
                         e.printStackTrace();
                         throw new IOException("Failed to assemble material: " + matKey, e);
                     }
                 }
 
-                ExportLogger.log("[GltfBuilder] All materials processed successfully");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] All materials processed successfully");
 
                 // Finalize glTF
                 Scene scene = new Scene();
@@ -377,16 +377,16 @@ public final class GltfSceneBuilder implements SceneSink {
                 gltf.setTextures(textures);
                 gltf.setImages(images);
 
-                // 确保缓冲区写入并更新长度后再写 glTF JSON
+                // ?glTF JSON
                 chunk.close();
                 uvChunk.close();
 
-                ExportLogger.log("[GltfBuilder] Binary chunks closed");
-                ExportLogger.log(String.format("[GltfBuilder] Main binary files: %s", chunk.getAllPaths()));
-                ExportLogger.log(String.format("[GltfBuilder] UV binary files: %s", uvChunk.getAllPaths()));
-                TimeLogger.logDuration("gltf_material_assembly", TimeLogger.elapsedSince(tMaterialAssembly));
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Binary chunks closed");
+                VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Main binary files: %s", chunk.getAllPaths()));
+                VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] UV binary files: %s", uvChunk.getAllPaths()));
+                VoxelBridgeLogger.duration("gltf_material_assembly", VoxelBridgeLogger.elapsedSince(tMaterialAssembly));
 
-                // 验证文件大小与buffer声明匹配
+                // uffer
                 List<de.javagl.jgltf.impl.v2.Buffer> gltfBuffers = gltf.getBuffers();
                 if (gltfBuffers != null) {
                     for (int i = 0; i < gltfBuffers.size(); i++) {
@@ -396,58 +396,58 @@ public final class GltfSceneBuilder implements SceneSink {
                         Path bufPath = request.outputDir().resolve(uri);
                         if (java.nio.file.Files.exists(bufPath)) {
                             long actualSize = java.nio.file.Files.size(bufPath);
-                            ExportLogger.log(String.format("[GltfBuilder] Buffer[%d] %s: declared=%d, actual=%d %s",
+                            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Buffer[%d] %s: declared=%d, actual=%d %s",
                                 i, uri, declaredSize, actualSize,
-                                (declaredSize == actualSize) ? "✓" : "MISMATCH!"));
+                                (declaredSize == actualSize) ? "OK" : "MISMATCH!"));
                             if (declaredSize != actualSize) {
-                                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Buffer size mismatch detected!");
+                                VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Buffer size mismatch detected!");
                             }
                         } else {
-                            ExportLogger.log(String.format("[GltfBuilder][ERROR] Buffer file not found: %s", bufPath));
+                            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Buffer file not found: %s", bufPath));
                         }
                     }
                 }
 
-                ExportLogger.log("[GltfBuilder] Writing glTF file...");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Writing glTF file...");
                 GltfAsset assetModel = new GltfAssetV2(gltf, null);
                 GltfAssetWriter writer = new GltfAssetWriter();
                 Path gltfPath = request.outputDir().resolve(request.baseName() + ".gltf");
-                long tWriteGltf = TimeLogger.now();
+                long tWriteGltf = VoxelBridgeLogger.now();
                 writer.writeJson(assetModel, gltfPath.toFile());
-                ExportLogger.log("[GltfBuilder] glTF file written successfully: " + gltfPath);
-                TimeLogger.logDuration("gltf_write_json", TimeLogger.elapsedSince(tWriteGltf));
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] glTF file written successfully: " + gltfPath);
+                VoxelBridgeLogger.duration("gltf_write_json", VoxelBridgeLogger.elapsedSince(tWriteGltf));
 
-                // 验证文件确实被创建
+                // ?
                 if (!java.nio.file.Files.exists(gltfPath)) {
                     throw new IOException("glTF file was not created: " + gltfPath);
                 }
                 long gltfSize = java.nio.file.Files.size(gltfPath);
-                ExportLogger.log("[GltfBuilder] glTF file size: " + gltfSize + " bytes");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] glTF file size: " + gltfSize + " bytes");
             }
 
-            // 清理临时文件
+            // 
             try {
                 Files.deleteIfExists(geometryBin);
                 Files.deleteIfExists(request.outputDir().resolve("uvraw.bin"));
                 Files.deleteIfExists(finaluvBin);
-                ExportLogger.log("[GltfBuilder] Temporary files cleaned up");
+                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Temporary files cleaned up");
             } catch (IOException e) {
-                ExportLogger.log("[GltfBuilder][WARN] Failed to delete temporary files: " + e.getMessage());
+                VoxelBridgeLogger.warn(LogModule.GLTF, "[GltfBuilder][WARN] Failed to delete temporary files: " + e.getMessage());
             }
 
             Path finalPath = request.outputDir().resolve(request.baseName() + ".gltf");
-            ExportLogger.log("[GltfBuilder] Assembly complete: " + finalPath);
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Assembly complete: " + finalPath);
             return finalPath;
         } catch (Exception e) {
-            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] glTF assembly failed: " + e.getClass().getName() + ": " + e.getMessage());
-            ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Stack trace:");
+            VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] glTF assembly failed: " + e.getClass().getName() + ": " + e.getMessage());
+            VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Stack trace:");
             for (StackTraceElement element : e.getStackTrace()) {
-                ExportLogger.log("    at " + element.toString());
+                VoxelBridgeLogger.info(LogModule.GLTF, "    at " + element.toString());
             }
             if (e.getCause() != null) {
-                ExportLogger.logGltfDebug("[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
+                VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Caused by: " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage());
                 for (StackTraceElement element : e.getCause().getStackTrace()) {
-                    ExportLogger.log("    at " + element.toString());
+                    VoxelBridgeLogger.info(LogModule.GLTF, "    at " + element.toString());
                 }
             }
             e.printStackTrace();
@@ -456,7 +456,7 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     /**
-     * 组装单个material的primitive（直接组装，数据已在采样时去重）
+     * materialrimitive
      */
     private void assembleMaterialPrimitive(
         String matKey,
@@ -475,10 +475,10 @@ public final class GltfSceneBuilder implements SceneSink {
     ) throws IOException {
         if (matChunk == null || matChunk.quadCount() == 0) return;
 
-        // 数据已在采样时去重，直接构建顶点和索引数组
+        // ?
         int quadCount = matChunk.quadCount();
-        int vertexCount = quadCount * 4;  // 每个quad 4个顶点
-        int indexCount = quadCount * 6;   // 每个quad 6个索引 (2个三角形)
+        int vertexCount = quadCount * 4;  // quad 4?
+        int indexCount = quadCount * 6;   // quad 6?(2)
 
         List<Float> positions = new ArrayList<>(vertexCount * 3);
         List<Float> uv0 = new ArrayList<>(vertexCount * 2);
@@ -502,17 +502,17 @@ public final class GltfSceneBuilder implements SceneSink {
         List<Long> sortedOffsets = new ArrayList<>(matChunk.quadOffsets());
         Collections.sort(sortedOffsets);
 
-        ExportLogger.log(String.format("[GltfBuilder] Reading material %s (hash: %d) with %d offsets",
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Reading material %s (hash: %d) with %d offsets",
             matKey, materialHashValue, sortedOffsets.size()));
         if (sortedOffsets.size() > 0) {
-            ExportLogger.log(String.format("[GltfBuilder] First 5 offsets: %s",
+            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] First 5 offsets: %s",
                 sortedOffsets.subList(0, Math.min(5, sortedOffsets.size()))));
         }
 
-        // 批量读取quad数据并直接构建顶点数组（数据已在采样时去重）
+        // quad
         int totalQuads = sortedOffsets.size();
         int offsetIndex = 0;
-        int currentVertexBase = 0;  // 当前quad的起始顶点索引
+        int currentVertexBase = 0;  // quad?
 
         while (offsetIndex < totalQuads) {
             // Group contiguous quad offsets for batch reading
@@ -546,16 +546,16 @@ public final class GltfSceneBuilder implements SceneSink {
                 int geoBase = i * BYTES_PER_QUAD_GEOMETRY;
                 geometryBatchBuffer.position(geoBase);
 
-                // geometry.bin格式: materialHash(4) + spriteId(4) + overlayId(4) + doubleSided(1) + pad(3) + pos(48) + normal(12) + color(64)
+                // geometry.bin: materialHash(4) + spriteId(4) + overlayId(4) + doubleSided(1) + pad(3) + pos(48) + normal(12) + color(64)
                 int materialHash = geometryBatchBuffer.getInt();
 
                 // Debug first few mismatches
                 if (materialHash != materialHashValue && skippedMismatches < 3) {
-                    ExportLogger.log(String.format("[GltfBuilder][DEBUG] Hash mismatch at offset %d: expected %d, got %d",
+                    VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder][DEBUG] Hash mismatch at offset %d: expected %d, got %d",
                         sortedOffsets.get(offsetIndex + i), materialHashValue, materialHash));
                 }
 
-                geometryBatchBuffer.getInt(); // skip spriteId (不再需要)
+                geometryBatchBuffer.getInt(); // skip spriteId (?
                 geometryBatchBuffer.getInt(); // skip overlayId
                 byte doubleSidedByte = geometryBatchBuffer.get();
                 geometryBatchBuffer.get(); // skip padding
@@ -565,31 +565,31 @@ public final class GltfSceneBuilder implements SceneSink {
                 // Skip quads that belong to other materials
                 if (materialHash != materialHashValue) {
                     skippedMismatches++;
-                    continue;  // 注意：不读取数据，不递增currentVertexBase
+                    continue;  // currentVertexBase
                 }
 
-                // 读取positions (12 floats = 4 vertices × 3 coords)
+                // positions (12 floats = 4 vertices  3 coords)
                 for (int j = 0; j < 12; j++) {
                     float pos = geometryBatchBuffer.getFloat();
                     if (Float.isNaN(pos) || Float.isInfinite(pos)) {
-                        ExportLogger.log(String.format("[GltfBuilder][ERROR] Invalid position value (NaN/Inf) in material %s at offset %d, vertex component %d",
+                        VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Invalid position value (NaN/Inf) in material %s at offset %d, vertex component %d",
                             matKey, sortedOffsets.get(offsetIndex + i), j));
                         pos = 0f; // Replace with 0 to avoid corruption
                     }
                     positions.add(pos);
                 }
 
-                // 跳过normal (3 floats)
+                // normal (3 floats)
                 geometryBatchBuffer.getFloat();
                 geometryBatchBuffer.getFloat();
                 geometryBatchBuffer.getFloat();
 
-                // 读取colors (16 floats = 4 vertices × 4 RGBA)
+                // colors (16 floats = 4 vertices  4 RGBA)
                 for (int j = 0; j < 16; j++) {
                     colors.add(geometryBatchBuffer.getFloat());
                 }
 
-                // 读取UV
+                // UV
                 uvBatchBuffer.position(i * BYTES_PER_QUAD_UV);
                 for (int j = 0; j < 8; j++) {
                     uv0.add(uvBatchBuffer.getFloat());
@@ -598,7 +598,7 @@ public final class GltfSceneBuilder implements SceneSink {
                     uv1.add(uvBatchBuffer.getFloat());
                 }
 
-                // 生成索引 (quad -> 2 triangles)
+                //  (quad -> 2 triangles)
                 // Triangle 1: v0, v1, v2
                 indices.add(currentVertexBase + 0);
                 indices.add(currentVertexBase + 1);
@@ -608,7 +608,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 indices.add(currentVertexBase + 2);
                 indices.add(currentVertexBase + 3);
 
-                currentVertexBase += 4;  // 只有成功添加顶点后才递增
+                currentVertexBase += 4;  // 
 
                 if (doubleSidedByte != 0) {
                     doubleSided = true;
@@ -619,42 +619,42 @@ public final class GltfSceneBuilder implements SceneSink {
         }
 
         if (skippedMismatches > 0) {
-            ExportLogger.log(String.format("[GltfBuilder][WARN] Skipped %d quads for material %s due to hash mismatch", skippedMismatches, matKey));
+            VoxelBridgeLogger.warn(LogModule.GLTF, String.format("[GltfBuilder][WARN] Skipped %d quads for material %s due to hash mismatch", skippedMismatches, matKey));
         }
 
-        // 验证数据完整性
+        // ?
         if (positions.isEmpty() || indices.isEmpty()) {
-            ExportLogger.log("[GltfBuilder] Skipping material " + matKey + " (no valid geometry)");
+            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Skipping material " + matKey + " (no valid geometry)");
             return;
         }
 
         int finalVertexCount = positions.size() / 3;
         int finalIndexCount = indices.size();
 
-        // 日志:记录数据大小
-        ExportLogger.log(String.format("[GltfBuilder] Material %s: read %d quads from %d offsets, got vertices=%d, indices=%d",
+        // :
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s: read %d quads from %d offsets, got vertices=%d, indices=%d",
             matKey, (finalVertexCount / 4), totalQuads, finalVertexCount, finalIndexCount));
-        ExportLogger.log(String.format("[GltfBuilder] Material %s hash: %d, skipped mismatches: %d",
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s hash: %d, skipped mismatches: %d",
             matKey, materialHashValue, skippedMismatches));
 
-        // DEBUG: 验证数据一致性
+        // DEBUG: ?
         int expectedPosSize = finalVertexCount * 3;
         int expectedUv0Size = finalVertexCount * 2;
         int expectedColorSize = finalVertexCount * 4;
         if (positions.size() != expectedPosSize) {
-            ExportLogger.log(String.format("[GltfBuilder][ERROR] Position size mismatch: expected %d, got %d",
+            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Position size mismatch: expected %d, got %d",
                 expectedPosSize, positions.size()));
         }
         if (uv0.size() != expectedUv0Size) {
-            ExportLogger.log(String.format("[GltfBuilder][ERROR] UV0 size mismatch: expected %d, got %d",
+            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] UV0 size mismatch: expected %d, got %d",
                 expectedUv0Size, uv0.size()));
         }
         if (colors.size() != expectedColorSize) {
-            ExportLogger.log(String.format("[GltfBuilder][ERROR] Color size mismatch: expected %d, got %d",
+            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Color size mismatch: expected %d, got %d",
                 expectedColorSize, colors.size()));
         }
 
-        // 转换为数组
+        // ?
         float[] posArray = new float[positions.size()];
         float[] uv0Array = new float[uv0.size()];
         float[] uv1Array = new float[uv1.size()];
@@ -667,7 +667,7 @@ public final class GltfSceneBuilder implements SceneSink {
         for (int i = 0; i < colors.size(); i++) colorArray[i] = colors.get(i);
         for (int i = 0; i < indices.size(); i++) indexArray[i] = indices.get(i);
 
-        // 计算边界框
+        // ?
         float[] posMin = computeMin(posArray, 3);
         float[] posMax = computeMax(posArray, 3);
 
@@ -676,25 +676,25 @@ public final class GltfSceneBuilder implements SceneSink {
         for (int i = 0; i < posMin.length; i++) {
             if (Float.isNaN(posMin[i]) || Float.isNaN(posMax[i])) {
                 hasNaN = true;
-                ExportLogger.log(String.format("[GltfBuilder][ERROR] NaN detected in bounds for material %s: min[%d]=%f, max[%d]=%f",
+                VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] NaN detected in bounds for material %s: min[%d]=%f, max[%d]=%f",
                     matKey, i, posMin[i], i, posMax[i]));
             }
         }
         if (hasNaN) {
-            ExportLogger.log(String.format("[GltfBuilder][ERROR] Material %s has NaN in position bounds. First 10 positions: %s",
+            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Material %s has NaN in position bounds. First 10 positions: %s",
                 matKey, java.util.Arrays.toString(java.util.Arrays.copyOf(posArray, Math.min(10, posArray.length)))));
             // Skip this material to avoid corrupting the glTF
             return;
         }
 
-        // 写入glTF buffers
+        // glTF buffers
         MultiBinaryChunk.Slice posSlice = chunk.writeFloatArray(posArray, posArray.length);
         int posView = addView(gltf, posSlice.bufferIndex(), posSlice.byteOffset(), posArray.length * 4, 34962);
         int posAcc = addAccessor(gltf, posView, finalVertexCount, "VEC3", 5126, posMin, posMax);
 
         // Check for potential integer overflow
         if (posSlice.byteOffset() < 0) {
-            ExportLogger.log(String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: position byteOffset=%d",
+            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: position byteOffset=%d",
                 matKey, posSlice.byteOffset()));
         }
 
@@ -703,7 +703,7 @@ public final class GltfSceneBuilder implements SceneSink {
         int uv0Acc = addAccessor(gltf, uv0View, finalVertexCount, "VEC2", 5126, null, null);
 
         if (uv0Slice.byteOffset() < 0) {
-            ExportLogger.log(String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: uv0 byteOffset=%d",
+            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: uv0 byteOffset=%d",
                 matKey, uv0Slice.byteOffset()));
         }
 
@@ -729,8 +729,11 @@ public final class GltfSceneBuilder implements SceneSink {
         int idxView = addView(gltf, idxSlice.bufferIndex(), idxSlice.byteOffset(), indexArray.length * 4, 34963);
         int idxAcc = addAccessor(gltf, idxView, finalIndexCount, "SCALAR", 5125, null, null);
 
-        // 创建material
-        String sampleSprite = matChunk.usedSprites().iterator().next();
+        // material
+        String sampleSprite = pickPrimarySprite(matChunk.usedSprites());
+        VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
+            "[TextureRegistry][MaterialSprites] matKey=%s sprites=%s picked=%s",
+            matKey, matChunk.usedSprites(), sampleSprite));
         int textureIndex = textureRegistry.ensureSpriteTexture(sampleSprite, textures, images);
 
         Material material = new Material();
@@ -753,7 +756,7 @@ public final class GltfSceneBuilder implements SceneSink {
         materials.add(material);
         int matIndex = materials.size() - 1;
 
-        // 创建mesh
+        // mesh
         MeshPrimitive prim = new MeshPrimitive();
         Map<String, Integer> attrs = new LinkedHashMap<>();
         attrs.put("POSITION", posAcc);
@@ -776,6 +779,29 @@ public final class GltfSceneBuilder implements SceneSink {
         node.setName(matKey);
         node.setMesh(meshes.size() - 1);
         nodes.add(node);
+    }
+
+    /**
+     * Pick a stable primary sprite for a material: prefer entity:* sprites, otherwise first sorted.
+     */
+    private String pickPrimarySprite(Set<String> usedSprites) {
+        if (usedSprites == null || usedSprites.isEmpty()) {
+            return null;
+        }
+        List<String> list = new ArrayList<>(usedSprites);
+        Collections.sort(list);
+        //  item_frame/glow_item_frame ?sprite
+        for (String s : list) {
+            if (s.contains("item_frame")) {
+                return s;
+            }
+        }
+        for (String s : list) {
+            if (s.startsWith("entity:")) {
+                return s;
+            }
+        }
+        return list.get(0);
     }
 
     private void readFully(FileChannel channel, ByteBuffer buffer) throws IOException {
@@ -801,7 +827,7 @@ public final class GltfSceneBuilder implements SceneSink {
             if (bufferSize != null) {
                 long viewEnd = (long) byteOffset + (long) byteLength;
                 if (viewEnd > bufferSize) {
-                    ExportLogger.log(String.format("[GltfBuilder][ERROR] BufferView exceeds buffer bounds: buffer[%d] size=%d, view offset=%d, length=%d, end=%d",
+                    VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] BufferView exceeds buffer bounds: buffer[%d] size=%d, view offset=%d, length=%d, end=%d",
                         bufferIndex, bufferSize, byteOffset, byteLength, viewEnd));
                 }
             }
@@ -888,7 +914,7 @@ public final class GltfSceneBuilder implements SceneSink {
     private void detectAnimation(String spriteKey, com.voxelbridge.export.texture.TextureRepository repo) {
         try {
             TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
-            ResourceLocation spriteLoc = ResourceLocation.parse(spriteKey);
+            ResourceLocation spriteLoc = com.voxelbridge.util.ResourceLocationUtil.sanitize(spriteKey);
             TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
             if (sprite != null) {
                 AnimatedTextureHelper.extractFromSprite(spriteKey, sprite, repo);
@@ -901,7 +927,7 @@ public final class GltfSceneBuilder implements SceneSink {
             ResourceLocation texLoc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
             AnimatedTextureHelper.detectFromMetadata(spriteKey, texLoc, repo);
         } catch (Exception e) {
-            ExportLogger.logAnimation("[Animation][WARN] glTF detection failed for " + spriteKey + ": " + e.getMessage());
+            VoxelBridgeLogger.warn(LogModule.ANIMATION, "[Animation][WARN] glTF detection failed for " + spriteKey + ": " + e.getMessage());
         }
     }
 
@@ -942,3 +968,8 @@ public final class GltfSceneBuilder implements SceneSink {
         }
     }
 }
+
+
+
+
+

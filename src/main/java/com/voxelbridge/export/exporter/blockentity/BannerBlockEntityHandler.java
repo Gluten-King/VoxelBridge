@@ -3,6 +3,8 @@ package com.voxelbridge.export.exporter.blockentity;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.BlockEntityTextureManager;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BannerBlockEntity;
@@ -47,7 +49,7 @@ final class BannerBlockEntityHandler implements BlockEntityHandler {
                 textures.bakedHandle().textureLocation()
             );
         } else {
-            com.voxelbridge.util.debug.ExportLogger.log("[BannerBlockEntityHandler][WARN] Missing baked image for " + textures.bakedHandle().spriteKey());
+            VoxelBridgeLogger.warn(LogModule.BLOCKENTITY, "[BannerBlockEntityHandler][WARN] Missing baked image for " + textures.bakedHandle().spriteKey());
         }
 
         TextureOverrideMap overrideWrapper = textures.overrides();
