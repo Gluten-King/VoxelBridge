@@ -96,6 +96,8 @@ public final class VoxelBridgeCommands {
                     (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Animation export: f" +
                     (ExportRuntimeConfig.isAnimationEnabled() ? "on" : "off")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  Fill cave (dark cave_air): f" +
+                    (ExportRuntimeConfig.isFillCaveEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Export threads: f" + ExportRuntimeConfig.getExportThreadCount()));
             return 1;
         }));
@@ -159,6 +161,27 @@ public final class VoxelBridgeCommands {
                 .then(Commands.literal("off").executes(ctx -> {
                     ExportRuntimeConfig.setAnimationEnabled(false);
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Animation export -> OFF"));
+                    return 1;
+                }))
+        );
+
+        root.then(Commands.literal("fillcave")
+                .executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Fill cave is currently f"
+                            + (ExportRuntimeConfig.isFillCaveEnabled() ? "on" : "off")));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge fillcave <on|off>"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   on : Treat dark cave_air (skylight=0) as solid for culling"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   off: Normal culling behavior"));
+                    return 1;
+                })
+                .then(Commands.literal("on").executes(ctx -> {
+                    ExportRuntimeConfig.setFillCaveEnabled(true);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Fill cave -> ON (dark caves will be culled)"));
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(ctx -> {
+                    ExportRuntimeConfig.setFillCaveEnabled(false);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Fill cave -> OFF"));
                     return 1;
                 }))
         );

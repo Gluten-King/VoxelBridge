@@ -1,5 +1,6 @@
 package com.voxelbridge.export.exporter;
 
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.CoordinateMode;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.blockentity.BlockEntityExporter;
@@ -26,6 +27,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -451,16 +453,25 @@ public final class BlockExporter {
     }
 
     private boolean isNeighborSolid(BlockPos neighbor) {
+        BlockState state;
         if (chunkCache != null) {
             int cx = neighbor.getX() >> 4;
             int cz = neighbor.getZ() >> 4;
             var chunk = chunkCache.getChunk(cx, cz, false);
             if (chunk == null || chunk.isEmpty()) return true;
-            BlockState state = chunk.getBlockState(neighbor);
-            return state.isSolidRender(level, neighbor);
+            state = chunk.getBlockState(neighbor);
+        } else {
+            state = level.getBlockState(neighbor);
         }
-        BlockState neighborState = level.getBlockState(neighbor);
-        return neighborState.isSolidRender(level, neighbor);
+
+        // FILLCAVE: Treat any air with skylight 0 as solid for occlusion culling
+        if (ExportRuntimeConfig.isFillCaveEnabled()) {
+            if (state.isAir() && level.getBrightness(LightLayer.SKY, neighbor) == 0) {
+                return true; // Pretend ALL cave_air is solid
+            }
+        }
+
+        return state.isSolidRender(level, neighbor);
     }
 
     private long computeBushSeed(BlockPos pos) {

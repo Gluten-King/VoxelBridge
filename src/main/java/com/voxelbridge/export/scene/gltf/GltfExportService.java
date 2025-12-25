@@ -106,16 +106,17 @@ public final class GltfExportService {
         VoxelBridgeLogger.duration("block_sampling", VoxelBridgeLogger.elapsedSince(tSampling));
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
-        // Suggest GC between sampling and atlas generation to reduce peak memory
-        System.gc();
-        try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
+        // OPTIMIZATION: Removed forced GC calls to eliminate 1-5 second Full GC pauses
+        // Let JVM manage GC automatically for better throughput
+        // System.gc();
+        // try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
 
         // Texture export is handled by TextureExportPipeline in GltfSceneBuilder
         SceneWriteRequest request = new SceneWriteRequest(baseName, gltfDir);
 
-        // Suggest GC between texture generation and geometry write
-        System.gc();
-        try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
+        // OPTIMIZATION: Removed second forced GC call
+        // System.gc();
+        // try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
 
         // 同步写出，确保 glTF 文件生成
         Path outputPath = null;

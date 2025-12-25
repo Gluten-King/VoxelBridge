@@ -97,6 +97,10 @@ public final class ExportRuntimeConfig {
     private static boolean vanillaRandomTransformEnabled = true;
     // 控制是否导出动画贴图序列（默认为关闭）
     private static boolean animationEnabled = false;
+    // FILLCAVE: 控制是否将无天光的 cave_air 视为固体方块（用于遮挡剔除，减少洞穴面数）
+    // 当启用时，深层洞穴中的 cave_air (skylight = 0) 会被视为不透明方块，其相邻面将被剔除
+    // 这会填充完全黑暗、不可见的地下洞穴，大幅减少面数
+    private static boolean fillCaveEnabled = false;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -166,6 +170,14 @@ public final class ExportRuntimeConfig {
 
     public static void setAnimationEnabled(boolean enabled) {
         animationEnabled = enabled;
+    }
+
+    public static boolean isFillCaveEnabled() {
+        return fillCaveEnabled;
+    }
+
+    public static void setFillCaveEnabled(boolean enabled) {
+        fillCaveEnabled = enabled;
     }
 
     public static ExportFormat getExportFormat() {
