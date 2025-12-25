@@ -125,14 +125,14 @@ public final class EntityTextureResolver {
                 "[EntityData] %s %s=%s",
                 itemFrame.getType(), "direction", itemFrame.getDirection()));
 
-            // Item frame本身的模型使用方块图集纹理；优先按 RenderType 解析为图集 sprite
+            // Item frames use the block atlas; resolve to an atlas sprite via RenderType first.
             ResourceLocation base = RenderTypeTextureResolver.resolve(renderType);
             if (base != null) {
                 VoxelBridgeLogger.debug(LogModule.ENTITY, "[ItemFrame] Resolved texture from RenderType: " + base);
                 return resolveTextureWithAtlasDetection(base);
             }
 
-            // 退回到实体贴图（极端情况下 RenderType 未指向图集）
+            // Fallback to entity texture if RenderType is not atlas-backed.
             boolean isGlowFrame = itemFrame instanceof net.minecraft.world.entity.decoration.GlowItemFrame;
             String framePath = isGlowFrame ?
                 "textures/entity/glow_item_frame.png" :

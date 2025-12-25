@@ -5,7 +5,7 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.StreamingRegionSampler;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.scene.SceneSink;
-import com.voxelbridge.export.scene.SceneWriteRequest; // <--- 修复: 导入缺失的类
+import com.voxelbridge.export.scene.SceneWriteRequest; // Fixed: missing import
 import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.client.ProgressNotifier;
 import com.voxelbridge.util.debug.LogModule;
@@ -88,7 +88,7 @@ public final class GltfExportService {
 
         VoxelBridgeLogger.info(LogModule.GLTF, "[GLTF] Starting glTF export with format-agnostic sampler");
 
-        // 修复: 初始化 CTM 调试日志
+        // Fixed: CTM debug logging initialization
         // CTM debug logging is now handled internally by CtmDetector
         // BlockExporter.initializeCTMDebugLog(outDir);  // REMOVED
 
@@ -118,7 +118,7 @@ public final class GltfExportService {
         // System.gc();
         // try { Thread.sleep(50); } catch (InterruptedException e) { /* ignore */ }
 
-        // 同步写出，确保 glTF 文件生成
+        // Write synchronously to ensure the glTF file is created.
         Path outputPath = null;
         try {
             VoxelBridgeLogger.memory("before_geometry_write");
@@ -128,7 +128,7 @@ public final class GltfExportService {
             VoxelBridgeLogger.memory("after_geometry_write");
             VoxelBridgeLogger.duration("total_export", VoxelBridgeLogger.elapsedSince(tTotal));
 
-            // 验证输出文件存在
+            // Validate output file exists.
             if (outputPath == null || !Files.exists(outputPath)) {
                 throw new IOException("Export failed: Output file does not exist at " + outputPath);
             }
@@ -170,7 +170,7 @@ public final class GltfExportService {
             VoxelBridgeLogger.close();
         }
 
-        // 返回目标 glTF 路径（此时已同步写完）
+        // Return the glTF output path (write completed).
         return outputPath;
     }
 }

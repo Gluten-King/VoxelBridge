@@ -23,8 +23,7 @@ public enum LogModule {
     PERFORMANCE("performance", "performance.log"),
     BLOCKENTITY("blockentity", "blockentity.log"),
     ENTITY("entity", "entity.log"),
-    GLTF("gltf", "gltf.log"),
-    VXB("vxb", "vxb.log");
+    GLTF("gltf", "gltf.log");
 
     private final String loggerName;
     private final String fileName;

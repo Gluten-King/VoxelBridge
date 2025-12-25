@@ -16,7 +16,7 @@ import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
 /**
  * Generic texture atlas packer using the MaxRects (Maximum Rectangles) algorithm.
- * This implementation is based on the algorithm by Jukka Jyl鐩瞡ki.
+ * This implementation is based on the algorithm by Jukka Jylanki.
  *
  * <p>This packer is used by both regular block textures and block entity textures
  * to combine multiple textures into fixed-size atlas pages with UDIM tiling.</p>
@@ -68,7 +68,7 @@ public final class TextureAtlasPacker {
      * </ol>
      *
      * @param outputDir Directory where atlas pages will be written
-     * @param prefix Filename prefix for atlas pages (e.g., "atlas_" 閳?"atlas_1001.png")
+     * @param prefix Filename prefix for atlas pages (e.g., "atlas_", "atlas_1001.png")
      * @return Map of sprite keys to their placement data (page, coordinates, dimensions)
      * @throws IOException If texture is too large or file writing fails
      */
@@ -364,4 +364,3 @@ public final class TextureAtlasPacker {
         }
     }
 }
-

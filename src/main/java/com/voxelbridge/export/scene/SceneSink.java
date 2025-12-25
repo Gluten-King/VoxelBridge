@@ -51,7 +51,7 @@ public interface SceneSink {
     /**
      * Finalize the scene and write it to disk.
      *
-     * @return the primary output file (e.g., glTF/VXB)
+     * @return the primary output file (e.g., glTF)
      */
     java.nio.file.Path write(SceneWriteRequest request) throws IOException;
 }

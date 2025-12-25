@@ -86,7 +86,6 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Selection info:"));
             ctx.getSource().sendSystemMessage(Component.literal("e  pos1: f" + (pos1 != null ? pos1 : "unset")));
             ctx.getSource().sendSystemMessage(Component.literal("e  pos2: f" + (pos2 != null ? pos2 : "unset")));
-            ctx.getSource().sendSystemMessage(Component.literal("e  Export format: f" + ExportRuntimeConfig.getExportFormat().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas mode: f" + ExportRuntimeConfig.getAtlasMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas size: f" + ExportRuntimeConfig.getAtlasSize().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Coordinate mode: f" +
@@ -107,25 +106,6 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("e[VoxelBridge] Selection cleared."));
             return 1;
         }));
-
-        root.then(Commands.literal("format")
-                .executes(ctx -> {
-                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Current export format: f" +
-                            ExportRuntimeConfig.getExportFormat().getDescription()));
-                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge format <gltf|vxb>"));
-                    return 1;
-                })
-                .then(Commands.literal("gltf").executes(ctx -> {
-                    ExportRuntimeConfig.setExportFormat(ExportRuntimeConfig.ExportFormat.GLTF);
-                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Export format -> glTF"));
-                    return 1;
-                }))
-                .then(Commands.literal("vxb").executes(ctx -> {
-                    ExportRuntimeConfig.setExportFormat(ExportRuntimeConfig.ExportFormat.VXB);
-                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Export format -> VXB"));
-                    return 1;
-                }))
-        );
 
         root.then(Commands.literal("atlas")
                 .executes(ctx -> {
@@ -260,8 +240,8 @@ public final class VoxelBridgeCommands {
                     ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Vanilla random transform is currently f"
                             + (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
                     ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge poshash <on|off>"));
-                    ctx.getSource().sendSystemMessage(Component.literal("7   on : 应用原版基于位置哈希的随机偏移/变体"));
-                    ctx.getSource().sendSystemMessage(Component.literal("7   off: 关闭此偏移，保持旧行为"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   on : Apply vanilla position-hash random offsets/variants"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   off: Disable offsets and keep legacy behavior"));
                     return 1;
                 })
                 .then(Commands.literal("on").executes(ctx -> {
@@ -328,8 +308,7 @@ public final class VoxelBridgeCommands {
             try {
                 Path outDir = IOUtil.ensureExportDir();
                 Thread exportThread = new ExportThread(level, pos1, pos2, outDir);
-                String formatName = ExportRuntimeConfig.getExportFormat().getDescription();
-                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] 开始导出 (" + formatName + ") ..."));
+                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Starting export (glTF) ..."));
                 exportThread.start();
                 return 1;
             } catch (Exception e) {

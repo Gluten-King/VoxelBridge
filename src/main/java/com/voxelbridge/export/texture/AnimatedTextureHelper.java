@@ -61,12 +61,12 @@ public final class AnimatedTextureHelper {
             var metaOpt = res.metadata().getSection(AnimationMetadataSection.SERIALIZER);
             AnimationMetadataSection meta = metaOpt.orElse(null);
             if (meta == null) {
-                // ??.mcmeta ?            VoxelBridgeLogger.warn(LogModule.ANIMATION, "[Animation][WARN] No animation metadata for: " + png);
-            return null; // No .mcmeta animation section - NOT an animation
-        }
-        BufferedImage full = TextureLoader.readTexture(png, true);
-        if (full != null) {
-            // STRICT: Only use .mcmeta-based splitting
+                VoxelBridgeLogger.warn(LogModule.ANIMATION, "[Animation][WARN] No animation metadata for: " + png);
+                return null; // No .mcmeta animation section - not an animation.
+            }
+            BufferedImage full = TextureLoader.readTexture(png, true);
+            if (full != null) {
+                // STRICT: Only use .mcmeta-based splitting.
                 return splitWithMetadata(spriteKey, full, meta, repo);
             }
             return null;

@@ -7,27 +7,24 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Sprite索引：管理sprite key到ID的映射，以及sprite使用统计信息。
- * 用于：
- * 1. 压缩存储（在geometry.bin中使用int ID而非字符串）
- * 2. 图集生成（提供所有使用的sprite和tint信息）
+ * Sprite index: maps sprite keys to IDs and tracks usage stats.
  */
 final class SpriteIndex {
-    // Sprite key ↔ ID 双向映射
+
+    // Sprite key <-> ID bidirectional mapping.
     private final Object2IntMap<String> spriteToId = new Object2IntOpenHashMap<>();
     private final List<String> idToSprite = new ArrayList<>();
 
-    // 每个sprite的使用信息（用于atlas生成）
+    // Per-sprite usage info (for atlas generation).
+    // Per-sprite usage info (for atlas generation).
     private final Map<String, SpriteUsageInfo> spriteUsage = new ConcurrentHashMap<>();
 
-    // 全局quad计数器
+    // Global quad offset counter.
+    // Global quad offset counter.
     private long nextQuadOffset = 0;
 
     /**
-     * Sprite使用信息
-     * @param tintColors 该sprite使用的所有tint颜色
-     * @param firstQuadOffset 第一个使用该sprite的quad在geometry.bin中的偏移
-     * @param quadCount 使用该sprite的quad总数
+     * Sprite usage info.
      */
     record SpriteUsageInfo(
         Set<Integer> tintColors,
@@ -36,7 +33,7 @@ final class SpriteIndex {
     ) {}
 
     /**
-     * 获取或注册sprite ID（线程安全）
+     * Get or register a sprite ID (thread-safe).
      */
     synchronized int getId(String spriteKey) {
         if (spriteToId.containsKey(spriteKey)) {
@@ -49,7 +46,7 @@ final class SpriteIndex {
     }
 
     /**
-     * 根据ID获取sprite key
+     * Get a sprite key by ID.
      */
     synchronized String getKey(int id) {
         if (id < 0 || id >= idToSprite.size()) {
@@ -59,10 +56,7 @@ final class SpriteIndex {
     }
 
     /**
-     * 记录sprite使用（quad级别）
-     * @param spriteKey sprite标识
-     * @param tint tint颜色值
-     * @param quadOffset 该quad在geometry.bin中的偏移
+     * Record sprite usage at quad granularity.
      */
     void recordUsage(String spriteKey, int tint, long quadOffset) {
         spriteUsage.compute(spriteKey, (k, info) -> {
@@ -82,44 +76,43 @@ final class SpriteIndex {
     }
 
     /**
-     * 获取所有已注册的sprite keys
-     * OPTIMIZATION: Returns unmodifiable view instead of copying to avoid O(n) allocation
-     * For 10K sprites, this saves 0.5-2 seconds of ArrayList copying
+     * Get all registered sprite keys.
+     * OPTIMIZATION: Returns unmodifiable view instead of copying to avoid O(n) allocation.
      */
     synchronized List<String> getAllKeys() {
         return Collections.unmodifiableList(idToSprite);
     }
 
     /**
-     * 获取sprite数量
+     * Get sprite count.
      */
     synchronized int size() {
         return idToSprite.size();
     }
 
     /**
-     * 获取sprite使用信息
+     * Get usage info for a sprite.
      */
     SpriteUsageInfo getUsageInfo(String spriteKey) {
         return spriteUsage.get(spriteKey);
     }
 
     /**
-     * 获取所有sprite使用信息
+     * Get a snapshot of all sprite usage info.
      */
     Map<String, SpriteUsageInfo> getAllUsageInfo() {
         return new HashMap<>(spriteUsage);
     }
 
     /**
-     * 递增并返回当前quad offset
+     * Increment and return the current quad offset.
      */
     synchronized long nextQuadOffset() {
         return nextQuadOffset++;
     }
 
     /**
-     * 获取当前总quad数
+     * Get total quad count.
      */
     synchronized long getTotalQuadCount() {
         return nextQuadOffset;

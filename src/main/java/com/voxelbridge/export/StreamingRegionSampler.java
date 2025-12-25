@@ -91,7 +91,10 @@ public final class StreamingRegionSampler {
         Minecraft mc = Minecraft.getInstance();
 
         int threadCount = ExportRuntimeConfig.getExportThreadCount();
+        int cpuCores = Runtime.getRuntime().availableProcessors();
+        int maxWorkers = Math.max(1, cpuCores - 2);
         int workerCount = Math.max(1, Math.min(threadCount, allChunks.size()));
+        workerCount = Math.min(workerCount, maxWorkers);
         
         ThreadFactory factory = new ThreadFactory() {
             private final AtomicInteger counter = new AtomicInteger();
@@ -100,6 +103,7 @@ public final class StreamingRegionSampler {
                 Thread t = new Thread(r);
                 t.setName("VoxelBridge-Streaming-" + counter.incrementAndGet());
                 t.setDaemon(true);
+                t.setPriority(Thread.MIN_PRIORITY);
                 return t;
             }
         };
@@ -192,7 +196,7 @@ public final class StreamingRegionSampler {
             monitor.interrupt();
             monitor.join(2000);
 
-            // 瀵搫鍩楃€电厧鍤幍鈧張濉扙NDING閸栧搫娼￠敍鍫濇嫹閻ｃ儲瑕嗛弻鎾圭獩缁傝鎷伴柇璇茬湷濡偓閺屻儻绱?
+            // Force-export any remaining pending chunks after timeout.
             ExportProgressTracker.Progress progress = ExportProgressTracker.progress();
             if (progress.pending() > 0) {
                 if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
@@ -210,7 +214,7 @@ public final class StreamingRegionSampler {
                             int cminZ = Math.max(minZ, chunkPos.z << 4);
                             int cmaxZ = Math.min(maxZ, (chunkPos.z << 4) + 15);
 
-                            // 瀵搫鍩楃€电厧鍤敍鍫濇嫹閻ｃ儴绐涚粋璇叉嫲闁鐪冲Λ鈧弻銉礆
+                            // Force-export pending chunk using the slow path.
                             forceExportChunk(chunk, chunkPos, level, sink, ctx,
                                 regionMin, regionMax, cminX, cmaxX, cminZ, cmaxZ,
                                 minY, maxY, mc, sharedBeBatch, offsetX, offsetY, offsetZ, processedEntityIds);
@@ -236,7 +240,7 @@ public final class StreamingRegionSampler {
         }
 
         ExportProgressTracker.Progress finalProgress = ExportProgressTracker.progress();
-        String formatLabel = ExportProgressTracker.getActiveFormat().getDescription();
+        String formatLabel = ExportProgressTracker.getFormatLabel();
         String summary = String.format(
             "[StreamingRegionSampler] Sampling finished for %s - Done:%d Failed:%d Total:%d (scene build running)",
             formatLabel, finalProgress.done(), finalProgress.failed(), finalProgress.total()
@@ -415,8 +419,8 @@ public final class StreamingRegionSampler {
     }
 
     /**
-     * 瀵搫鍩楃€电厧鍤崠鍝勬健閿涘牆鎷烽悾銉╁仸鐏炲懎鎷板〒鍙夌厠鐠烘繄顬囧Λ鈧弻銉礆
-     * 閻劋绨崷銊╁櫚閺嶉绮ㄩ弶鐔告鐎电厧鍤幍鈧張濉扙NDING閸栧搫娼?
+     * Force-export a chunk even if it was previously pending or missing neighbors.
+     * This path scans the full block volume inside the chunk bounds.
      */
     private static void forceExportChunk(LevelChunk chunk, ChunkPos chunkPos, Level level,
                                         SceneSink finalSink, ExportContext ctx,
@@ -441,7 +445,7 @@ public final class StreamingRegionSampler {
                 return;
             }
 
-            // 娑撳秵顥呴弻銉╁仸鐏炲拑绱濇稉宥嗩梾閺屻儲瑕嗛弻鎾圭獩缁備紮绱濋惄瀛樺复鐎电厧鍤?
+            // Force path: iterate full block volume for the chunk bounds.
             BufferedSceneSink buffer = new BufferedSceneSink();
             finalSink.onChunkStart(chunkPos.x, chunkPos.z);
             started = true;

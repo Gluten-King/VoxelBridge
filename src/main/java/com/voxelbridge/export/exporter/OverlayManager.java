@@ -263,7 +263,7 @@ public final class OverlayManager {
             int overlayIndex = overlayList.size();
 
             // Apply overlay offset in local coordinates to prevent z-fighting
-            // hilight 使用更大的偏移（2x）避免与 overlay 共面；按 sprite 名判断
+            // Hilight uses a larger offset (2x) to avoid coplanar overlap; keyed by sprite name.
             boolean isHilight = isHilightSprite || "_hilight".equals(effectiveSuffix);
             float offsetMultiplier = isHilight ? 2f : 1f;
             int offsetIndex = isHilight ? 0 : overlayIndex;

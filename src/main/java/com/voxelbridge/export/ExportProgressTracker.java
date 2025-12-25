@@ -1,6 +1,5 @@
 package com.voxelbridge.export;
 
-import com.voxelbridge.config.ExportRuntimeConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.neoforged.api.distmarker.Dist;
@@ -41,7 +40,7 @@ public final class ExportProgressTracker {
     private static volatile Stage stage = Stage.IDLE;
     private static volatile String stageDetail = "";
     private static volatile Float phasePercent = null;
-    private static volatile ExportRuntimeConfig.ExportFormat activeFormat = ExportRuntimeConfig.getExportFormat();
+    private static final String FORMAT_LABEL = "glTF";
 
     private ExportProgressTracker() {}
 
@@ -55,7 +54,6 @@ public final class ExportProgressTracker {
         stage = Stage.IDLE;
         stageDetail = "";
         phasePercent = null;
-        activeFormat = ExportRuntimeConfig.getExportFormat();
     }
 
     /**
@@ -86,7 +84,6 @@ public final class ExportProgressTracker {
         completed.set(0);
         failed.set(0);
         running.set(0);
-        activeFormat = ExportRuntimeConfig.getExportFormat();
         for (Long key : chunkKeys) {
             chunkStates.put(key, ChunkState.PENDING);
         }
@@ -181,14 +178,8 @@ public final class ExportProgressTracker {
         return new Progress(completed.get(), failed.get(), total, running.get(), startNanos, stage, stageDetail, phase);
     }
 
-    public static ExportRuntimeConfig.ExportFormat getActiveFormat() {
-        return activeFormat;
-    }
-
-    public static void setActiveFormat(ExportRuntimeConfig.ExportFormat format) {
-        if (format != null) {
-            activeFormat = format;
-        }
+    public static String getFormatLabel() {
+        return FORMAT_LABEL;
     }
 
     public static void setPhasePercent(Float percent) {

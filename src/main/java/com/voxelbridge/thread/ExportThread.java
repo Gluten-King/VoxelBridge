@@ -1,9 +1,6 @@
 package com.voxelbridge.thread;
 
-import com.voxelbridge.config.ExportRuntimeConfig;
-import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.scene.gltf.GltfExportService;
-import com.voxelbridge.export.scene.vxb.VxbExportService;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.core.BlockPos;
@@ -39,13 +36,7 @@ public class ExportThread extends Thread {
             long start = System.currentTimeMillis();
 
             Path file;
-            ExportRuntimeConfig.ExportFormat format = ExportRuntimeConfig.getExportFormat();
-            ExportProgressTracker.setActiveFormat(format);
-            if (format == ExportRuntimeConfig.ExportFormat.VXB) {
-                file = VxbExportService.exportRegion(level, pos1, pos2, outDir);
-            } else {
-                file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
-            }
+            file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
 
             long time = System.currentTimeMillis() - start;
             String msg = String.format("[VoxelBridge] Export completed! File: %s (%.2fs)",

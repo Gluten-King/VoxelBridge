@@ -29,7 +29,7 @@ public final class GeometryUtil {
         float by = positions[7] - positions[1];
         float bz = positions[8] - positions[2];
 
-        // Cross product: a × b
+        // Cross product: a x b
         float nx = ay * bz - az * by;
         float ny = az * bx - ax * bz;
         float nz = ax * by - ay * bx;

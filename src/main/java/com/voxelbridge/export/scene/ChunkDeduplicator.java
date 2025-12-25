@@ -4,39 +4,33 @@ import gnu.trove.map.hash.TObjectIntHashMap;
 import java.util.*;
 
 /**
- * Chunk级别的去重器：对单个chunk内的quads按material分组进行顶点去重。
- *
- * 设计原则：
- * 1. 接受chunk边界的顶点重复（不做跨chunk去重）
- * 2. 每个chunk独立去重，处理完立即释放内存
- * 3. 按material分组去重，提高去重效率
- * 4. 复用PrimitiveData的去重逻辑（VertexKey + 量化）
+ * Chunk-level deduplicator: per-material vertex dedup within a chunk.
+ * Allows duplicates across chunk borders and frees memory after flush.
  */
 final class ChunkDeduplicator {
+
     private final String materialKey;
     private final List<Float> positions;
     private final List<Float> uv0;
     private final List<Float> uv1;
     private final List<Float> colors;
 
-    // 顶点去重查找表
+    // Vertex dedup lookup table.
     private final TObjectIntHashMap<VertexKey> vertexLookup;
 
-    // Quad级去重（仅透明材质）
+    // Quad-level dedup (transparent materials only).
     private final Set<QuadKey> quadKeys;
     private final boolean needsQuadDedup;
 
-    // 去重后的quads
+    // Deduplicated quads.
     private final List<DeduplicatedQuad> quads;
     private int vertexCount = 0;
 
-    /**
-     * 去重后的quad数据
-     */
+    // Deduplicated quad data.
     record DeduplicatedQuad(
         String spriteKey,
         String overlaySpriteKey,
-        int[] vertexIndices,  // 4个顶点在去重后数组中的索引
+        int[] vertexIndices,  // Indices of the 4 vertices in the deduped arrays.
         float[] normal,
         boolean doubleSided
     ) {}
@@ -50,23 +44,19 @@ final class ChunkDeduplicator {
         this.vertexLookup = new TObjectIntHashMap<>(1000, 0.5f, -1);
         this.quads = new ArrayList<>(500);
 
-        // Quad去重仅用于透明材质（防止Z-fighting）
+        // Quad dedup only for transparent materials (avoid Z-fighting).
         this.needsQuadDedup = isTransparentMaterial(materialKey);
         this.quadKeys = needsQuadDedup ? new HashSet<>() : null;
     }
 
-    /**
-     * 处理一个quad，进行顶点去重
-     */
+    // Process one quad and deduplicate vertices.
     void processQuad(BufferedSceneSink.QuadRecord quad) {
         int[] order = sortQuadCCW(quad.positions());
         int spriteHash = Objects.hash(quad.spriteKey(), quad.overlaySpriteKey());
 
-        // 暂存待提交的顶点
         List<PendingVertex> pending = new ArrayList<>(4);
         int[] verts = new int[4];
 
-        // 对4个顶点进行去重检查
         for (int i = 0; i < 4; i++) {
             int oi = order[i];
             float[] pos = quad.positions();
@@ -86,10 +76,8 @@ final class ChunkDeduplicator {
 
             int existing = vertexLookup.get(key);
             if (existing != -1) {
-                // 顶点已存在，复用
                 verts[i] = existing;
             } else {
-                // 新顶点，加入待提交列表
                 verts[i] = vertexCount + pending.size();
                 pending.add(new PendingVertex(
                     key,
@@ -102,21 +90,19 @@ final class ChunkDeduplicator {
             }
         }
 
-        // 检查退化quad（顶点重复）
         if (verts[0] == verts[1] || verts[1] == verts[2] ||
             verts[2] == verts[3] || verts[0] == verts[3]) {
             return;
         }
 
-        // Quad级去重（仅透明材质）
+        // Quad-level dedup (transparent only).
         if (needsQuadDedup) {
             QuadKey qk = QuadKey.from(verts[0], verts[1], verts[2], verts[3]);
             if (!quadKeys.add(qk)) {
-                return; // 重复quad，跳过
+                return; // Duplicate quad, skip.
             }
         }
 
-        // 提交新顶点
         for (PendingVertex pv : pending) {
             int idx = vertexCount++;
             vertexLookup.put(pv.key(), idx);
@@ -126,7 +112,6 @@ final class ChunkDeduplicator {
             colors.add(pv.r()); colors.add(pv.g()); colors.add(pv.b()); colors.add(pv.a());
         }
 
-        // 保存去重后的quad
         quads.add(new DeduplicatedQuad(
             quad.spriteKey(),
             quad.overlaySpriteKey(),
@@ -136,14 +121,11 @@ final class ChunkDeduplicator {
         ));
     }
 
-    /**
-     * 将去重后的数据flush到目标sink
-     */
+    // Flush deduplicated data to the target sink.
     void flushTo(SceneSink target) {
         if (quads.isEmpty()) return;
 
         for (DeduplicatedQuad quad : quads) {
-            // 重建完整的顶点数据
             float[] quadPositions = new float[12];
             float[] quadUv0 = new float[8];
             float[] quadUv1 = new float[8];
@@ -194,7 +176,7 @@ final class ChunkDeduplicator {
         return quads.size();
     }
 
-    // ==================== 辅助方法 ====================
+    // ==================== Helper methods ====================
 
     private static boolean isTransparentMaterial(String materialKey) {
         if (materialKey == null) return false;
@@ -209,18 +191,14 @@ final class ChunkDeduplicator {
     private int quantizeUV(float v) { return Math.round(v * 100000f); }
     private int quantizeColor(float v) { return Math.round(v * 100f); }
 
-    /**
-     * 顶点键（用于去重）
-     */
+    // Vertex key for dedup.
     private record VertexKey(
         int spriteHash, int px, int py, int pz,
         int u, int v, int u1, int v1,
         int r, int g, int b, int a
     ) {}
 
-    /**
-     * 待提交顶点
-     */
+    // Pending vertex data.
     private record PendingVertex(
         VertexKey key,
         float px, float py, float pz,
@@ -229,9 +207,7 @@ final class ChunkDeduplicator {
         float r, float g, float b, float a
     ) {}
 
-    /**
-     * Quad键（用于quad级去重）
-     */
+    // Quad key for quad-level dedup.
     private record QuadKey(int a, int b, int c, int d) {
         static QuadKey from(int v0, int v1, int v2, int v3) {
             int[] arr = new int[]{v0, v1, v2, v3};
@@ -240,22 +216,17 @@ final class ChunkDeduplicator {
         }
     }
 
-    /**
-     * 排序quad顶点为CCW顺序
-     */
+    // Sort quad vertices in CCW order.
     private int[] sortQuadCCW(float[] pos) {
         Integer[] idx = {0, 1, 2, 3};
 
-        // 计算法线
         float ax = pos[3] - pos[0], ay = pos[4] - pos[1], az = pos[5] - pos[2];
         float bx = pos[6] - pos[0], by = pos[7] - pos[1], bz = pos[8] - pos[2];
         float nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
         float anx = Math.abs(nx), any = Math.abs(ny), anz = Math.abs(nz);
 
-        // 选择投影平面
         int drop = (anx >= any && anx >= anz) ? 0 : (any >= anz ? 1 : 2);
 
-        // 计算中心点
         float cx = 0, cy = 0, cz = 0;
         for (int i = 0; i < 4; i++) {
             cx += pos[i * 3];
@@ -265,7 +236,6 @@ final class ChunkDeduplicator {
         final float fcx = cx * 0.25f, fcy = cy * 0.25f, fcz = cz * 0.25f;
         final int fdrop = drop;
 
-        // 按角度排序
         Arrays.sort(idx, (i1, i2) -> {
             float x1 = pos[i1 * 3] - fcx, y1 = pos[i1 * 3 + 1] - fcy, z1 = pos[i1 * 3 + 2] - fcz;
             float x2 = pos[i2 * 3] - fcx, y2 = pos[i2 * 3 + 1] - fcy, z2 = pos[i2 * 3 + 2] - fcz;
@@ -274,7 +244,6 @@ final class ChunkDeduplicator {
             return Double.compare(a1, a2);
         });
 
-        // 检查绕序方向
         float ovx1 = pos[3] - pos[0], ovy1 = pos[4] - pos[1], ovz1 = pos[5] - pos[2];
         float ovx2 = pos[6] - pos[0], ovy2 = pos[7] - pos[1], ovz2 = pos[8] - pos[2];
         float onx = ovy1 * ovz2 - ovz1 * ovy2, ony = ovz1 * ovx2 - ovx1 * ovz2, onz = ovx1 * ovy2 - ovy1 * ovx2;

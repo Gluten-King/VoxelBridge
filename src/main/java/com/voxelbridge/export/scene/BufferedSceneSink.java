@@ -5,8 +5,8 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * 区块级缓冲Sink：缓冲chunk的所有quad，并在flush时进行去重。
- * 去重在chunk级别按material分组进行，接受chunk边界的顶点重复。
+ * Chunk-level buffered sink: buffers all quads for a chunk and deduplicates on flush.
+ * Dedup is per-chunk and per-material; duplicate vertices on chunk borders are allowed.
  */
 public final class BufferedSceneSink implements SceneSink {
 
@@ -42,34 +42,34 @@ public final class BufferedSceneSink implements SceneSink {
     }
 
     /**
-     * 将缓冲的quads按material分组去重后flush到目标sink
-     * 去重在chunk级别进行（接受chunk边界的顶点重复）
+     * Flush buffered quads to the target sink after per-material dedup.
+     * Dedup is per-chunk (allows duplicates across chunk borders).
      */
     public void flushTo(SceneSink target) {
         if (buffer.isEmpty()) {
             return;
         }
 
-        // 按material分组
+        // Group by material.
         Map<String, List<QuadRecord>> byMaterial = new HashMap<>();
         for (QuadRecord quad : buffer) {
             byMaterial.computeIfAbsent(quad.materialGroupKey, k -> new ArrayList<>()).add(quad);
         }
 
-        // 对每个material进行去重处理
+        // Deduplicate each material group.
         for (Map.Entry<String, List<QuadRecord>> entry : byMaterial.entrySet()) {
             String materialKey = entry.getKey();
             List<QuadRecord> quads = entry.getValue();
 
-            // 创建chunk级去重器
+            // Create per-chunk deduplicator.
             ChunkDeduplicator deduper = new ChunkDeduplicator(materialKey);
 
-            // 处理所有quads
+            // Process all quads.
             for (QuadRecord quad : quads) {
                 deduper.processQuad(quad);
             }
 
-            // flush去重后的数据
+            // Flush deduplicated data.
             deduper.flushTo(target);
         }
 
@@ -84,7 +84,7 @@ public final class BufferedSceneSink implements SceneSink {
         return buffer.size();
     }
 
-    // 内部数据结构（package-visible for ChunkDeduplicator）
+    // Internal data structure (package-visible for ChunkDeduplicator).
     record QuadRecord(
         String materialGroupKey,
         String spriteKey,

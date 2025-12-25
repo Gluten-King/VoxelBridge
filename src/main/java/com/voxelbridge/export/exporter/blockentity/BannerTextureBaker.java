@@ -82,7 +82,7 @@ final class BannerTextureBaker {
             return;
         }
 
-        // 资源包可能改变了灰度图尺寸，先缩放到目标大小后再染色叠加
+        // Resource packs may change grayscale size; scale to target before tinting/compositing.
         int targetW = target.getWidth();
         int targetH = target.getHeight();
         if (texture.getWidth() != targetW || texture.getHeight() != targetH) {

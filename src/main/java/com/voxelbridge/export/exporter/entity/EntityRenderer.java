@@ -51,6 +51,29 @@ public final class EntityRenderer {
         double offsetY,
         double offsetZ
     ) {
+        return renderInternal(ctx, entity, sceneSink, offsetX, offsetY, offsetZ, true);
+    }
+
+    public static boolean renderOnMainThread(
+        ExportContext ctx,
+        Entity entity,
+        SceneSink sceneSink,
+        double offsetX,
+        double offsetY,
+        double offsetZ
+    ) {
+        return renderInternal(ctx, entity, sceneSink, offsetX, offsetY, offsetZ, false);
+    }
+
+    private static boolean renderInternal(
+        ExportContext ctx,
+        Entity entity,
+        SceneSink sceneSink,
+        double offsetX,
+        double offsetY,
+        double offsetZ,
+        boolean scheduleOnMainThread
+    ) {
         try {
             VoxelBridgeLogger.debug(LogModule.ENTITY, "[EntityRenderer] Starting render for " + entity.getType());
             if (VoxelBridgeLogger.isDebugEnabled(LogModule.ENTITY)) {
@@ -105,7 +128,7 @@ public final class EntityRenderer {
             float yaw = entity.getYRot();
             if (VoxelBridgeLogger.isDebugEnabled(LogModule.ENTITY)) {
                 VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
-                    "[Rotation] %s yaw=%.2f鎺?(actual=%.2f鎺? isHanging=%s)",
+                    "[Rotation] %s yaw=%.2fdeg (actual=%.2fdeg, isHanging=%s)",
                     entity.getType(),
                     yaw,
                     entity.getYRot(),
@@ -118,9 +141,8 @@ public final class EntityRenderer {
             boolean[] renderCompleted = new boolean[1];
             Exception[] renderException = new Exception[1];
 
-            ctx.getMc().executeBlocking(() -> {
+            Runnable renderCall = () -> {
                 try {
-                    // 妫板嫭濮峰☉?renderer 閸愬懘鍎撮惃?getRenderOffset閿涘牅绶ユ俊?ItemFrameRenderer 閻?0.3/-0.25 閸嬪繒些閿涘绱濋柆鍨帳娴ｅ秶鐤嗛柌宥咁槻閸嬪繒些
                     var renderOffset = renderer.getRenderOffset(entity, partial);
                     poseStack.translate(renderOffset.x(), renderOffset.y(), renderOffset.z());
 
@@ -136,7 +158,13 @@ public final class EntityRenderer {
                 } catch (Exception e) {
                     renderException[0] = e;
                 }
-            });
+            };
+
+            if (scheduleOnMainThread) {
+                ctx.getMc().executeBlocking(renderCall);
+            } else {
+                renderCall.run();
+            }
 
             if (renderException[0] != null) {
                 VoxelBridgeLogger.error(LogModule.ENTITY, String.format(
@@ -426,7 +454,7 @@ public final class EntityRenderer {
                             parent.entity.getType(), u0, u1, v0, v1));
                     }
 
-                    // 缂傛挸鐡╝tlas sprite閸ユ儳鍎氶敍灞肩返閸氬海鐢籥tlas閻㈢喐鍨氭担璺ㄦ暏
+                    // Cache atlas sprite pixels for export.
                     if (isAtlasTexture && textureRes.sprite() != null) {
                         BufferedImage spriteImg = com.voxelbridge.export.texture.TextureLoader.fromSprite(textureRes.sprite());
                         if (spriteImg != null) {

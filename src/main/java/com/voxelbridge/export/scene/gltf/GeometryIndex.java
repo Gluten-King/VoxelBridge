@@ -4,21 +4,16 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 几何索引：维护每个material在geometry.bin和uvraw.bin中的元数据。
- * 用于：
- * 1. glTF组装时定位material的几何数据
- * 2. UV重映射时查找对应的sprite信息
+ * Geometry index: tracks per-material metadata for geometry.bin and uvraw.bin.
  */
 final class GeometryIndex {
-    // Material元数据映射
+
+    // Material metadata mapping.
+    // Material metadata mapping.
     private final Map<String, MaterialChunk> materials = new ConcurrentHashMap<>();
 
     /**
-     * Material几何块元数据
-     * @param materialGroupKey material标识
-     * @param quadOffsets     该material包含的所有quad的全局偏移集合（以quad为单位）
-     * @param doubleSided     是否双面
-     * @param usedSprites     该material使用的所有sprite keys
+     * Per-material geometry metadata.
      */
     record MaterialChunk(
         String materialGroupKey,
@@ -32,11 +27,7 @@ final class GeometryIndex {
     }
 
     /**
-     * 记录material的quad写入
-     * @param materialGroupKey material标识
-     * @param spriteKey 使用的sprite
-     * @param quadOffset quad在文件中的偏移
-     * @param doubleSided 是否双面
+     * Record a quad write for a material.
      */
     void recordQuad(String materialGroupKey, String spriteKey, long quadOffset, boolean doubleSided) {
         materials.compute(materialGroupKey, (k, chunk) -> {
@@ -68,14 +59,14 @@ final class GeometryIndex {
     }
 
     /**
-     * 获取material元数据
+     * Get material metadata by key.
      */
     MaterialChunk getMaterial(String materialGroupKey) {
         return materials.get(materialGroupKey);
     }
 
     /**
-     * 获取所有material keys（排序）
+     * Get all material keys in sorted order.
      */
     List<String> getAllMaterialKeys() {
         List<String> keys = new ArrayList<>(materials.keySet());
@@ -84,14 +75,14 @@ final class GeometryIndex {
     }
 
     /**
-     * 获取material数量
+     * Get material count.
      */
     int size() {
         return materials.size();
     }
 
     /**
-     * 获取总quad数
+     * Get total quad count across materials.
      */
     long getTotalQuadCount() {
         return materials.values().stream()
@@ -100,7 +91,7 @@ final class GeometryIndex {
     }
 
     /**
-     * 获取所有material元数据
+     * Get a snapshot of all material metadata.
      */
     Map<String, MaterialChunk> getAllMaterials() {
         return new HashMap<>(materials);

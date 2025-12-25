@@ -270,12 +270,12 @@ public final class BlockExporter {
         for (List<QuadEntry> group : groups.values()) {
             if (group.size() < 2) continue;
 
-            // CTM overlay 检测：正方形 + CTM sprite
+            // CTM overlay detection: square quad + CTM sprite.
             boolean hasCtmSprite = group.stream().anyMatch(q -> isCtmOverlaySprite(q.spriteKey()));
             QuadEntry first = group.get(0);
             if (!hasCtmSprite || !first.approxSquare()) continue;
 
-            // 允许任意长方形，只要 UV AABB 尺寸一致（同形状）
+            // Allow any rectangle as long as the UV AABB size matches (same shape).
             float du = first.uMax - first.uMin;
             float dv = first.vMax - first.vMin;
             final float UV_EPS = 1e-4f;

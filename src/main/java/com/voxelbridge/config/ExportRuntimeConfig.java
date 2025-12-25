@@ -72,34 +72,16 @@ public final class ExportRuntimeConfig {
         }
     }
 
-    public enum ExportFormat {
-        GLTF("glTF"),
-        VXB("VXB");
-
-        private final String description;
-
-        ExportFormat(String description) {
-            this.description = description;
-        }
-
-        public String getDescription() {
-            return description;
-        }
-    }
-
     private static AtlasMode atlasMode = AtlasMode.ATLAS;
     private static AtlasSize atlasSize = AtlasSize.SIZE_8192;
     private static ColorMode colorMode = ColorMode.VERTEX_COLOR;
     private static CoordinateMode coordinateMode = CoordinateMode.CENTERED;
-    private static ExportFormat exportFormat = ExportFormat.GLTF;
-    private static int exportThreadCount = Runtime.getRuntime().availableProcessors();
-    // 控制是否应用原版基于位置哈希的随机变换（草丛偏移、随机模型旋转等）
+    private static int exportThreadCount = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
+    // Enable vanilla random transforms (e.g., grass offset, random model rotations).
     private static boolean vanillaRandomTransformEnabled = true;
-    // 控制是否导出动画贴图序列（默认为关闭）
+    // Export animated textures (mcmeta-driven).
     private static boolean animationEnabled = false;
-    // FILLCAVE: 控制是否将无天光的 cave_air 视为固体方块（用于遮挡剔除，减少洞穴面数）
-    // 当启用时，深层洞穴中的 cave_air (skylight = 0) 会被视为不透明方块，其相邻面将被剔除
-    // 这会填充完全黑暗、不可见的地下洞穴，大幅减少面数
+    // FILLCAVE: treat dark cave_air (skylight = 0) as solid for occlusion culling.
     private static boolean fillCaveEnabled = false;
 
     public static AtlasMode getAtlasMode() {
@@ -180,14 +162,5 @@ public final class ExportRuntimeConfig {
         fillCaveEnabled = enabled;
     }
 
-    public static ExportFormat getExportFormat() {
-        return exportFormat;
-    }
-
-    public static void setExportFormat(ExportFormat format) {
-        if (format != null) {
-            exportFormat = format;
-        }
-    }
 
 }

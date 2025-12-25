@@ -56,7 +56,7 @@ public final class GltfSceneBuilder implements SceneSink {
     private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, null, null, null, null, null, false, null);
     // OPTIMIZATION: Increased queue capacity 4x to reduce sampling thread blocking
     // Large scenes with many quads benefit from larger producer-consumer buffer
-    private final BlockingQueue<QuadBatch> queue = new ArrayBlockingQueue<>(65536); // 16384 → 65536
+    private final BlockingQueue<QuadBatch> queue = new ArrayBlockingQueue<>(65536); // 16384 -> 65536
     private final AtomicBoolean writerStarted = new AtomicBoolean(false);
     private Thread writerThread;
 

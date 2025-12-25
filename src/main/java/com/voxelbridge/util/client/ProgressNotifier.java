@@ -25,7 +25,7 @@ public final class ProgressNotifier {
             if (mc.player == null) {
                 return;
             }
-            String format = ExportProgressTracker.getActiveFormat().getDescription();
+            String format = ExportProgressTracker.getFormatLabel();
             String text = String.format("[VoxelBridge %s] Export progress: %.1f%% (%d/%d chunks)",
                     format, percent, processed, total);
             mc.player.displayClientMessage(Component.literal(text), true);
@@ -47,7 +47,7 @@ public final class ProgressNotifier {
     }
 
     private static Component buildStatus(ExportProgressTracker.Progress p) {
-        String format = ExportProgressTracker.getActiveFormat().getDescription();
+        String format = ExportProgressTracker.getFormatLabel();
         String stage = stageBase(p.stage());
         String prf = p.stage() == ExportProgressTracker.Stage.SAMPLING
                 ? String.format(" | P:%d R:%d F:%d", p.pending(), p.running(), p.failed())
@@ -129,7 +129,7 @@ public final class ProgressNotifier {
         gfx.fill(x, y, x + filled, y + barHeight, stageBarColor(lastProgress.stage()));
 
         String title = String.format("[%s] %s %.1f%%",
-                ExportProgressTracker.getActiveFormat().getDescription(),
+                ExportProgressTracker.getFormatLabel(),
                 stageLabel(lastProgress.stage(), lastProgress.stageDetail()),
                 lastProgress.displayPercent());
         int titleWidth = mc.font.width(title);

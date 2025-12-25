@@ -31,6 +31,7 @@ public final class EntityExporter {
     ) {
         if (level == null) return;
 
+        java.util.List<Entity> candidates = new java.util.ArrayList<>();
         for (Entity entity : level.getEntities(null, bounds)) {
             if (entity == null || entity.isRemoved()) continue;
             if (!processedEntityIds.add(entity.getId())) {
@@ -41,28 +42,37 @@ public final class EntityExporter {
                 VoxelBridgeLogger.debug(LogModule.ENTITY, "[EntityExporter] Skipping filtered entity: " + entity.getType());
                 continue;
             }
-
-            Vec3 pos = entity.position();
-            VoxelBridgeLogger.info(LogModule.ENTITY, String.format("Exporting entity: %s (%s) at [%.2f, %.2f, %.2f]",
-                entity.getName().getString(),
-                entity.getType().toString(),
-                pos.x, pos.y, pos.z));
-            net.minecraft.world.phys.AABB bb = entity.getBoundingBox();
-            VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
-                "[BBox] %s min[%.3f, %.3f, %.3f] max[%.3f, %.3f, %.3f] size[%.3f x %.3f x %.3f]",
-                entity.getType(),
-                bb.minX, bb.minY, bb.minZ,
-                bb.maxX, bb.maxY, bb.maxZ,
-                bb.maxX - bb.minX, bb.maxY - bb.minY, bb.maxZ - bb.minZ));
-
-            boolean success = EntityRenderer.render(ctx, entity, sceneSink, offsetX, offsetY, offsetZ);
-            if (!success) {
-                VoxelBridgeLogger.warn(LogModule.ENTITY, String.format("[NoGeometry] %s at [%.2f, %.2f, %.2f] - %s",
-                    entity.getType(),
-                    pos.x, pos.y, pos.z,
-                    "Render returned false"));
-            }
+            candidates.add(entity);
         }
+
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        ctx.getMc().executeBlocking(() -> {
+            for (Entity entity : candidates) {
+                Vec3 pos = entity.position();
+                VoxelBridgeLogger.info(LogModule.ENTITY, String.format("Exporting entity: %s (%s) at [%.2f, %.2f, %.2f]",
+                    entity.getName().getString(),
+                    entity.getType().toString(),
+                    pos.x, pos.y, pos.z));
+                net.minecraft.world.phys.AABB bb = entity.getBoundingBox();
+                VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
+                    "[BBox] %s min[%.3f, %.3f, %.3f] max[%.3f, %.3f, %.3f] size[%.3f x %.3f x %.3f]",
+                    entity.getType(),
+                    bb.minX, bb.minY, bb.minZ,
+                    bb.maxX, bb.maxY, bb.maxZ,
+                    bb.maxX - bb.minX, bb.maxY - bb.minY, bb.maxZ - bb.minZ));
+
+                boolean success = EntityRenderer.renderOnMainThread(ctx, entity, sceneSink, offsetX, offsetY, offsetZ);
+                if (!success) {
+                    VoxelBridgeLogger.warn(LogModule.ENTITY, String.format("[NoGeometry] %s at [%.2f, %.2f, %.2f] - %s",
+                        entity.getType(),
+                        pos.x, pos.y, pos.z,
+                        "Render returned false"));
+                }
+            }
+        });
     }
 
     private static boolean shouldExport(Entity entity) {
