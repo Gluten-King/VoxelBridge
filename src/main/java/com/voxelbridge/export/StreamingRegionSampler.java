@@ -454,19 +454,44 @@ public final class StreamingRegionSampler {
 
             BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
             int blockCount = 0;
-            for (int x = minX; x <= maxX; x++) {
-                for (int z = minZ; z <= maxZ; z++) {
-                    for (int y = minY; y <= maxY; y++) {
-                        mutablePos.set(x, y, z);
-                        try {
-                            // OPTIMIZATION: Skip air blocks early (60-80% of world is air)
-                            BlockState state = chunk.getBlockState(mutablePos);
-                            if (state.isAir()) continue;
 
-                            localSampler.sampleBlock(state, mutablePos);
-                            blockCount++;
-                        } catch (Throwable t) {
-                            t.printStackTrace();
+            // OPTIMIZATION: Use ChunkSection API for faster block state access
+            // This mirrors the fast path in exportChunk
+            int minSectionY = level.getMinSection();
+            int maxSectionY = level.getMaxSection();
+            int worldMinY = level.getMinBuildHeight();
+
+            for (int sectionIndex = minSectionY; sectionIndex < maxSectionY; sectionIndex++) {
+                LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(sectionIndex));
+                if (section == null || section.hasOnlyAir()) {
+                    continue; // Skip empty sections
+                }
+
+                int sectionBaseY = worldMinY + (sectionIndex - minSectionY) * 16;
+
+                // Iterate Y-Z-X for cache locality
+                for (int localY = 0; localY < 16; localY++) {
+                    int worldY = sectionBaseY + localY;
+                    if (worldY < minY || worldY > maxY) continue;
+
+                    for (int localZ = 0; localZ < 16; localZ++) {
+                        int worldZ = (chunkPos.z << 4) + localZ;
+                        if (worldZ < minZ || worldZ > maxZ) continue;
+
+                        for (int localX = 0; localX < 16; localX++) {
+                            int worldX = (chunkPos.x << 4) + localX;
+                            if (worldX < minX || worldX > maxX) continue;
+
+                            try {
+                                BlockState state = section.getBlockState(localX, localY, localZ);
+                                if (state.isAir()) continue;
+
+                                mutablePos.set(worldX, worldY, worldZ);
+                                localSampler.sampleBlock(state, mutablePos);
+                                blockCount++;
+                            } catch (Throwable t) {
+                                t.printStackTrace();
+                            }
                         }
                     }
                 }

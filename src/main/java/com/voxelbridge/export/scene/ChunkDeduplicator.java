@@ -26,6 +26,9 @@ final class ChunkDeduplicator {
     private final List<DeduplicatedQuad> quads;
     private int vertexCount = 0;
 
+    // Reusable buffer for processing a single quad (4 vertices).
+    private final TempVertex[] quadBuffer;
+
     // Deduplicated quad data.
     record DeduplicatedQuad(
         String spriteKey,
@@ -47,6 +50,10 @@ final class ChunkDeduplicator {
         // Quad dedup only for transparent materials (avoid Z-fighting).
         this.needsQuadDedup = isTransparentMaterial(materialKey);
         this.quadKeys = needsQuadDedup ? new HashSet<>() : null;
+        
+        // Initialize reusable buffer
+        this.quadBuffer = new TempVertex[4];
+        for (int i = 0; i < 4; i++) this.quadBuffer[i] = new TempVertex();
     }
 
     // Process one quad and deduplicate vertices.
@@ -54,9 +61,9 @@ final class ChunkDeduplicator {
         int[] order = sortQuadCCW(quad.positions());
         int spriteHash = Objects.hash(quad.spriteKey(), quad.overlaySpriteKey());
 
-        List<PendingVertex> pending = new ArrayList<>(4);
         int[] verts = new int[4];
-
+        
+        // Pass 1: Quantize and Lookup (Zero Allocation)
         for (int i = 0; i < 4; i++) {
             int oi = order[i];
             float[] pos = quad.positions();
@@ -64,52 +71,53 @@ final class ChunkDeduplicator {
             float[] uv1Array = quad.uv1();
             float[] col = quad.colors();
 
-            VertexKey key = new VertexKey(
+            // Populate reusable probe
+            TempVertex probe = quadBuffer[i];
+            probe.set(
                 spriteHash,
-                quantize(pos[oi * 3]), quantize(pos[oi * 3 + 1]), quantize(pos[oi * 3 + 2]),
-                quantizeUV(uv[oi * 2]), quantizeUV(uv[oi * 2 + 1]),
-                quantizeUV(uv1Array != null ? uv1Array[oi * 2] : 0f),
-                quantizeUV(uv1Array != null ? uv1Array[oi * 2 + 1] : 0f),
-                quantizeColor(col[oi * 4]), quantizeColor(col[oi * 4 + 1]),
-                quantizeColor(col[oi * 4 + 2]), quantizeColor(col[oi * 4 + 3])
+                pos[oi * 3], pos[oi * 3 + 1], pos[oi * 3 + 2],
+                uv[oi * 2], uv[oi * 2 + 1],
+                uv1Array != null ? uv1Array[oi * 2] : 0f,
+                uv1Array != null ? uv1Array[oi * 2 + 1] : 0f,
+                col[oi * 4], col[oi * 4 + 1], col[oi * 4 + 2], col[oi * 4 + 3]
             );
 
-            int existing = vertexLookup.get(key);
-            if (existing != -1) {
-                verts[i] = existing;
-            } else {
-                verts[i] = vertexCount + pending.size();
-                pending.add(new PendingVertex(
-                    key,
-                    pos[oi * 3], pos[oi * 3 + 1], pos[oi * 3 + 2],
-                    uv[oi * 2], uv[oi * 2 + 1],
-                    uv1Array != null ? uv1Array[oi * 2] : 0f,
-                    uv1Array != null ? uv1Array[oi * 2 + 1] : 0f,
-                    col[oi * 4], col[oi * 4 + 1], col[oi * 4 + 2], col[oi * 4 + 3]
-                ));
+            int existing = vertexLookup.get(probe);
+            verts[i] = existing;
+        }
+
+        // Degenerate check
+        if ((verts[0] != -1 && (verts[0] == verts[1] || verts[0] == verts[3])) ||
+            (verts[1] != -1 && (verts[1] == verts[2])) ||
+            (verts[2] != -1 && (verts[2] == verts[3]))) {
+             if (verts[0] != -1 && verts[0] == verts[1]) return;
+        }
+        
+        // Pass 2: Register new vertices
+        for (int i = 0; i < 4; i++) {
+            if (verts[i] == -1) {
+                TempVertex temp = quadBuffer[i];
+                
+                // Create immutable key for map storage (Allocation only on miss)
+                VertexKey key = new VertexKey(temp);
+                int idx = vertexCount++;
+                vertexLookup.put(key, idx);
+                verts[i] = idx;
+
+                // Store vertex data
+                positions.add(temp.px); positions.add(temp.py); positions.add(temp.pz);
+                uv0.add(temp.u); uv0.add(temp.v);
+                uv1.add(temp.u1); uv1.add(temp.v1);
+                colors.add(temp.r); colors.add(temp.g); colors.add(temp.b); colors.add(temp.a);
             }
         }
 
-        if (verts[0] == verts[1] || verts[1] == verts[2] ||
-            verts[2] == verts[3] || verts[0] == verts[3]) {
-            return;
-        }
-
-        // Quad-level dedup (transparent only).
+        // Quad-level dedup check (Post-resolution)
         if (needsQuadDedup) {
             QuadKey qk = QuadKey.from(verts[0], verts[1], verts[2], verts[3]);
             if (!quadKeys.add(qk)) {
                 return; // Duplicate quad, skip.
             }
-        }
-
-        for (PendingVertex pv : pending) {
-            int idx = vertexCount++;
-            vertexLookup.put(pv.key(), idx);
-            positions.add(pv.px()); positions.add(pv.py()); positions.add(pv.pz());
-            uv0.add(pv.u()); uv0.add(pv.v());
-            uv1.add(pv.u1()); uv1.add(pv.v1());
-            colors.add(pv.r()); colors.add(pv.g()); colors.add(pv.b()); colors.add(pv.a());
         }
 
         quads.add(new DeduplicatedQuad(
@@ -125,6 +133,80 @@ final class ChunkDeduplicator {
     void flushTo(SceneSink target) {
         if (quads.isEmpty()) return;
 
+        // OPTIMIZATION: Batch transfer for GltfSceneBuilder to reduce lock contention
+        if (target instanceof com.voxelbridge.export.scene.gltf.GltfSceneBuilder gltfSink) {
+            int count = quads.size();
+            List<String> spriteKeys = new ArrayList<>(count);
+            List<String> overlaySpriteKeys = new ArrayList<>(count);
+            
+            // Allocate flat arrays (Single allocation per batch instead of N per quad)
+            float[] flatPositions = new float[count * 12];
+            float[] flatUv0s = new float[count * 8];
+            float[] flatUv1s = new float[count * 8];
+            float[] flatNormals = new float[count * 3];
+            float[] flatColors = new float[count * 16];
+            List<Boolean> allDoubleSided = new ArrayList<>(count);
+
+            for (int i = 0; i < count; i++) {
+                DeduplicatedQuad quad = quads.get(i);
+                int posBase = i * 12;
+                int uvBase = i * 8;
+                int normBase = i * 3;
+                int colBase = i * 16;
+
+                for (int v = 0; v < 4; v++) {
+                    int vertIdx = quad.vertexIndices()[v];
+
+                    // positions
+                    flatPositions[posBase + v * 3]     = positions.get(vertIdx * 3);
+                    flatPositions[posBase + v * 3 + 1] = positions.get(vertIdx * 3 + 1);
+                    flatPositions[posBase + v * 3 + 2] = positions.get(vertIdx * 3 + 2);
+
+                    // uv0
+                    flatUv0s[uvBase + v * 2]     = uv0.get(vertIdx * 2);
+                    flatUv0s[uvBase + v * 2 + 1] = uv0.get(vertIdx * 2 + 1);
+
+                    // uv1
+                    flatUv1s[uvBase + v * 2]     = uv1.get(vertIdx * 2);
+                    flatUv1s[uvBase + v * 2 + 1] = uv1.get(vertIdx * 2 + 1);
+
+                    // colors
+                    flatColors[colBase + v * 4]     = colors.get(vertIdx * 4);
+                    flatColors[colBase + v * 4 + 1] = colors.get(vertIdx * 4 + 1);
+                    flatColors[colBase + v * 4 + 2] = colors.get(vertIdx * 4 + 2);
+                    flatColors[colBase + v * 4 + 3] = colors.get(vertIdx * 4 + 3);
+                }
+
+                float[] norm = quad.normal();
+                if (norm != null && norm.length >= 3) {
+                    flatNormals[normBase]     = norm[0];
+                    flatNormals[normBase + 1] = norm[1];
+                    flatNormals[normBase + 2] = norm[2];
+                } else {
+                    flatNormals[normBase]     = 0f;
+                    flatNormals[normBase + 1] = 1f;
+                    flatNormals[normBase + 2] = 0f;
+                }
+
+                spriteKeys.add(quad.spriteKey());
+                overlaySpriteKeys.add(quad.overlaySpriteKey());
+                allDoubleSided.add(quad.doubleSided());
+            }
+
+            gltfSink.addBatch(
+                materialKey,
+                spriteKeys,
+                overlaySpriteKeys,
+                flatPositions,
+                flatUv0s,
+                flatUv1s,
+                flatNormals,
+                flatColors,
+                allDoubleSided
+            );
+            return;
+        }
+
         for (DeduplicatedQuad quad : quads) {
             float[] quadPositions = new float[12];
             float[] quadUv0 = new float[8];
@@ -134,20 +216,16 @@ final class ChunkDeduplicator {
             for (int i = 0; i < 4; i++) {
                 int vertIdx = quad.vertexIndices()[i];
 
-                // positions (3 floats per vertex)
                 quadPositions[i * 3] = positions.get(vertIdx * 3);
                 quadPositions[i * 3 + 1] = positions.get(vertIdx * 3 + 1);
                 quadPositions[i * 3 + 2] = positions.get(vertIdx * 3 + 2);
 
-                // uv0 (2 floats per vertex)
                 quadUv0[i * 2] = uv0.get(vertIdx * 2);
                 quadUv0[i * 2 + 1] = uv0.get(vertIdx * 2 + 1);
 
-                // uv1 (2 floats per vertex)
                 quadUv1[i * 2] = uv1.get(vertIdx * 2);
                 quadUv1[i * 2 + 1] = uv1.get(vertIdx * 2 + 1);
 
-                // colors (4 floats per vertex)
                 quadColors[i * 4] = colors.get(vertIdx * 4);
                 quadColors[i * 4 + 1] = colors.get(vertIdx * 4 + 1);
                 quadColors[i * 4 + 2] = colors.get(vertIdx * 4 + 2);
@@ -191,21 +269,80 @@ final class ChunkDeduplicator {
     private int quantizeUV(float v) { return Math.round(v * 100000f); }
     private int quantizeColor(float v) { return Math.round(v * 100f); }
 
-    // Vertex key for dedup.
-    private record VertexKey(
-        int spriteHash, int px, int py, int pz,
-        int u, int v, int u1, int v1,
-        int r, int g, int b, int a
-    ) {}
+    // Mutable holder for vertex data + key logic
+    // Extends VertexKey so it can be used as a query key for TObjectIntHashMap
+    private class TempVertex extends VertexKey {
+        float px, py, pz, u, v, u1, v1, r, g, b, a;
 
-    // Pending vertex data.
-    private record PendingVertex(
-        VertexKey key,
-        float px, float py, float pz,
-        float u, float v,
-        float u1, float v1,
-        float r, float g, float b, float a
-    ) {}
+        void set(int spriteHash,
+                 float px, float py, float pz,
+                 float u, float v,
+                 float u1, float v1,
+                 float r, float g, float b, float a) {
+            this.px = px; this.py = py; this.pz = pz;
+            this.u = u; this.v = v;
+            this.u1 = u1; this.v1 = v1;
+            this.r = r; this.g = g; this.b = b; this.a = a;
+            
+            // Update key fields
+            this.spriteHash = spriteHash;
+            this.k_px = quantize(px); this.k_py = quantize(py); this.k_pz = quantize(pz);
+            this.k_u = quantizeUV(u); this.k_v = quantizeUV(v);
+            this.k_u1 = quantizeUV(u1); this.k_v1 = quantizeUV(v1);
+            this.k_r = quantizeColor(r); this.k_g = quantizeColor(g);
+            this.k_b = quantizeColor(b); this.k_a = quantizeColor(a);
+        }
+    }
+
+    // Base class for hashing logic.
+    // Used as the immutable key in the map.
+    private static class VertexKey {
+        int spriteHash;
+        int k_px, k_py, k_pz;
+        int k_u, k_v, k_u1, k_v1;
+        int k_r, k_g, k_b, k_a;
+
+        VertexKey() {}
+
+        VertexKey(TempVertex other) {
+            this.spriteHash = other.spriteHash;
+            this.k_px = other.k_px; this.k_py = other.k_py; this.k_pz = other.k_pz;
+            this.k_u = other.k_u; this.k_v = other.k_v;
+            this.k_u1 = other.k_u1; this.k_v1 = other.k_v1;
+            this.k_r = other.k_r; this.k_g = other.k_g;
+            this.k_b = other.k_b; this.k_a = other.k_a;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = spriteHash;
+            result = 31 * result + k_px;
+            result = 31 * result + k_py;
+            result = 31 * result + k_pz;
+            result = 31 * result + k_u;
+            result = 31 * result + k_v;
+            result = 31 * result + k_u1;
+            result = 31 * result + k_v1;
+            result = 31 * result + k_r;
+            result = 31 * result + k_g;
+            result = 31 * result + k_b;
+            result = 31 * result + k_a;
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof VertexKey)) return false;
+            VertexKey other = (VertexKey) o;
+            return spriteHash == other.spriteHash &&
+                k_px == other.k_px && k_py == other.k_py && k_pz == other.k_pz &&
+                k_u == other.k_u && k_v == other.k_v &&
+                k_u1 == other.k_u1 && k_v1 == other.k_v1 &&
+                k_r == other.k_r && k_g == other.k_g &&
+                k_b == other.k_b && k_a == other.k_a;
+        }
+    }
 
     // Quad key for quad-level dedup.
     private record QuadKey(int a, int b, int c, int d) {

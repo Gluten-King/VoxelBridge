@@ -9,58 +9,170 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Streaming geometry writer: Streams quad data to geometry.bin and uvraw.bin.
- * File format:
- * - geometry.bin: 140 bytes per quad (materialHash[4] + spriteId[4] + overlayId[4] + doubleSided[1] + pad[3] + pos[48] + normal[12] + color[64])
- * - uvraw.bin: 64 bytes per quad (uv0[32] + uv1[32])
+ * Streaming geometry writer: Streams quad data to a paged temporary file.
+ * Implements "Virtual Page Allocator" strategy:
+ * - Data is buffered per-material (Buckets).
+ * - When a bucket fills (64KB), it is flushed to the temp file as a Page.
+ * - This ensures high write throughput (append-only) and fast read-back (bulk reads).
+ * 
+ * Page Format (Interleaved, 204 bytes per quad):
+ * - Geometry (140 bytes): [Hash(4), Sprite(4), Overlay(4), Flags(4), Pos(48), Norm(12), Color(64)]
+ * - UV (64 bytes): [UV0(32), UV1(32)]
  */
 final class StreamingGeometryWriter implements AutoCloseable {
-    // OPTIMIZATION: Large buffer sizes optimized for SSD sequential writes
-    // 32MB geometry + 8MB UV = balanced ratio matching quad data structure (140:64)
-    // Reduces disk I/O calls by >90% compared to original 4MB/1MB
-    private static final int GEOMETRY_BUFFER_SIZE = 32 * 1024 * 1024; // 32MB
-    private static final int UV_BUFFER_SIZE = 8 * 1024 * 1024;        // 8MB (maintains ~4:1 ratio)
-    private static final int BYTES_PER_QUAD_GEOMETRY = 140;
-    private static final int BYTES_PER_QUAD_UV = 64;
+    
+    // Page size: 64KB (approx 321 quads).
+    // Small enough to keep memory low with many materials, large enough for efficient IO.
+    private static final int PAGE_SIZE = 64 * 1024; 
+    private static final int BYTES_PER_QUAD = 204; // 140 geo + 64 uv
 
-    private final FileChannel geometryChannel;
-    private final FileChannel uvChannel;
-    private final ByteBuffer geometryBuffer;
-    private final ByteBuffer uvBuffer;
+    private final FileChannel tempChannel;
     private final SpriteIndex spriteIndex;
     private final GeometryIndex geometryIndex;
-
+    
+    // Active buckets for each material/animation group
+    private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+    
     private boolean closed = false;
 
-    StreamingGeometryWriter(Path geometryBin, Path uvrawBin, SpriteIndex spriteIndex, GeometryIndex geometryIndex) throws IOException {
+    StreamingGeometryWriter(Path tempFile, Path unusedUvPath, SpriteIndex spriteIndex, GeometryIndex geometryIndex) throws IOException {
         this.spriteIndex = spriteIndex;
         this.geometryIndex = geometryIndex;
 
-        // Create FileChannel (truncate mode)
-        this.geometryChannel = FileChannel.open(geometryBin,
-            StandardOpenOption.CREATE,
-            StandardOpenOption.WRITE,
-            StandardOpenOption.TRUNCATE_EXISTING);
-        this.uvChannel = FileChannel.open(uvrawBin,
+        // Use a single temporary file for all paged data
+        this.tempChannel = FileChannel.open(tempFile,
             StandardOpenOption.CREATE,
             StandardOpenOption.WRITE,
             StandardOpenOption.TRUNCATE_EXISTING);
 
-        // Create DirectByteBuffer (reduce memory copying)
-        this.geometryBuffer = ByteBuffer.allocateDirect(GEOMETRY_BUFFER_SIZE)
-            .order(ByteOrder.LITTLE_ENDIAN);
-        this.uvBuffer = ByteBuffer.allocateDirect(UV_BUFFER_SIZE)
-            .order(ByteOrder.LITTLE_ENDIAN);
-
-        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Initialized geometry writer");
-        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] geometry.bin: " + geometryBin);
-        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] uvraw.bin: " + uvrawBin);
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Initialized Paged Writer");
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Temp file: " + tempFile);
     }
 
     /**
-     * Writes a single quad (thread-safe - called by single writer thread)
+     * Inner class representing a write buffer for a specific material group.
+     */
+    private static class Bucket {
+        final ByteBuffer buffer;
+        final Set<String> usedSprites = ConcurrentHashMap.newKeySet();
+        int quadCount = 0;
+        boolean doubleSided = false;
+
+        Bucket() {
+            this.buffer = ByteBuffer.allocateDirect(PAGE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        }
+    }
+
+    /**
+     * Writes a single quad from flat arrays (optimization to avoid small object allocation).
+     */
+    synchronized long writeQuadFlat(
+        String materialGroupKey,
+        String spriteKey,
+        String overlaySpriteKey,
+        float[] flatPositions, int posOffset,
+        float[] flatUv0, int uv0Offset,
+        float[] flatUv1, int uv1Offset,
+        float[] flatNormal, int normOffset,
+        float[] flatColors, int colOffset,
+        boolean doubleSided
+    ) throws IOException {
+        if (closed) {
+            throw new IllegalStateException("Writer is closed");
+        }
+
+        // Get sprite IDs
+        int spriteId = spriteIndex.getId(spriteKey);
+        int overlaySpriteId = overlaySpriteKey != null ? spriteIndex.getId(overlaySpriteKey) : -1;
+
+        // Get current quad offset (logical index, still useful for debugging/stats)
+        long logicalOffset = spriteIndex.nextQuadOffset();
+        spriteIndex.recordUsage(spriteKey, 0xFFFFFF, logicalOffset);
+
+        // Get or create bucket
+        Bucket bucket = buckets.computeIfAbsent(materialGroupKey, k -> new Bucket());
+
+        // Check if bucket has space
+        if (bucket.buffer.remaining() < BYTES_PER_QUAD) {
+            flushBucket(materialGroupKey, bucket);
+        }
+
+        // Write data to bucket (Interleaved)
+        ByteBuffer buf = bucket.buffer;
+        
+        // --- Geometry Part (140 bytes) ---
+        buf.putInt(materialGroupKey.hashCode());
+        buf.putInt(spriteId);
+        buf.putInt(overlaySpriteId);
+        buf.putInt(doubleSided ? 1 : 0); // Flags (using int for alignment/padding simplified)
+        
+        // Pos (48)
+        for (int i = 0; i < 12; i++) buf.putFloat(flatPositions[posOffset + i]);
+        // Norm (12)
+        if (flatNormal != null) {
+            for (int i = 0; i < 3; i++) buf.putFloat(flatNormal[normOffset + i]);
+        } else {
+            buf.putFloat(0f); buf.putFloat(1f); buf.putFloat(0f);
+        }
+        // Color (64)
+        for (int i = 0; i < 16; i++) buf.putFloat(flatColors[colOffset + i]);
+
+        // --- UV Part (64 bytes) ---
+        // UV0 (32)
+        for (int i = 0; i < 8; i++) buf.putFloat(flatUv0[uv0Offset + i]);
+        // UV1 (32)
+        if (flatUv1 != null) {
+            for (int i = 0; i < 8; i++) buf.putFloat(flatUv1[uv1Offset + i]);
+        } else {
+            for (int i = 0; i < 8; i++) buf.putFloat(0f);
+        }
+
+        // Update bucket tracking
+        bucket.quadCount++;
+        bucket.usedSprites.add(spriteKey);
+        if (overlaySpriteKey != null) bucket.usedSprites.add(overlaySpriteKey);
+        if (doubleSided) bucket.doubleSided = true;
+
+        return logicalOffset;
+    }
+
+    private void flushBucket(String materialKey, Bucket bucket) throws IOException {
+        if (bucket.quadCount == 0) return;
+
+        bucket.buffer.flip();
+        int bytesToWrite = bucket.buffer.limit();
+        
+        // Atomic write to end of channel
+        long fileOffset = tempChannel.size();
+        while (bucket.buffer.hasRemaining()) {
+            tempChannel.write(bucket.buffer);
+        }
+        
+        // Record page info
+        geometryIndex.recordPage(
+            materialKey,
+            bucket.usedSprites,
+            fileOffset,
+            bucket.quadCount,
+            bucket.doubleSided
+        );
+
+        // Reset bucket
+        bucket.buffer.clear();
+        bucket.quadCount = 0;
+        bucket.usedSprites.clear();
+        // Keep doubleSided flag? Usually resets, but MaterialChunk merges it anyway.
+        // Better to reset for next page accuracy.
+        bucket.doubleSided = false; 
+    }
+
+    /**
+     * Legacy single quad write support.
      */
     synchronized long writeQuad(
         String materialGroupKey,
@@ -73,116 +185,15 @@ final class StreamingGeometryWriter implements AutoCloseable {
         float[] colors,
         boolean doubleSided
     ) throws IOException {
-        if (closed) {
-            throw new IllegalStateException("Writer is closed");
-        }
-
-        // Get sprite IDs
-        int spriteId = spriteIndex.getId(spriteKey);
-        int overlaySpriteId = overlaySpriteKey != null ? spriteIndex.getId(overlaySpriteKey) : -1;
-
-        // Get current quad offset
-        long quadOffset = spriteIndex.nextQuadOffset();
-
-        // Record to index
-        spriteIndex.recordUsage(spriteKey, 0xFFFFFF, quadOffset); // Default tint is white
-        geometryIndex.recordQuad(materialGroupKey, spriteKey, quadOffset, doubleSided);
-
-        // Write to geometry.bin
-        writeGeometryData(materialGroupKey, spriteId, overlaySpriteId, positions, normal, colors, doubleSided);
-
-        // Write to uvraw.bin
-        writeUVData(uv0, uv1);
-
-        return quadOffset;
-    }
-
-    private void writeGeometryData(
-        String materialGroupKey,
-        int spriteId,
-        int overlaySpriteId,
-        float[] positions,
-        float[] normal,
-        float[] colors,
-        boolean doubleSided
-    ) throws IOException {
-        // Ensure buffer has enough space
-        if (geometryBuffer.remaining() < BYTES_PER_QUAD_GEOMETRY) {
-            flushGeometry();
-        }
-
-        // Write geometry data (140 bytes)
-        geometryBuffer.putInt(materialGroupKey.hashCode()); // 4 bytes
-        geometryBuffer.putInt(spriteId);                     // 4 bytes
-        geometryBuffer.putInt(overlaySpriteId);              // 4 bytes
-        geometryBuffer.put((byte) (doubleSided ? 1 : 0));   // 1 byte
-        geometryBuffer.put((byte) 0);                        // padding 3 bytes
-        geometryBuffer.put((byte) 0);
-        geometryBuffer.put((byte) 0);
-
-        // positions: 12 floats (48 bytes)
-        for (int i = 0; i < 12; i++) {
-            geometryBuffer.putFloat(positions[i]);
-        }
-
-        // normal: 3 floats (12 bytes)
-        if (normal != null && normal.length >= 3) {
-            for (int i = 0; i < 3; i++) {
-                geometryBuffer.putFloat(normal[i]);
-            }
-        } else {
-            // Default normal (pointing up)
-            geometryBuffer.putFloat(0f);
-            geometryBuffer.putFloat(1f);
-            geometryBuffer.putFloat(0f);
-        }
-
-        // colors: 16 floats (64 bytes)
-        for (int i = 0; i < 16; i++) {
-            geometryBuffer.putFloat(colors[i]);
-        }
-    }
-
-    private void writeUVData(float[] uv0, float[] uv1) throws IOException {
-        // Ensure buffer has enough space
-        if (uvBuffer.remaining() < BYTES_PER_QUAD_UV) {
-            flushUV();
-        }
-
-        // uv0: 8 floats (32 bytes)
-        for (int i = 0; i < 8; i++) {
-            uvBuffer.putFloat(uv0[i]);
-        }
-
-        // uv1: 8 floats (32 bytes)
-        if (uv1 != null && uv1.length >= 8) {
-            for (int i = 0; i < 8; i++) {
-                uvBuffer.putFloat(uv1[i]);
-            }
-        } else {
-            // Default UV is 0
-            for (int i = 0; i < 8; i++) {
-                uvBuffer.putFloat(0f);
-            }
-        }
-    }
-
-    private void flushGeometry() throws IOException {
-        if (geometryBuffer.position() == 0) return;
-        geometryBuffer.flip();
-        while (geometryBuffer.hasRemaining()) {
-            geometryChannel.write(geometryBuffer);
-        }
-        geometryBuffer.clear();
-    }
-
-    private void flushUV() throws IOException {
-        if (uvBuffer.position() == 0) return;
-        uvBuffer.flip();
-        while (uvBuffer.hasRemaining()) {
-            uvChannel.write(uvBuffer);
-        }
-        uvBuffer.clear();
+        return writeQuadFlat(
+            materialGroupKey, spriteKey, overlaySpriteKey,
+            positions, 0,
+            uv0, 0,
+            uv1, 0,
+            normal, 0,
+            colors, 0,
+            doubleSided
+        );
     }
 
     /**
@@ -191,13 +202,15 @@ final class StreamingGeometryWriter implements AutoCloseable {
     void finalizeWrite() throws IOException {
         if (closed) return;
 
-        flushGeometry();
-        flushUV();
+        VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Flushing all buckets...");
+        for (Map.Entry<String, Bucket> entry : buckets.entrySet()) {
+            flushBucket(entry.getKey(), entry.getValue());
+        }
+        buckets.clear();
 
         long totalQuads = spriteIndex.getTotalQuadCount();
         VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] Finalized. Total quads: %d", totalQuads));
-        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] geometry.bin size: %.2f MB", geometryChannel.size() / 1024.0 / 1024.0));
-        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] uvraw.bin size: %.2f MB", uvChannel.size() / 1024.0 / 1024.0));
+        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] Temp file size: %.2f MB", tempChannel.size() / 1024.0 / 1024.0));
     }
 
     SpriteIndex getSpriteIndex() {
@@ -214,8 +227,7 @@ final class StreamingGeometryWriter implements AutoCloseable {
         closed = true;
 
         finalizeWrite();
-        geometryChannel.close();
-        uvChannel.close();
+        tempChannel.close();
 
         VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Closed");
     }

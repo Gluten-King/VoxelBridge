@@ -9,46 +9,53 @@ import java.util.concurrent.ConcurrentHashMap;
 final class GeometryIndex {
 
     // Material metadata mapping.
-    // Material metadata mapping.
     private final Map<String, MaterialChunk> materials = new ConcurrentHashMap<>();
+
+    /**
+     * Page info: location and size of a contiguous block of quads in the file.
+     */
+    record PageInfo(long byteOffset, int quadCount) {}
 
     /**
      * Per-material geometry metadata.
      */
     record MaterialChunk(
         String materialGroupKey,
-        List<Long> quadOffsets,
+        List<PageInfo> pages,
         boolean doubleSided,
         Set<String> usedSprites
     ) {
         int quadCount() {
-            return quadOffsets.size();
+            int sum = 0;
+            for (PageInfo p : pages) sum += p.quadCount();
+            return sum;
         }
     }
 
     /**
-     * Record a quad write for a material.
+     * Record a flushed page for a material.
      */
-    void recordQuad(String materialGroupKey, String spriteKey, long quadOffset, boolean doubleSided) {
+    void recordPage(String materialGroupKey, Set<String> spriteKeys, long byteOffset, int quadCount, boolean doubleSided) {
         materials.compute(materialGroupKey, (k, chunk) -> {
+            PageInfo page = new PageInfo(byteOffset, quadCount);
             if (chunk == null) {
                 Set<String> sprites = ConcurrentHashMap.newKeySet();
-                sprites.add(spriteKey);
-                List<Long> offsets = new ArrayList<>();
-                offsets.add(quadOffset);
+                sprites.addAll(spriteKeys);
+                List<PageInfo> pages = new ArrayList<>();
+                pages.add(page);
                 return new MaterialChunk(
                     materialGroupKey,
-                    offsets,
+                    pages,
                     doubleSided,
                     sprites
                 );
             } else {
-                chunk.usedSprites().add(spriteKey);
-                chunk.quadOffsets().add(quadOffset);
+                chunk.usedSprites().addAll(spriteKeys);
+                chunk.pages().add(page);
                 if (doubleSided && !chunk.doubleSided()) {
                     return new MaterialChunk(
                         chunk.materialGroupKey(),
-                        chunk.quadOffsets(),
+                        chunk.pages(),
                         true,
                         chunk.usedSprites()
                     );
