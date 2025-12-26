@@ -42,28 +42,14 @@ public final class OverlayManager {
 
     /**
      * Overlay quad data with all required rendering information.
+     *
+     * @param positions      World coordinates with offset applied
+     * @param direction      Direction for visibility culling
+     * @param materialKey    Base material key for overlay material name
+     * @param materialSuffix Suffix to append to materialKey (e.g., "_overlay", "_hilight", or null)
      */
-    private static class OverlayQuadData {
-        final float[] positions;     // World coordinates with offset applied
-        final float[] normal;
-        final float[] uv;
-        final String spriteKey;
-        final int color;
-        final Direction direction;    // Direction for visibility culling
-        final String materialKey;     // Base material key for overlay material name
-        final String materialSuffix;  // Suffix to append to materialKey (e.g., "_overlay", "_hilight", or null)
-
-        OverlayQuadData(float[] positions, float[] normal, float[] uv,
-                        String spriteKey, int color, Direction direction, String materialKey, String materialSuffix) {
-            this.positions = positions;
-            this.normal = normal;
-            this.uv = uv;
-            this.spriteKey = spriteKey;
-            this.color = color;
-            this.direction = direction;
-            this.materialKey = materialKey;
-            this.materialSuffix = materialSuffix;
-        }
+        private record OverlayQuadData(float[] positions, float[] normal, float[] uv, String spriteKey, int color,
+                                       Direction direction, String materialKey, String materialSuffix) {
     }
 
     public OverlayManager(ExportContext ctx, Level level, double offsetX, double offsetY, double offsetZ) {
@@ -348,8 +334,8 @@ public final class OverlayManager {
                 ColorModeHandler.ColorData overlayColorData = ColorModeHandler.prepareColors(ctx, overlay.color, true);
                 ctx.registerSpriteMaterial(overlay.spriteKey, overlayMaterialKey);
                 sceneSink.addQuad(overlayMaterialKey, overlay.spriteKey, overlay.spriteKey,
-                    overlay.positions, overlay.uv, overlayColorData.uv1, overlay.normal,
-                    overlayColorData.colors, doubleSided);
+                    overlay.positions, overlay.uv, overlayColorData.uv1(), overlay.normal,
+                        overlayColorData.colors(), doubleSided);
             }
         }
     }
@@ -382,7 +368,14 @@ public final class OverlayManager {
         for (int i = 0; i < 4; i++) {
             int abgr = vertexColors[i];
             int rgb = abgr & 0x00FFFFFF;
-            if (rgb != 0x00FFFFFF) return 0xFF000000 | rgb;
+            if (rgb != 0x00FFFFFF) {
+                // Convert ABGR to ARGB (swap R/B) to match vanilla tint expectations.
+                int a = (abgr >>> 24) & 0xFF;
+                int b = (abgr >>> 16) & 0xFF;
+                int g = (abgr >>> 8) & 0xFF;
+                int r = abgr & 0xFF;
+                return (a << 24) | (r << 16) | (g << 8) | b;
+            }
         }
 
         if (quad.getTintIndex() >= 0) {

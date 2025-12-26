@@ -62,7 +62,7 @@ final class BinaryChunk implements Closeable {
             }
 
             written += chunk;
-            size += chunk * 4;
+            size += chunk * 4L;
         }
 
         return offset;
@@ -96,7 +96,7 @@ final class BinaryChunk implements Closeable {
                     scratch.putFloat(buf[idx + i]);
                 }
                 idx += chunk;
-                size += chunk * 4;
+                size += chunk * 4L;
             }
             written += need;
         }
@@ -124,7 +124,7 @@ final class BinaryChunk implements Closeable {
             }
 
             written += chunk;
-            size += chunk * 4;
+            size += chunk * 4L;
         }
 
         return offset;

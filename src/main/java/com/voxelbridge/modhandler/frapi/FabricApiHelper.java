@@ -149,12 +149,18 @@ public final class FabricApiHelper {
         int vertexSize = DefaultVertexFormat.BLOCK.getVertexSize() / 4;
         int[] vertices = new int[vertexSize * 4];
 
+        boolean hasBakedColor = false;
         for (int i = 0; i < 4; i++) {
             int offset = i * vertexSize;
-            vertices[offset + 0] = Float.floatToRawIntBits(quad.x(i));
+            vertices[offset] = Float.floatToRawIntBits(quad.x(i));
             vertices[offset + 1] = Float.floatToRawIntBits(quad.y(i));
             vertices[offset + 2] = Float.floatToRawIntBits(quad.z(i));
-            vertices[offset + 3] = quad.color(i);
+            int color = quad.color(i);
+            int abgr = argbToAbgr(color);
+            vertices[offset + 3] = abgr;
+            if (abgr != -1 && abgr != 0xFFFFFFFF) {
+                hasBakedColor = true;
+            }
             vertices[offset + 4] = Float.floatToRawIntBits(quad.u(i));
             vertices[offset + 5] = Float.floatToRawIntBits(quad.v(i));
             vertices[offset + 6] = quad.lightmap(i);
@@ -176,10 +182,18 @@ public final class FabricApiHelper {
 
         TextureAtlasSprite sprite = spriteFinder.find(quad, 0);
         Direction cullFace = quad.cullFace();
-        int tintIndex = quad.colorIndex();
+        int tintIndex = hasBakedColor ? -1 : quad.colorIndex();
         boolean shade = true;
 
         return new BakedQuad(vertices, tintIndex, cullFace, sprite, shade);
+    }
+
+    private static int argbToAbgr(int argb) {
+        int a = (argb >>> 24) & 0xFF;
+        int r = (argb >>> 16) & 0xFF;
+        int g = (argb >>> 8) & 0xFF;
+        int b = argb & 0xFF;
+        return (a << 24) | (b << 16) | (g << 8) | r;
     }
 
     private static int packNormal(float x, float y, float z) {

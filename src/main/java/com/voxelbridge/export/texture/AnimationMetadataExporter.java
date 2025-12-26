@@ -125,7 +125,7 @@ public final class AnimationMetadataExporter {
         }
 
         try {
-            Path metaFile = Path.of(frameFile.toString() + ".mcmeta");
+            Path metaFile = Path.of(frameFile + ".mcmeta");
 
             // Simple frame metadata (just marks it as part of animation)
             String json = "{\n" +

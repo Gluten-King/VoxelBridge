@@ -1,6 +1,5 @@
 package com.voxelbridge.export.scene;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -37,7 +36,7 @@ public final class BufferedSceneSink implements SceneSink {
     }
 
     @Override
-    public Path write(SceneWriteRequest request) throws IOException {
+    public Path write(SceneWriteRequest request) {
         throw new UnsupportedOperationException("Buffered sink cannot write to file directly. Use flushTo().");
     }
 

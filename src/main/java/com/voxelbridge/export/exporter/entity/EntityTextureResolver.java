@@ -119,7 +119,7 @@ public final class EntityTextureResolver {
             if (hasItem) {
                 VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
                     "[EntityData] %s %s=%s",
-                    itemFrame.getType(), "item", item.getItem().toString()));
+                    itemFrame.getType(), "item", item.getItem()));
             }
             VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
                 "[EntityData] %s %s=%s",

@@ -99,8 +99,7 @@ public final class BlockEntityRenderer {
         com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
         BlockEntityRenderDispatcher dispatcher = ctx.getMc().getBlockEntityRenderDispatcher();
         net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer =
-            (net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity>)
-            dispatcher.getRenderer(blockEntity);
+                dispatcher.getRenderer(blockEntity);
 
         if (renderer == null) {
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] No renderer found for: " + blockEntity.getClass().getSimpleName());
@@ -479,7 +478,7 @@ public final class BlockEntityRenderer {
                             int argb = toArgb(colors);
                             boolean hasTint = !isWhite(colors);
                             ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(parent.ctx, argb, hasTint);
-                            uv1 = colorData.uv1 != null ? colorData.uv1 : EMPTY_UV;
+                            uv1 = colorData.uv1() != null ? colorData.uv1() : EMPTY_UV;
                             System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
                         }
 
@@ -529,7 +528,7 @@ public final class BlockEntityRenderer {
                     int argb = toArgb(colors);
                     boolean hasTint = !isWhite(colors);
                     ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(parent.ctx, argb, hasTint);
-                    uv1 = colorData.uv1 != null ? colorData.uv1 : EMPTY_UV;
+                    uv1 = colorData.uv1() != null ? colorData.uv1() : EMPTY_UV;
                     // Force colors to white in colormap mode
                     System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
                 }

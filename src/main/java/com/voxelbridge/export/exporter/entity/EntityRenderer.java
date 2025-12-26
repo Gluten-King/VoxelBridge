@@ -88,7 +88,7 @@ public final class EntityRenderer {
 
             EntityRenderDispatcher dispatcher = ctx.getMc().getEntityRenderDispatcher();
             net.minecraft.client.renderer.entity.EntityRenderer<? super Entity> renderer =
-                (net.minecraft.client.renderer.entity.EntityRenderer<? super Entity>) dispatcher.getRenderer(entity);
+                    dispatcher.getRenderer(entity);
             if (renderer == null) {
                 VoxelBridgeLogger.error(LogModule.ENTITY, String.format(
                     "[ERROR] %s at [%.2f, %.2f, %.2f] - %s",
@@ -487,7 +487,7 @@ public final class EntityRenderer {
                     int argb = toArgb(colors);
                     boolean hasTint = !isWhite(colors);
                     ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(parent.ctx, argb, hasTint);
-                    uv1 = colorData.uv1 != null ? colorData.uv1 : EMPTY_UV;
+                    uv1 = colorData.uv1() != null ? colorData.uv1() : EMPTY_UV;
                     System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
                 }
 

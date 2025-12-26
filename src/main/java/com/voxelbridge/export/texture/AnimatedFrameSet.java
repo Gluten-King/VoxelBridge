@@ -8,10 +8,7 @@ import java.util.List;
  * Holds pre-split animation frames for a sprite.
  * Frame duration defaults to uniform ticks (mc-style); consumers may reinterpret.
  */
-public final class AnimatedFrameSet {
-    private final List<BufferedImage> frames;
-    private final AnimationMetadata metadata;
-
+public record AnimatedFrameSet(List<BufferedImage> frames, AnimationMetadata metadata) {
     /**
      * Backward-compatible constructor for simple animations with uniform timing
      */
@@ -27,12 +24,9 @@ public final class AnimatedFrameSet {
         this.metadata = metadata != null ? metadata : new AnimationMetadata(1);
     }
 
+    @Override
     public List<BufferedImage> frames() {
         return Collections.unmodifiableList(frames);
-    }
-
-    public AnimationMetadata metadata() {
-        return metadata;
     }
 
     /**

@@ -5,12 +5,10 @@ import com.voxelbridge.export.texture.EntityTextureManager;
 import com.voxelbridge.export.texture.TextureLoader;
 import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.resources.model.ModelBakery;
-import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.level.block.entity.BannerBlockEntity;
-import net.minecraft.world.level.block.entity.BannerPattern;
 import net.minecraft.world.level.block.entity.BannerPatternLayers;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -54,7 +52,7 @@ final class BannerTextureBaker {
         overrides.mapAndSkip(altBase2, bakedHandle);
         overrides.skipSprite(FLAG_ONLY_TEXTURE);
         for (BannerPatternLayers.Layer layer : banner.getPatterns().layers()) {
-            ResourceLocation sprite = Sheets.getBannerMaterial((Holder)layer.pattern()).texture();
+            ResourceLocation sprite = Sheets.getBannerMaterial(layer.pattern()).texture();
             overrides.mapAndSkip(sprite, bakedHandle);
             String patternPath = sprite.getPath();
             if (patternPath.contains("/")) {
@@ -71,7 +69,7 @@ final class BannerTextureBaker {
         BufferedImage result = BannerTextureBaker.copy(base);
         BannerTextureBaker.applyTinted(result, FLAG_ONLY_TEXTURE, banner.getBaseColor());
         for (BannerPatternLayers.Layer layer : banner.getPatterns().layers()) {
-            BannerTextureBaker.applyTinted(result, Sheets.getBannerMaterial((Holder)layer.pattern()).texture(), layer.color());
+            BannerTextureBaker.applyTinted(result, Sheets.getBannerMaterial(layer.pattern()).texture(), layer.color());
         }
         return result;
     }
@@ -164,7 +162,7 @@ final class BannerTextureBaker {
         sb.append(banner.getBaseColor().getSerializedName());
         int index = 0;
         for (BannerPatternLayers.Layer layer : banner.getPatterns().layers()) {
-            ResourceLocation id = layer.pattern().unwrapKey().map(ResourceKey::location).orElseGet(() -> ((BannerPattern)layer.pattern().value()).assetId());
+            ResourceLocation id = layer.pattern().unwrapKey().map(ResourceKey::location).orElseGet(() -> layer.pattern().value().assetId());
             String colorName = layer.color() != null ? layer.color().getSerializedName() : "none";
             sb.append("__").append(index++).append(":").append(id).append("@").append(colorName);
         }
@@ -189,7 +187,7 @@ final class BannerTextureBaker {
                 sb.append('_');
             }
         }
-        if (sb.length() == 0) {
+        if (sb.isEmpty()) {
             sb.append("banner");
         }
         return sb.toString();

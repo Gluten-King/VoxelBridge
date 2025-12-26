@@ -333,8 +333,7 @@ final class ChunkDeduplicator {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof VertexKey)) return false;
-            VertexKey other = (VertexKey) o;
+            if (!(o instanceof VertexKey other)) return false;
             return spriteHash == other.spriteHash &&
                 k_px == other.k_px && k_py == other.k_py && k_pz == other.k_pz &&
                 k_u == other.k_u && k_v == other.k_v &&

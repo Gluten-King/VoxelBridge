@@ -54,7 +54,7 @@ public final class EntityExporter {
                 Vec3 pos = entity.position();
                 VoxelBridgeLogger.info(LogModule.ENTITY, String.format("Exporting entity: %s (%s) at [%.2f, %.2f, %.2f]",
                     entity.getName().getString(),
-                    entity.getType().toString(),
+                        entity.getType(),
                     pos.x, pos.y, pos.z));
                 net.minecraft.world.phys.AABB bb = entity.getBoundingBox();
                 VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
@@ -81,9 +81,6 @@ public final class EntityExporter {
             return false;
         }
         // Explicitly skip players regardless of AI flag.
-        if (entity instanceof Player) {
-            return false;
-        }
-        return true;
+        return !(entity instanceof Player);
     }
 }

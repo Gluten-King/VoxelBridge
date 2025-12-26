@@ -346,7 +346,7 @@ public final class GltfSceneBuilder implements SceneSink {
      * Splits file into 1GB segments to bypass integer indexing limits and manage memory better.
      */
     private static final class SegmentedMappedReader implements AutoCloseable {
-        private static final long SEGMENT_SIZE = 1L * 1024 * 1024 * 1024; // 1GB
+        private static final long SEGMENT_SIZE = (long) 1024 * 1024 * 1024; // 1GB
         private final List<java.nio.MappedByteBuffer> segments = new ArrayList<>();
         private final long fileSize;
 
@@ -763,10 +763,10 @@ public final class GltfSceneBuilder implements SceneSink {
                 for (float f : qUv1) uv1Array[uv1Idx++] = f;
                 
                 // Indices
-                indexArray[idxIdx++] = currentVertexBase + 0;
+                indexArray[idxIdx++] = currentVertexBase;
                 indexArray[idxIdx++] = currentVertexBase + 1;
                 indexArray[idxIdx++] = currentVertexBase + 2;
-                indexArray[idxIdx++] = currentVertexBase + 0;
+                indexArray[idxIdx++] = currentVertexBase;
                 indexArray[idxIdx++] = currentVertexBase + 2;
                 indexArray[idxIdx++] = currentVertexBase + 3;
                 

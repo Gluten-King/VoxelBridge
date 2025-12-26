@@ -232,9 +232,7 @@ public final class AnimatedTextureHelper {
             BufferedImage full = TextureLoader.readTexture(contents.name(), true);
             if (full != null) {
                 AnimatedFrameSet frames = splitWithMetadata(spriteKey, full, meta, repo);
-                if (frames != null) {
-                    return frames;
-                }
+                return frames;
             }
             return null;
         } catch (Exception e) {

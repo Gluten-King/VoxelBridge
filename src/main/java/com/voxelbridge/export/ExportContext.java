@@ -243,7 +243,7 @@ public final class ExportContext {
     /**
      * Stores atlas placement information for block entity textures.
      */
-    public static record BlockEntityAtlasPlacement(int page, int udim, int x, int y, int width, int height, int atlasSize) {
+    public record BlockEntityAtlasPlacement(int page, int udim, int x, int y, int width, int height, int atlasSize) {
         public float u0() {
             double tileU = page % 10;
             return (float) (tileU + (double) x / atlasSize);

@@ -8,13 +8,8 @@ import java.util.List;
  * Supports all Minecraft animation properties including per-frame timing,
  * custom frame order, and interpolation settings.
  */
-public final class AnimationMetadata {
-    private final int defaultFrameTime;
-    private final List<FrameTiming> frameTimings;
-    private final boolean interpolate;
-    private final int frameWidth;
-    private final int frameHeight;
-
+public record AnimationMetadata(int defaultFrameTime, List<FrameTiming> frameTimings, boolean interpolate,
+                                int frameWidth, int frameHeight) {
     /**
      * Simple constructor for uniform timing (backward compatibility)
      */
@@ -26,10 +21,10 @@ public final class AnimationMetadata {
      * Full constructor for metadata-driven animations
      */
     public AnimationMetadata(int defaultFrameTime,
-                            List<FrameTiming> frameTimings,
-                            boolean interpolate,
-                            int frameWidth,
-                            int frameHeight) {
+                             List<FrameTiming> frameTimings,
+                             boolean interpolate,
+                             int frameWidth,
+                             int frameHeight) {
         this.defaultFrameTime = Math.max(1, defaultFrameTime);
         this.frameTimings = frameTimings == null ? List.of() : List.copyOf(frameTimings);
         this.interpolate = interpolate;
@@ -37,24 +32,9 @@ public final class AnimationMetadata {
         this.frameHeight = frameHeight;
     }
 
-    public int defaultFrameTime() {
-        return defaultFrameTime;
-    }
-
+    @Override
     public List<FrameTiming> frameTimings() {
         return Collections.unmodifiableList(frameTimings);
-    }
-
-    public boolean interpolate() {
-        return interpolate;
-    }
-
-    public int frameWidth() {
-        return frameWidth;
-    }
-
-    public int frameHeight() {
-        return frameHeight;
     }
 
     /**
@@ -77,5 +57,6 @@ public final class AnimationMetadata {
     /**
      * Record for per-frame timing information
      */
-    public record FrameTiming(int index, int time) {}
+    public record FrameTiming(int index, int time) {
+    }
 }

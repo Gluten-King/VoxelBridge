@@ -39,7 +39,7 @@ public final class ExportService {
     public static void collectTintVariants(Level level,
                                            BlockPos pos1,
                                            BlockPos pos2,
-                                           ExportContext ctx) throws IOException {
+                                           ExportContext ctx) {
         if (!(level instanceof ClientLevel clientLevel)) {
             throw new IllegalStateException("[VoxelBridge] Must run on client side!");
         }

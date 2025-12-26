@@ -2,7 +2,6 @@ package com.voxelbridge.export.texture;
 
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
-import java.io.IOException;
 import java.nio.file.Path;
 
 import ar.com.hjg.pngj.FilterType;
@@ -16,7 +15,7 @@ import ar.com.hjg.pngj.PngWriter;
 public final class PngjWriter {
     private PngjWriter() {}
 
-    public static void write(BufferedImage src, Path target) throws IOException {
+    public static void write(BufferedImage src, Path target) {
         int w = src.getWidth();
         int h = src.getHeight();
         int[] argb;

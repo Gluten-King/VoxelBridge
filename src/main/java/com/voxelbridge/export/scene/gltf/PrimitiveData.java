@@ -127,7 +127,7 @@ final class PrimitiveData {
             if (!spriteRanges.isEmpty()) {
                 SpriteRange last = spriteRanges.get(spriteRanges.size() - 1);
                 if (last.spriteKey.equals(spriteKey) &&
-                   (overlaySpriteKey == null ? last.overlaySpriteKey == null : overlaySpriteKey.equals(last.overlaySpriteKey)) &&
+                   (Objects.equals(overlaySpriteKey, last.overlaySpriteKey)) &&
                    last.startVertexIndex + last.count == startVert) {
                     spriteRanges.set(spriteRanges.size() - 1, new SpriteRange(last.startVertexIndex, last.count + addedCount, spriteKey, overlaySpriteKey));
                 } else {

@@ -1,5 +1,6 @@
 package com.voxelbridge.export.exporter;
 
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
@@ -30,7 +31,7 @@ public final class QuadProcessor {
     private final SceneSink sceneSink;
     private final double offsetX, offsetY, offsetZ;
 
-    // Track which sprites have had PBR textures loaded
+    // Placeholder to ensure tool reads the file first
     private final Set<String> pbrLoadedSprites = new HashSet<>();
 
     // Track processed quads to avoid duplicates (Optimization: Use FastUtil primitive set)
@@ -100,27 +101,98 @@ public final class QuadProcessor {
                                       doubleSided, vertexData.uvs());
         if (!quadKeys.add(quadKey)) return;
 
-        // Compute tint color
-        int argb = computeTintColor(state, pos, quad);
+        boolean hasBaked = hasBakedColors(vertexData.colors());
 
-        // Prepare color data
-        ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(ctx, argb, quad.getTintIndex() >= 0);
+        ColorModeHandler.ColorData colorData;
+
+        if (hasBaked) {
+            // Prefer baked vertex colors (e.g., FRAPI-provided tint) over vanilla tint.
+            if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.COLORMAP) {
+                int bakedTint = extractBakedTintArgb(vertexData.colors());
+                colorData = ColorModeHandler.prepareColors(ctx, bakedTint, true);
+            } else {
+                float[] linearColors = convertABGRtoLinearRGBA(vertexData.colors());
+                colorData = new ColorModeHandler.ColorData(null, linearColors);
+            }
+        } else {
+            // Compute tint color (returns -1 if no tint found)
+            int tintColor = computeTintColor(state, pos, quad);
+            if (tintColor != -1) {
+                // Found a valid block tint color
+                colorData = ColorModeHandler.prepareColors(ctx, tintColor, true);
+            } else {
+                // Default to white
+                colorData = ColorModeHandler.prepareColors(ctx, 0xFFFFFFFF, false);
+            }
+        }
 
         // Register sprite material (Intern strings)
         ctx.registerSpriteMaterial(spriteKey, blockKey);
 
         // Output quad (Intern keys)
         sceneSink.addQuad(ctx.intern(blockKey), ctx.intern(spriteKey), null, vertexData.positions(), vertexData.uvs(),
-            colorData.uv1, vertexData.normal(), colorData.colors, doubleSided);
+                colorData.uv1(), vertexData.normal(), colorData.colors(), doubleSided);
     }
 
     /**
-     * Computes tint color from block colors.
+     * Computes tint color from block colors. Returns -1 if no tint logic exists.
      */
     private int computeTintColor(BlockState state, BlockPos pos, BakedQuad quad) {
-        if (quad.getTintIndex() < 0) return 0xFFFFFFFF;
-        int argb = Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.getTintIndex());
-        return (argb == -1) ? 0xFFFFFFFF : argb;
+        if (quad.getTintIndex() < 0) return -1;
+        return Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.getTintIndex());
+    }
+
+    private boolean hasBakedColors(int[] colors) {
+        for (int c : colors) {
+            if (c != 0xFFFFFFFF && c != -1) return true;
+        }
+        return false;
+    }
+
+    private float[] convertABGRtoLinearRGBA(int[] abgrColors) {
+        float[] out = new float[16];
+        for (int i = 0; i < 4; i++) {
+            int c = abgrColors[i];
+            // ABGR format: A=32-24, B=24-16, G=16-8, R=8-0
+            // BUT: VertexExtractor.extractFromQuad reads directly from int[] verts.
+            // If the raw format is ABGR (0xAABBGGRR), then:
+            // R = c & 0xFF
+            // G = (c >> 8) & 0xFF
+            // B = (c >> 16) & 0xFF
+            // A = (c >> 24) & 0xFF
+            float r = srgbToLinearComponent(c & 0xFF);
+            float g = srgbToLinearComponent((c >> 8) & 0xFF);
+            float b = srgbToLinearComponent((c >> 16) & 0xFF);
+            float a = ((c >> 24) & 0xFF) / 255.0f;
+            
+            int base = i * 4;
+            out[base] = r;
+            out[base + 1] = g;
+            out[base + 2] = b;
+            out[base + 3] = a;
+        }
+        return out;
+    }
+
+    private int extractBakedTintArgb(int[] abgrColors) {
+        for (int c : abgrColors) {
+            if (c != 0xFFFFFFFF && c != -1) {
+                int a = (c >>> 24) & 0xFF;
+                int b = (c >>> 16) & 0xFF;
+                int g = (c >>> 8) & 0xFF;
+                int r = c & 0xFF;
+                return (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+        return 0xFFFFFFFF;
+    }
+
+    private float srgbToLinearComponent(int c) {
+        float v = c / 255.0f;
+        if (v <= 0.04045f) {
+            return v / 12.92f;
+        }
+        return (float) Math.pow((v + 0.055f) / 1.055f, 2.4f);
     }
 
     /**

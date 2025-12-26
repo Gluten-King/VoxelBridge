@@ -127,11 +127,6 @@ final class QuadCollector implements VertexConsumer {
         }
         return this;
     }
-    
-    // 1.21+ compatibility shims
-    public void endVertex() {} 
-    public void defaultColor(int r, int g, int b, int a) {}
-    public void unsetDefaultColor() {}
 
     private void emitQuad() {
         TextureAtlasSprite sprite = chooseSpriteForQuad();
@@ -154,7 +149,7 @@ final class QuadCollector implements VertexConsumer {
 
         // Send to sink (fluids typically do not have overlays)
         sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent",
-                     positions.clone(), normalizedUVs, colorData.uv1, normal, colorData.colors, true);
+                     positions.clone(), normalizedUVs, colorData.uv1(), normal, colorData.colors(), true);
 
         resetQuadState();
     }

@@ -219,11 +219,7 @@ public final class BlockExporter {
 
             // Occlusion culling
             if (dir != null) {
-                if (!isTransparent) {
-                    // Opaque blocks: cull if neighbor is solid
-                    if (isFaceOccluded(pos, dir)) continue;
-                }
-                // Transparent blocks: no face culling (internal faces must remain visible)
+                if (shouldCull(state, pos, dir)) continue;
             }
 
             // Process quad
@@ -233,11 +229,7 @@ public final class BlockExporter {
         // PASS 3: Output overlays with culling
         overlayManager.outputOverlays(sceneSink, state, dir -> {
             if (dir == null) return false;
-            if (!isTransparent) {
-                return isFaceOccluded(pos, dir);
-            }
-            // Transparent blocks: no face culling for overlays
-            return false;
+            return shouldCull(state, pos, dir);
         });
     }
 
@@ -420,9 +412,7 @@ public final class BlockExporter {
         if (localX == 0 && isChunkMissing(cx - 1, cz)) return false;
         if (localX == 15 && isChunkMissing(cx + 1, cz)) return false;
         if (localZ == 0 && isChunkMissing(cx, cz - 1)) return false;
-        if (localZ == 15 && isChunkMissing(cx, cz + 1)) return false;
-
-        return true;
+        return localZ != 15 || !isChunkMissing(cx, cz + 1);
     }
 
     private boolean isChunkMissing(int cx, int cz) {
@@ -439,10 +429,50 @@ public final class BlockExporter {
         return true;
     }
 
-    private boolean isFaceOccluded(BlockPos pos, Direction face) {
-        mutablePos.setWithOffset(pos, face);
+    private boolean shouldCull(BlockState state, BlockPos pos, Direction dir) {
+        mutablePos.setWithOffset(pos, dir);
         if (isOutsideRegion(mutablePos)) return false;
-        return isNeighborSolid(mutablePos);
+
+        BlockState neighborState = getNeighborState(mutablePos);
+        if (neighborState == null) return false;
+
+        // Opaque blocks: standard occlusion check (is neighbor solid?)
+        if (state.isSolidRender(level, pos)) {
+            // Re-use isNeighborSolid logic but with state we already fetched
+            if (ExportRuntimeConfig.isFillCaveEnabled()) {
+                if (neighborState.isAir() && level.getBrightness(LightLayer.SKY, mutablePos) == 0) {
+                    return true;
+                }
+            }
+            return neighborState.isSolidRender(level, mutablePos);
+        }
+
+        // Transparent blocks (Glass, etc.): use skipRendering (culls against same block)
+        return state.skipRendering(neighborState, dir);
+    }
+
+    private BlockState getNeighborState(BlockPos neighbor) {
+        if (chunkCache != null) {
+            int cx = neighbor.getX() >> 4;
+            int cz = neighbor.getZ() >> 4;
+            var chunk = chunkCache.getChunk(cx, cz, false);
+            if (chunk == null || chunk.isEmpty()) return null;
+            return chunk.getBlockState(neighbor);
+        } else {
+            return level.getBlockState(neighbor);
+        }
+    }
+
+    private boolean isNeighborSolid(BlockPos neighbor) {
+        BlockState state = getNeighborState(neighbor);
+        if (state == null) return true; // Treat unloaded as solid/occluding to avoid leaks?
+
+        if (ExportRuntimeConfig.isFillCaveEnabled()) {
+            if (state.isAir() && level.getBrightness(LightLayer.SKY, neighbor) == 0) {
+                return true;
+            }
+        }
+        return state.isSolidRender(level, neighbor);
     }
 
     private boolean isOutsideRegion(BlockPos pos) {
@@ -450,28 +480,6 @@ public final class BlockExporter {
         return pos.getX() < regionMin.getX() || pos.getX() > regionMax.getX()
             || pos.getY() < regionMin.getY() || pos.getY() > regionMax.getY()
             || pos.getZ() < regionMin.getZ() || pos.getZ() > regionMax.getZ();
-    }
-
-    private boolean isNeighborSolid(BlockPos neighbor) {
-        BlockState state;
-        if (chunkCache != null) {
-            int cx = neighbor.getX() >> 4;
-            int cz = neighbor.getZ() >> 4;
-            var chunk = chunkCache.getChunk(cx, cz, false);
-            if (chunk == null || chunk.isEmpty()) return true;
-            state = chunk.getBlockState(neighbor);
-        } else {
-            state = level.getBlockState(neighbor);
-        }
-
-        // FILLCAVE: Treat any air with skylight 0 as solid for occlusion culling
-        if (ExportRuntimeConfig.isFillCaveEnabled()) {
-            if (state.isAir() && level.getBrightness(LightLayer.SKY, neighbor) == 0) {
-                return true; // Pretend ALL cave_air is solid
-            }
-        }
-
-        return state.isSolidRender(level, neighbor);
     }
 
     private long computeBushSeed(BlockPos pos) {

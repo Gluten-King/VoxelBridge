@@ -136,13 +136,9 @@ public final class TextureAtlasPacker {
             int udim = 1001 + (i % 10) + (i / 10) * 10;
             String filename = prefix + udim + ".png";
             Path outputPath = outputDir.resolve(filename);
-            try {
-                PngjWriter.write(pages.get(i).image, outputPath);
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[TextureAtlasPacker] Wrote atlas page: " + filename);
-                }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+            PngjWriter.write(pages.get(i).image, outputPath);
+            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[TextureAtlasPacker] Wrote atlas page: " + filename);
             }
         });
 
@@ -176,21 +172,14 @@ public final class TextureAtlasPacker {
     }
 
     /**
-     * Internal structure representing a texture to be packed.
-     */
-    private static class TextureEntry {
-        final String spriteKey;
-        final BufferedImage image;
-
-        TextureEntry(String spriteKey, BufferedImage image) {
-            this.spriteKey = spriteKey;
-            this.image = image;
-        }
+         * Internal structure representing a texture to be packed.
+         */
+        private record TextureEntry(String spriteKey, BufferedImage image) {
 
         int getLargestDimension() {
-            return Math.max(image.getWidth(), image.getHeight());
+                return Math.max(image.getWidth(), image.getHeight());
+            }
         }
-    }
 
     /**
      * Internal structure representing a rectangle (free space or placed texture).

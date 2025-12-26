@@ -17,18 +17,11 @@ public final class ColorModeHandler {
 
     /**
      * Data class holding color-related information for quad output.
+     *
+     * @param uv1    UV coordinates for colormap texture (null if using vertex colors)
+     * @param colors Vertex colors (RGBA for 4 vertices)
      */
-    public static class ColorData {
-        /** UV coordinates for colormap texture (null if using vertex colors) */
-        public final float[] uv1;
-
-        /** Vertex colors (RGBA for 4 vertices) */
-        public final float[] colors;
-
-        public ColorData(float[] uv1, float[] colors) {
-            this.uv1 = uv1;
-            this.colors = colors;
-        }
+        public record ColorData(float[] uv1, float[] colors) {
     }
 
     /**

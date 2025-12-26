@@ -557,8 +557,7 @@ public final class StreamingRegionSampler {
     }
 
     private static boolean isChunkRenderable(Level level, ChunkPos chunkPos) {
-        if (!(level instanceof ClientLevel)) return true;
-        ClientLevel clientLevel = (ClientLevel) level;
+        if (!(level instanceof ClientLevel clientLevel)) return true;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null && mc.options != null) {
             ChunkPos p = mc.player.chunkPosition();

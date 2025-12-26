@@ -3,6 +3,7 @@ package com.voxelbridge.export.texture;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 
+import java.awt.AlphaComposite;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -54,44 +55,24 @@ public final class PbrAtlasWriter {
     }
 
     /**
-     * Configuration for PBR atlas generation.
-     * Contains all parameters needed to generate a PBR channel atlas.
-     */
-    public static class PbrAtlasConfig {
-        private final Path outputDir;
-        private final int atlasSize;
-        private final String filePrefix;
-        private final int defaultColor;
-        private final Set<Integer> usedPages;
-        private final Map<Integer, Integer> pageToUdim;
-
+         * Configuration for PBR atlas generation.
+         * Contains all parameters needed to generate a PBR channel atlas.
+         */
+        public record PbrAtlasConfig(Path outputDir, int atlasSize, String filePrefix, int defaultColor,
+                                     Set<Integer> usedPages, Map<Integer, Integer> pageToUdim) {
         /**
          * Creates a new PBR atlas configuration.
          *
-         * @param outputDir Directory where atlas PNG files will be written
-         * @param atlasSize Size of each atlas page (width and height in pixels)
-         * @param filePrefix Filename prefix for PNG files (e.g., "atlas_n_" for normals)
+         * @param outputDir    Directory where atlas PNG files will be written
+         * @param atlasSize    Size of each atlas page (width and height in pixels)
+         * @param filePrefix   Filename prefix for PNG files (e.g., "atlas_n_" for normals)
          * @param defaultColor ARGB color to fill when PBR texture is missing
-         * @param usedPages Set of page indices that need to be generated
-         * @param pageToUdim Mapping from page index to UDIM tile number
+         * @param usedPages    Set of page indices that need to be generated
+         * @param pageToUdim   Mapping from page index to UDIM tile number
          */
-        public PbrAtlasConfig(Path outputDir, int atlasSize, String filePrefix, int defaultColor,
-                              Set<Integer> usedPages, Map<Integer, Integer> pageToUdim) {
-            this.outputDir = outputDir;
-            this.atlasSize = atlasSize;
-            this.filePrefix = filePrefix;
-            this.defaultColor = defaultColor;
-            this.usedPages = usedPages;
-            this.pageToUdim = pageToUdim;
+        public PbrAtlasConfig {
         }
-
-        public Path outputDir() { return outputDir; }
-        public int atlasSize() { return atlasSize; }
-        public String filePrefix() { return filePrefix; }
-        public int defaultColor() { return defaultColor; }
-        public Set<Integer> usedPages() { return usedPages; }
-        public Map<Integer, Integer> pageToUdim() { return pageToUdim; }
-    }
+        }
 
     /**
      * Generates a PBR channel atlas (normal or specular) aligned to base texture placements.
@@ -160,7 +141,13 @@ public final class PbrAtlasWriter {
                 // Scale texture to match placement dimensions
                 BufferedImage scaled = scaleTexture(pbrTexture, placement.width(), placement.height());
                 // Draw scaled texture to atlas page
-                page.getGraphics().drawImage(scaled, placement.x(), placement.y(), null);
+                Graphics2D g = page.createGraphics();
+                try {
+                    g.setComposite(AlphaComposite.Src);
+                    g.drawImage(scaled, placement.x(), placement.y(), null);
+                } finally {
+                    g.dispose();
+                }
                 textureCount++;
             } else {
                 // Missing PBR texture - default color is already filled
@@ -221,6 +208,7 @@ public final class PbrAtlasWriter {
         BufferedImage scaled = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = scaled.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g.setComposite(AlphaComposite.Src);
         g.drawImage(source, 0, 0, targetWidth, targetHeight, null);
         g.dispose();
         return scaled;
@@ -269,7 +257,3 @@ public final class PbrAtlasWriter {
         @Override public int height() { return placement.height(); }
     }
 }
-
-
-
-
