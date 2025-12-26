@@ -342,7 +342,119 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     /**
-     * eometry.bininaluv.binglTF
+     * Efficiently reads large files using memory mapping.
+     * Splits file into 1GB segments to bypass integer indexing limits and manage memory better.
+     */
+    private static final class SegmentedMappedReader implements AutoCloseable {
+        private static final long SEGMENT_SIZE = 1L * 1024 * 1024 * 1024; // 1GB
+        private final List<java.nio.MappedByteBuffer> segments = new ArrayList<>();
+        private final long fileSize;
+
+        public SegmentedMappedReader(FileChannel channel) throws IOException {
+            this.fileSize = channel.size();
+            long position = 0;
+            while (position < fileSize) {
+                long remaining = fileSize - position;
+                long size = Math.min(SEGMENT_SIZE, remaining);
+                segments.add(channel.map(FileChannel.MapMode.READ_ONLY, position, size));
+                position += size;
+            }
+        }
+
+        /**
+         * Reads data from the mapped file into the destination buffer.
+         * Handles cross-segment reads seamlessly.
+         */
+        public void read(long offset, ByteBuffer dst) {
+            int remaining = dst.remaining();
+            long currentOffset = offset;
+            
+            while (remaining > 0) {
+                int segmentIndex = (int) (currentOffset / SEGMENT_SIZE);
+                long offsetInSegment = currentOffset % SEGMENT_SIZE;
+                
+                if (segmentIndex >= segments.size()) {
+                    throw new IndexOutOfBoundsException("Read beyond file size: " + currentOffset);
+                }
+
+                java.nio.MappedByteBuffer segment = segments.get(segmentIndex);
+                // Duplicate to allow thread-safe access (though we use it single-threaded here)
+                // and independent position tracking.
+                ByteBuffer view = segment.duplicate();
+                view.position((int) offsetInSegment);
+                
+                int availableInSegment = (int) (SEGMENT_SIZE - offsetInSegment);
+                // Last segment might be smaller
+                if (segmentIndex == segments.size() - 1) {
+                    availableInSegment = (int) (fileSize % SEGMENT_SIZE);
+                    if (availableInSegment == 0 && fileSize > 0) availableInSegment = (int) SEGMENT_SIZE; // Full last segment
+                    availableInSegment -= offsetInSegment;
+                }
+
+                int toRead = Math.min(remaining, availableInSegment);
+                
+                // Limit view to what we want to read to avoid buffer overflows
+                int originalLimit = view.limit();
+                view.limit(view.position() + toRead);
+                
+                dst.put(view);
+                
+                currentOffset += toRead;
+                remaining -= toRead;
+            }
+        }
+
+        @Override
+        public void close() {
+            for (java.nio.MappedByteBuffer buffer : segments) {
+                clean(buffer);
+            }
+            segments.clear();
+        }
+
+        /**
+         * Reflective cleaner to work around mapped file locking on Windows.
+         * Compatible with Java 8 through 21+.
+         */
+        private static void clean(java.nio.MappedByteBuffer buffer) {
+            if (buffer == null) return;
+            try {
+                // Java 9+ approach (jdk.internal.ref.Cleaner)
+                // Use reflection to avoid compile-time dependency issues
+                Class<?> unsafeClass;
+                try {
+                    unsafeClass = Class.forName("sun.misc.Unsafe");
+                } catch (Exception e) {
+                    // Try jdk.internal.misc.Unsafe for newer JDKs if sun.misc is hidden
+                    return; 
+                }
+                
+                java.lang.reflect.Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
+                theUnsafe.setAccessible(true);
+                Object unsafe = theUnsafe.get(null);
+                
+                java.lang.reflect.Method invokeCleaner = unsafeClass.getMethod("invokeCleaner", java.nio.ByteBuffer.class);
+                invokeCleaner.invoke(unsafe, buffer);
+            } catch (Exception e) {
+                // Fallback for Java 8 or if Unsafe is inaccessible
+                try {
+                    java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+                    cleanerMethod.setAccessible(true);
+                    Object cleaner = cleanerMethod.invoke(buffer);
+                    if (cleaner != null) {
+                        java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
+                        cleanMethod.setAccessible(true);
+                        cleanMethod.invoke(cleaner);
+                    }
+                } catch (Exception ignored) {
+                    // Best effort
+                }
+            }
+        }
+    }
+
+    /**
+     * Assembles the final glTF asset by reading binary data and creating accessors/views.
      */
     private Path assembleGltf(SceneWriteRequest request, Path geometryBin, PhaseProgress phase) throws IOException {
         VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Starting glTF assembly...");
@@ -387,47 +499,51 @@ public final class GltfSceneBuilder implements SceneSink {
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Opened binary files for reading");
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] geometry.bin size: " + geometryChannel.size() + " bytes");
 
-                // Process materials sequentially (parallel processing causes buffer corruption)
-                List<String> materialKeys = geometryIndex.getAllMaterialKeys();
-                int totalMaterials = materialKeys.size();
-                int processedMaterials = 0;
+                // Initialize Memory Mapped Reader
+                try (SegmentedMappedReader mappedReader = new SegmentedMappedReader(geometryChannel)) {
+                    
+                    // Process materials sequentially
+                    List<String> materialKeys = geometryIndex.getAllMaterialKeys();
+                    int totalMaterials = materialKeys.size();
+                    int processedMaterials = 0;
 
-                VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Processing " + totalMaterials + " materials...");
+                    VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Processing " + totalMaterials + " materials...");
 
-                for (String matKey : materialKeys) {
-                    try {
-                        GeometryIndex.MaterialChunk matChunk = geometryIndex.getMaterial(matKey);
+                    for (String matKey : materialKeys) {
+                        try {
+                            GeometryIndex.MaterialChunk matChunk = geometryIndex.getMaterial(matKey);
 
-                        if (matChunk != null && processedMaterials % 100 == 0) {
-                            VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Processing material: %s (quads: %d, hash: %d)",
-                                matKey, matChunk.quadCount(), matKey.hashCode()));
-                        }
-
-                        // eometry.bininaluv.binaterial?
-                        assembleMaterialPrimitive(
-                            matKey, matChunk,
-                            geometryChannel,
-                            gltf, chunk, uvChunk,
-                            materials, meshes, nodes, textures, images, colorMapIndices
-                        );
-
-                        processedMaterials++;
-
-                        if (totalMaterials > 0) {
-                            float frac = processedMaterials / (float) totalMaterials;
-                            float mapped = 0.6f + 0.4f * frac;
-                            if (phase.shouldPush(mapped)) {
-                                ExportProgressTracker.setPhasePercent(mapped);
-                                ProgressNotifier.showDetailed(ctx.getMc(), ExportProgressTracker.progress());
+                            if (matChunk != null && processedMaterials % 100 == 0) {
+                                VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Processing material: %s (quads: %d, hash: %d)",
+                                    matKey, matChunk.quadCount(), matKey.hashCode()));
                             }
+
+                            // Assemble primitives for this material
+                            assembleMaterialPrimitive(
+                                matKey, matChunk,
+                                mappedReader, // Pass mapped reader instead of channel
+                                gltf, chunk, uvChunk,
+                                materials, meshes, nodes, textures, images, colorMapIndices
+                            );
+
+                            processedMaterials++;
+
+                            if (totalMaterials > 0) {
+                                float frac = processedMaterials / (float) totalMaterials;
+                                float mapped = 0.6f + 0.4f * frac;
+                                if (phase.shouldPush(mapped)) {
+                                    ExportProgressTracker.setPhasePercent(mapped);
+                                    ProgressNotifier.showDetailed(ctx.getMc(), ExportProgressTracker.progress());
+                                }
+                            }
+                        } catch (Exception e) {
+                            VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
+                            VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
+                            e.printStackTrace();
+                            throw new IOException("Failed to assemble material: " + matKey, e);
                         }
-                    } catch (Exception e) {
-                        VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Failed to assemble material: " + matKey);
-                        VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Error details: " + e.getClass().getName() + ": " + e.getMessage());
-                        e.printStackTrace();
-                        throw new IOException("Failed to assemble material: " + matKey, e);
                     }
-                }
+                } // MappedReader closed here (unmapped)
 
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] All materials processed successfully");
 
@@ -445,7 +561,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 gltf.setTextures(textures);
                 gltf.setImages(images);
 
-                // ?glTF JSON
+                // Close binary chunks to flush headers
                 chunk.close();
                 uvChunk.close();
 
@@ -454,7 +570,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] UV binary files: %s", uvChunk.getAllPaths()));
                 VoxelBridgeLogger.duration("gltf_material_assembly", VoxelBridgeLogger.elapsedSince(tMaterialAssembly));
 
-                // uffer
+                // Validate buffers
                 List<de.javagl.jgltf.impl.v2.Buffer> gltfBuffers = gltf.getBuffers();
                 if (gltfBuffers != null) {
                     for (int i = 0; i < gltfBuffers.size(); i++) {
@@ -485,7 +601,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] glTF file written successfully: " + gltfPath);
                 VoxelBridgeLogger.duration("gltf_write_json", VoxelBridgeLogger.elapsedSince(tWriteGltf));
 
-                // ?
+                // Verify output
                 if (!java.nio.file.Files.exists(gltfPath)) {
                     throw new IOException("glTF file was not created: " + gltfPath);
                 }
@@ -493,7 +609,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] glTF file size: " + gltfSize + " bytes");
             }
 
-            // 
+            // Cleanup temp files
             try {
                 Files.deleteIfExists(geometryBin);
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Temporary files cleaned up");
@@ -522,12 +638,12 @@ public final class GltfSceneBuilder implements SceneSink {
     }
 
     /**
-     * materialrimitive
+     * Reads a material chunk and assembles glTF primitives.
      */
     private void assembleMaterialPrimitive(
         String matKey,
         GeometryIndex.MaterialChunk matChunk,
-        FileChannel geometryChannel,
+        SegmentedMappedReader mappedReader,
         GlTF gltf,
         MultiBinaryChunk chunk,
         MultiBinaryChunk uvChunk,
@@ -540,10 +656,10 @@ public final class GltfSceneBuilder implements SceneSink {
     ) throws IOException {
         if (matChunk == null || matChunk.quadCount() == 0) return;
 
-        // ?
+        // Calculate buffer sizes
         int totalQuadCount = matChunk.quadCount();
-        int maxVertexCount = totalQuadCount * 4;  // quad 4?
-        int maxIndexCount = totalQuadCount * 6;   // quad 6?(2)
+        int maxVertexCount = totalQuadCount * 4;  // 4 verts per quad
+        int maxIndexCount = totalQuadCount * 6;   // 6 indices per quad
 
         // OPTIMIZATION: Use primitive arrays instead of Lists to avoid boxing overhead
         float[] posArray = new float[maxVertexCount * 3];
@@ -577,11 +693,10 @@ public final class GltfSceneBuilder implements SceneSink {
             long pageOffset = page.byteOffset();
             int quadsInPage = page.quadCount();
             
-            // Seek and read page
-            geometryChannel.position(pageOffset);
+            // Seek and read page from MAPPED READER
             pageBuffer.clear();
             pageBuffer.limit(quadsInPage * 204);
-            readFully(geometryChannel, pageBuffer);
+            mappedReader.read(pageOffset, pageBuffer);
             pageBuffer.flip();
             
             for (int i = 0; i < quadsInPage; i++) {
@@ -603,11 +718,7 @@ public final class GltfSceneBuilder implements SceneSink {
                 // Pos (12 floats)
                 for (int j=0; j<12; j++) posArray[posIdx++] = pageBuffer.getFloat();
                 
-                // Normal (3 floats) - Skip for now as we don't write normals to glTF accessors yet (future proofing)
-                // Actually, if we want to write normals later, we should store them. 
-                // But current implementation didn't collect normals into a final array for glTF?
-                // Wait, original code: "geometryBatchBuffer.getFloat(); ... // normal" -> SKIPPED/IGNORED.
-                // So I will skip them here too.
+                // Normal (3 floats) - Skipped as we don't currently write normals to glTF accessors
                 pageBuffer.position(pageBuffer.position() + 12); 
                 
                 // Color (16 floats)
@@ -669,7 +780,7 @@ public final class GltfSceneBuilder implements SceneSink {
             VoxelBridgeLogger.warn(LogModule.GLTF, String.format("[GltfBuilder][WARN] Skipped %d quads for material %s due to hash mismatch", skippedMismatches, matKey));
         }
 
-        // ?
+        // Validate data validity
         if (posIdx == 0 || idxIdx == 0) {
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Skipping material " + matKey + " (no valid geometry)");
             return;
@@ -687,13 +798,13 @@ public final class GltfSceneBuilder implements SceneSink {
         int finalVertexCount = posArray.length / 3;
         int finalIndexCount = indexArray.length;
 
-        // :
+        // Log stats
         VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s: read %d quads from %d pages, got vertices=%d, indices=%d",
             matKey, (finalVertexCount / 4), matChunk.pages().size(), finalVertexCount, finalIndexCount));
         VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s hash: %d, skipped mismatches: %d",
             matKey, materialHashValue, skippedMismatches));
 
-        // ?
+        // Calculate bounds
         float[] posMin = computeMin(posArray, 3);
         float[] posMax = computeMax(posArray, 3);
 
@@ -828,14 +939,6 @@ public final class GltfSceneBuilder implements SceneSink {
             }
         }
         return list.get(0);
-    }
-
-    private void readFully(FileChannel channel, ByteBuffer buffer) throws IOException {
-        while (buffer.hasRemaining()) {
-            if (channel.read(buffer) < 0) {
-                throw new EOFException("Unexpected end of channel while reading streamed data");
-            }
-        }
     }
 
     private int addView(GlTF gltf, int bufferIndex, int byteOffset, int byteLength, int target) {

@@ -30,12 +30,22 @@ public final class ExportContext {
     private final Map<String, String> materialNames = new ConcurrentHashMap<>();
     private final Map<String, String> materialPaths = new ConcurrentHashMap<>();
     private final Map<String, String> spriteToMaterial = new ConcurrentHashMap<>();
-    private final Map<Integer, TexturePlacement> colorMap = new ConcurrentHashMap<>();
+    
+    // OPTIMIZATION: Use FastUtil primitives to avoid boxing overhead
+    private final it.unimi.dsi.fastutil.ints.Int2ObjectMap<TexturePlacement> colorMap = 
+        it.unimi.dsi.fastutil.ints.Int2ObjectMaps.synchronize(new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>());
+        
     private final AtomicInteger nextColorSlot = new AtomicInteger(0); // Will be set to 1 after white is reserved in slot 0
-    private final Set<Long> consumedBlocks = ConcurrentHashMap.newKeySet();
+    
+    // OPTIMIZATION: Use FastUtil LongOpenHashSet for primitive long storage (wrapped for thread safety)
+    private final java.util.Set<Long> consumedBlocks = java.util.Collections.synchronizedSet(new it.unimi.dsi.fastutil.longs.LongOpenHashSet());
+    
     private final Map<String, EntityTexture> entityTextures = new ConcurrentHashMap<>();
     private final Map<String, BlockEntityAtlasPlacement> blockEntityAtlasPlacements = new ConcurrentHashMap<>();
     private final TextureRepository textureRepository = new TextureRepository();
+    
+    // String Deduplication Pool (Concurrent)
+    private final Map<String, String> stringPool = new ConcurrentHashMap<>();
 
     private boolean blockEntityExportEnabled = true;
     private CoordinateMode coordinateMode = CoordinateMode.CENTERED;
@@ -73,12 +83,20 @@ public final class ExportContext {
 
     public void registerSpriteMaterial(String spriteKey, String materialKey) {
         if (spriteKey != null && materialKey != null) {
-            spriteToMaterial.putIfAbsent(spriteKey, materialKey);
+            spriteToMaterial.putIfAbsent(intern(spriteKey), intern(materialKey));
         }
     }
 
-    public Map<Integer, TexturePlacement> getColorMap() {
+    public it.unimi.dsi.fastutil.ints.Int2ObjectMap<TexturePlacement> getColorMap() {
         return colorMap;
+    }
+
+    /**
+     * Deduplicates string instances to save memory.
+     */
+    public String intern(String s) {
+        if (s == null) return null;
+        return stringPool.computeIfAbsent(s, k -> k);
     }
 
     public AtomicInteger getNextColorSlot() {
@@ -131,6 +149,13 @@ public final class ExportContext {
         materialPaths.clear();
         blockEntityAtlasPlacements.clear();
         entityTextures.clear();
+        atlasBook.clear();
+        materialNames.clear();
+        spriteToMaterial.clear();
+        colorMap.clear();
+        consumedBlocks.clear();
+        stringPool.clear();
+        nextColorSlot.set(0);
     }
 
     public void clearEntityTextures() {

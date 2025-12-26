@@ -167,6 +167,7 @@ public final class GltfExportService {
 
             throw new IOException("Export failed during write phase: " + e.getMessage(), e);  // Re-throw as IOException
         } finally {
+            ctx.clearTextureState();
             VoxelBridgeLogger.close();
         }
 

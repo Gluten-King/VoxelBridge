@@ -33,8 +33,8 @@ public final class QuadProcessor {
     // Track which sprites have had PBR textures loaded
     private final Set<String> pbrLoadedSprites = new HashSet<>();
 
-    // Track processed quads to avoid duplicates
-    private final Set<Long> quadKeys = new HashSet<>();
+    // Track processed quads to avoid duplicates (Optimization: Use FastUtil primitive set)
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet quadKeys = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
     public QuadProcessor(ExportContext ctx, Level level, SceneSink sceneSink,
                          double offsetX, double offsetY, double offsetZ) {
@@ -106,11 +106,11 @@ public final class QuadProcessor {
         // Prepare color data
         ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColors(ctx, argb, quad.getTintIndex() >= 0);
 
-        // Register sprite material
+        // Register sprite material (Intern strings)
         ctx.registerSpriteMaterial(spriteKey, blockKey);
 
-        // Output quad
-        sceneSink.addQuad(blockKey, spriteKey, null, vertexData.positions(), vertexData.uvs(),
+        // Output quad (Intern keys)
+        sceneSink.addQuad(ctx.intern(blockKey), ctx.intern(spriteKey), null, vertexData.positions(), vertexData.uvs(),
             colorData.uv1, vertexData.normal(), colorData.colors, doubleSided);
     }
 
@@ -134,20 +134,27 @@ public final class QuadProcessor {
 
     /**
      * Computes unique key for quad deduplication.
+     * Optimized to avoid object allocation (zero GC).
      */
     private long computeQuadKey(String spriteKey, float[] positions, float[] normal,
                                 boolean doubleSided, float[] uv0) {
-        // Sort vertices to make key order-independent
-        Integer[] order = {0, 1, 2, 3};
-        java.util.Arrays.sort(order, (a, b) -> {
-            int ia = a * 3;
-            int ib = b * 3;
-            int cmpX = Float.compare(positions[ia], positions[ib]);
-            if (cmpX != 0) return cmpX;
-            int cmpY = Float.compare(positions[ia + 1], positions[ib + 1]);
-            if (cmpY != 0) return cmpY;
-            return Float.compare(positions[ia + 2], positions[ib + 2]);
-        });
+        // Primitive sort of indices based on vertex positions
+        // We have 4 vertices (indices 0, 1, 2, 3)
+        // Hardcoded bubble sort is faster than Arrays.sort for 4 elements and allocates nothing.
+        int i0 = 0, i1 = 1, i2 = 2, i3 = 3;
+        
+        // Swap 0-1
+        if (compareVerts(positions, i0, i1) > 0) { int t = i0; i0 = i1; i1 = t; }
+        // Swap 2-3
+        if (compareVerts(positions, i2, i3) > 0) { int t = i2; i2 = i3; i3 = t; }
+        // Swap 0-2
+        if (compareVerts(positions, i0, i2) > 0) { int t = i0; i0 = i2; i2 = t; }
+        // Swap 1-3
+        if (compareVerts(positions, i1, i3) > 0) { int t = i1; i1 = i3; i3 = t; }
+        // Swap 1-2
+        if (compareVerts(positions, i1, i2) > 0) { int t = i1; i1 = i2; i2 = t; }
+        
+        // Order is now i0, i1, i2, i3
 
         long hash = 1125899906842597L;
         hash = 31 * hash + spriteKey.hashCode();
@@ -157,19 +164,36 @@ public final class QuadProcessor {
             hash = 31 * hash + Math.round(normal[1] * 1000f);
             hash = 31 * hash + Math.round(normal[2] * 1000f);
         }
+        
+        // Hash vertices in sorted order
+        hash = hashVertex(hash, positions, uv0, i0);
+        hash = hashVertex(hash, positions, uv0, i1);
+        hash = hashVertex(hash, positions, uv0, i2);
+        hash = hashVertex(hash, positions, uv0, i3);
 
-        for (int idx : order) {
-            int pi = idx * 3;
-            hash = 31 * hash + Math.round(positions[pi] * 1000f);
-            hash = 31 * hash + Math.round(positions[pi + 1] * 1000f);
-            hash = 31 * hash + Math.round(positions[pi + 2] * 1000f);
+        return hash;
+    }
+    
+    private int compareVerts(float[] pos, int idxA, int idxB) {
+        int ia = idxA * 3;
+        int ib = idxB * 3;
+        int cmpX = Float.compare(pos[ia], pos[ib]);
+        if (cmpX != 0) return cmpX;
+        int cmpY = Float.compare(pos[ia + 1], pos[ib + 1]);
+        if (cmpY != 0) return cmpY;
+        return Float.compare(pos[ia + 2], pos[ib + 2]);
+    }
+    
+    private long hashVertex(long hash, float[] positions, float[] uv0, int idx) {
+        int pi = idx * 3;
+        hash = 31 * hash + Math.round(positions[pi] * 1000f);
+        hash = 31 * hash + Math.round(positions[pi + 1] * 1000f);
+        hash = 31 * hash + Math.round(positions[pi + 2] * 1000f);
 
-            if (uv0 != null && uv0.length >= (idx * 2 + 2)) {
-                hash = 31 * hash + Math.round(uv0[idx * 2] * 1000f);
-                hash = 31 * hash + Math.round(uv0[idx * 2 + 1] * 1000f);
-            }
+        if (uv0 != null && uv0.length >= (idx * 2 + 2)) {
+            hash = 31 * hash + Math.round(uv0[idx * 2] * 1000f);
+            hash = 31 * hash + Math.round(uv0[idx * 2 + 1] * 1000f);
         }
-
         return hash;
     }
 }
