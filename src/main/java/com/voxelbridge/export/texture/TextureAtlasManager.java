@@ -619,17 +619,31 @@ public final class TextureAtlasManager {
         int outH = h + pad * 2;
 
         BufferedImage dst = new BufferedImage(outW, outH, BufferedImage.TYPE_INT_ARGB);
-        int[] srcData = src.getRGB(0, 0, w, h, null, 0, w);
+        int[] srcData;
+        int srcStride = w;
+        int srcOffset = 0;
+        var srcRaster = src.getRaster();
+        if (srcRaster.getDataBuffer() instanceof DataBufferInt db
+            && srcRaster.getSampleModel() instanceof SinglePixelPackedSampleModel sm) {
+            srcData = db.getData();
+            srcStride = sm.getScanlineStride();
+            srcOffset = db.getOffset();
+        } else {
+            srcData = src.getRGB(0, 0, w, h, null, 0, w);
+        }
         int[] dstData = ((DataBufferInt) dst.getRaster().getDataBuffer()).getData();
         boolean[] dstValid = new boolean[outW * outH];
 
         // 1. Initial Copy & Setup (Parallel by row)
+        final int finalSrcOffset = srcOffset;
+        final int finalSrcStride = srcStride;
         java.util.stream.IntStream.range(0, h).parallel().forEach(y -> {
-            int srcRowStart = y * w;
+            int srcRowStart = finalSrcOffset + y * finalSrcStride;
+            int maskRowStart = y * w;
             int dstRowStart = (y + pad) * outW + pad;
             System.arraycopy(srcData, srcRowStart, dstData, dstRowStart, w);
             for (int x = 0; x < w; x++) {
-                if (finalValidMask == null || finalValidMask[srcRowStart + x]) {
+                if (finalValidMask == null || finalValidMask[maskRowStart + x]) {
                     dstValid[dstRowStart + x] = true;
                 }
             }
