@@ -88,6 +88,7 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("e  pos2: f" + (pos2 != null ? pos2 : "unset")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas mode: f" + ExportRuntimeConfig.getAtlasMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Atlas size: f" + ExportRuntimeConfig.getAtlasSize().getDescription()));
+            ctx.getSource().sendSystemMessage(Component.literal("e  Atlas padding: f" + ExportRuntimeConfig.getAtlasPadding() + "px"));
             ctx.getSource().sendSystemMessage(Component.literal("e  Coordinate mode: f" +
                     (ExportRuntimeConfig.getCoordinateMode() == CoordinateMode.CENTERED ? "centered" : "world")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Color mode: f" + ExportRuntimeConfig.getColorMode().getDescription()));
@@ -97,6 +98,8 @@ public final class VoxelBridgeCommands {
                     (ExportRuntimeConfig.isAnimationEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Fill cave (dark cave_air): f" +
                     (ExportRuntimeConfig.isFillCaveEnabled() ? "on" : "off")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  LabPBR decode: f" +
+                    (ExportRuntimeConfig.isPbrDecodeEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Export threads: f" + ExportRuntimeConfig.getExportThreadCount()));
             return 1;
         }));
@@ -215,6 +218,25 @@ public final class VoxelBridgeCommands {
                 }))
         );
 
+        root.then(Commands.literal("atlaspad")
+                .executes(ctx -> {
+                    int current = ExportRuntimeConfig.getAtlasPadding();
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Current atlas padding: f" + current + "px"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Allowed values: 0, 4, 8, 12, 16"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge atlaspad <pixels>"));
+                    return 1;
+                })
+                .then(Commands.argument("pixels", IntegerArgumentType.integer(0, 64)).executes(ctx -> {
+                    int pixels = IntegerArgumentType.getInteger(ctx, "pixels");
+                    if (!ExportRuntimeConfig.setAtlasPadding(pixels)) {
+                        ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] Invalid padding. Allowed: 0, 4, 8, 12, 16"));
+                        return 0;
+                    }
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Atlas padding -> " + pixels + "px"));
+                    return 1;
+                }))
+        );
+
         root.then(Commands.literal("coords")
                 .executes(ctx -> {
                     String mode = ExportRuntimeConfig.getCoordinateMode() == CoordinateMode.CENTERED ? "centered" : "world";
@@ -288,6 +310,25 @@ public final class VoxelBridgeCommands {
                     int count = IntegerArgumentType.getInteger(ctx, "count");
                     ExportRuntimeConfig.setExportThreadCount(count);
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Export threads -> " + count));
+                    return 1;
+                }))
+        );
+
+        root.then(Commands.literal("pbrdecode")
+                .executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] LabPBR decode is currently f"
+                            + (ExportRuntimeConfig.isPbrDecodeEnabled() ? "on" : "off")));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge pbrdecode <on|off>"));
+                    return 1;
+                })
+                .then(Commands.literal("on").executes(ctx -> {
+                    ExportRuntimeConfig.setPbrDecodeEnabled(true);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LabPBR decode -> ON"));
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(ctx -> {
+                    ExportRuntimeConfig.setPbrDecodeEnabled(false);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LabPBR decode -> OFF"));
                     return 1;
                 }))
         );

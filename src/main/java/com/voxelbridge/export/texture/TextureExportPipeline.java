@@ -30,5 +30,9 @@ public final class TextureExportPipeline {
             animationWhitelist.addAll(ctx.getCachedSpriteKeys());
             TextureAtlasManager.exportDetectedAnimations(ctx, outDir, animationWhitelist);
         }
+
+        if (ExportRuntimeConfig.isPbrDecodeEnabled()) {
+            LabPbrDecoder.exportDecoded(ctx, outDir);
+        }
     }
 }

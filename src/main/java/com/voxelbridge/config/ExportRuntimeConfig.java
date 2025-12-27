@@ -74,6 +74,7 @@ public final class ExportRuntimeConfig {
 
     private static AtlasMode atlasMode = AtlasMode.ATLAS;
     private static AtlasSize atlasSize = AtlasSize.SIZE_8192;
+    private static int atlasPadding = 16;
     private static ColorMode colorMode = ColorMode.VERTEX_COLOR;
     private static CoordinateMode coordinateMode = CoordinateMode.CENTERED;
     private static int exportThreadCount = Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
@@ -83,6 +84,8 @@ public final class ExportRuntimeConfig {
     private static boolean animationEnabled = false;
     // FILLCAVE: treat dark cave_air (skylight = 0) as solid for occlusion culling.
     private static boolean fillCaveEnabled = false;
+    // Export decoded LabPBR channel maps from _n/_s.
+    private static boolean pbrDecodeEnabled = false;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -102,6 +105,18 @@ public final class ExportRuntimeConfig {
         if (size != null) {
             atlasSize = size;
         }
+    }
+
+    public static int getAtlasPadding() {
+        return atlasPadding;
+    }
+
+    public static boolean setAtlasPadding(int padding) {
+        if (padding == 0 || padding == 4 || padding == 8 || padding == 12 || padding == 16) {
+            atlasPadding = padding;
+            return true;
+        }
+        return false;
     }
 
     public static CoordinateMode getCoordinateMode() {
@@ -160,6 +175,14 @@ public final class ExportRuntimeConfig {
 
     public static void setFillCaveEnabled(boolean enabled) {
         fillCaveEnabled = enabled;
+    }
+
+    public static boolean isPbrDecodeEnabled() {
+        return pbrDecodeEnabled;
+    }
+
+    public static void setPbrDecodeEnabled(boolean enabled) {
+        pbrDecodeEnabled = enabled;
     }
 
 

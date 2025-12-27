@@ -114,53 +114,56 @@ public final class PbrAtlasWriter {
                 config.filePrefix(), config.usedPages().size()));
 
         // Create atlas pages filled with default color
-        Map<Integer, BufferedImage> pages = new HashMap<>();
-        for (int pageIndex : config.usedPages()) {
+        Map<Integer, BufferedImage> pages = new java.util.concurrent.ConcurrentHashMap<>();
+        config.usedPages().parallelStream().forEach(pageIndex -> {
             pages.put(pageIndex, createFilledPage(config.atlasSize(), config.defaultColor()));
-        }
+        });
 
-        // Place textures on their corresponding pages
-        int textureCount = 0;
-        int missingCount = 0;
+        // Group placements by page for efficient batch processing
+        Map<Integer, java.util.List<Map.Entry<String, P>>> placementsByPage = placements.entrySet().stream()
+                .collect(java.util.stream.Collectors.groupingBy(e -> e.getValue().page()));
 
-        for (Map.Entry<String, P> entry : placements.entrySet()) {
-            String spriteKey = entry.getKey();
-            P placement = entry.getValue();
-
-            // Load PBR texture for this sprite
-            BufferedImage pbrTexture = textureLoader.apply(spriteKey);
-
-            BufferedImage page = pages.get(placement.page());
+        // Process pages in parallel
+        placementsByPage.entrySet().parallelStream().forEach(pageEntry -> {
+            int pageIndex = pageEntry.getKey();
+            BufferedImage page = pages.get(pageIndex);
             if (page == null) {
-                VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter][WARN] No page %d for sprite %s",
-                        placement.page(), spriteKey));
-                continue;
+                 // Should not happen if config.usedPages() is consistent with placements
+                 return;
             }
 
-            if (pbrTexture != null) {
-                // Scale texture to match placement dimensions
-                BufferedImage scaled = scaleTexture(pbrTexture, placement.width(), placement.height());
-                // Draw scaled texture to atlas page
-                Graphics2D g = page.createGraphics();
-                try {
-                    g.setComposite(AlphaComposite.Src);
-                    g.drawImage(scaled, placement.x(), placement.y(), null);
-                } finally {
-                    g.dispose();
+            Graphics2D g = page.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            g.setComposite(AlphaComposite.Src);
+
+            try {
+                for (Map.Entry<String, P> entry : pageEntry.getValue()) {
+                    String spriteKey = entry.getKey();
+                    P placement = entry.getValue();
+
+                    // Load PBR texture for this sprite
+                    BufferedImage pbrTexture = textureLoader.apply(spriteKey);
+
+                    if (pbrTexture != null) {
+                        // Draw directly to atlas page with scaling
+                        // Check if scaling is needed
+                        if (pbrTexture.getWidth() == placement.width() && pbrTexture.getHeight() == placement.height()) {
+                             g.drawImage(pbrTexture, placement.x(), placement.y(), null);
+                        } else {
+                             g.drawImage(pbrTexture, placement.x(), placement.y(), placement.width(), placement.height(), null);
+                        }
+                    }
                 }
-                textureCount++;
-            } else {
-                // Missing PBR texture - default color is already filled
-                missingCount++;
+            } finally {
+                g.dispose();
             }
-        }
+        });
 
-        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter] Placed %d textures, %d missing (using default fill)",
-                textureCount, missingCount));
+        VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, "[PbrAtlasWriter] Texture placement complete.");
 
-        // Write atlas pages to disk
+        // Write atlas pages to disk (Parallel I/O)
         java.nio.file.Files.createDirectories(config.outputDir());
-        for (int pageIndex : config.usedPages()) {
+        config.usedPages().parallelStream().forEach(pageIndex -> {
             int udim = config.pageToUdim().getOrDefault(pageIndex, pageIndex + 1001);
             String filename = config.filePrefix() + udim + ".png";
             Path outputPath = config.outputDir().resolve(filename);
@@ -168,9 +171,11 @@ public final class PbrAtlasWriter {
             BufferedImage page = pages.get(pageIndex);
             if (page != null) {
                 PngjWriter.write(page, outputPath);
-                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter] Wrote %s", filename));
+                if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                    VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PbrAtlasWriter] Wrote %s", filename));
+                }
             }
-        }
+        });
     }
 
     /**

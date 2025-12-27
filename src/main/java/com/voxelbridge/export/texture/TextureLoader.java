@@ -117,18 +117,22 @@ public final class TextureLoader {
         int w = nativeImg.getWidth();
         int h = nativeImg.getHeight();
         BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        int[] row = new int[w];
+        int[] allPixels = new int[w * h];
+
+        // Process sequentially to ensure thread safety with NativeImage
         for (int y = 0; y < h; y++) {
+            int rowOffset = y * w;
             for (int x = 0; x < w; x++) {
                 int c = nativeImg.getPixelRGBA(x, y);
                 int a = (c >>> 24) & 0xFF;
                 int r = c & 0xFF;
                 int g = (c >>> 8) & 0xFF;
                 int b = (c >>> 16) & 0xFF;
-                row[x] = (a << 24) | (r << 16) | (g << 8) | b;
+                allPixels[rowOffset + x] = (a << 24) | (r << 16) | (g << 8) | b;
             }
-            out.setRGB(0, y, w, 1, row, 0, w);
         }
+        
+        out.setRGB(0, 0, w, h, allPixels, 0, w);
         return out;
     }
 
@@ -176,16 +180,18 @@ public final class TextureLoader {
         int w = src.getWidth();
         int h = src.getHeight();
         BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                int argb = src.getRGB(x, y);
-                int a = (argb >>> 24) & 0xFF;
-                int rr = Math.min(255, (int) (((argb >>> 16) & 0xFF) * r));
-                int gg = Math.min(255, (int) (((argb >>> 8) & 0xFF) * g));
-                int bb = Math.min(255, (int) ((argb & 0xFF) * b));
-                dst.setRGB(x, y, (a << 24) | (rr << 16) | (gg << 8) | bb);
-            }
-        }
+        int[] pixels = src.getRGB(0, 0, w, h, null, 0, w);
+
+        java.util.stream.IntStream.range(0, pixels.length).parallel().forEach(i -> {
+            int argb = pixels[i];
+            int a = (argb >>> 24) & 0xFF;
+            int rr = Math.min(255, (int) (((argb >>> 16) & 0xFF) * r));
+            int gg = Math.min(255, (int) (((argb >>> 8) & 0xFF) * g));
+            int bb = Math.min(255, (int) ((argb & 0xFF) * b));
+            pixels[i] = (a << 24) | (rr << 16) | (gg << 8) | bb;
+        });
+
+        dst.setRGB(0, 0, w, h, pixels, 0, w);
         return dst;
     }
 

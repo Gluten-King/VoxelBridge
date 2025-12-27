@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
@@ -273,7 +274,7 @@ public final class TextureAtlasManager {
         VoxelBridgeLogger.duration("individual_texture_write", VoxelBridgeLogger.elapsedSince(tIndividual));
     }
 
-    private record AtlasRequest(String spriteKey, int tintIndex, BufferedImage image) {}
+    private record AtlasRequest(String spriteKey, int tintIndex, BufferedImage image, int innerWidth, int innerHeight, int pad) {}
     private record TintTask(String spriteKey, int tintIndex, int tint) {}
 
     private static void generatePackedAtlas(ExportContext ctx,
@@ -332,6 +333,17 @@ public final class TextureAtlasManager {
                 (a, b) -> a
             ));
 
+        int padding = ExportRuntimeConfig.getAtlasPadding();
+        Map<String, boolean[]> baseMasks = new java.util.concurrent.ConcurrentHashMap<>();
+        if (padding > 0) {
+            preloaded.forEach((key, img) -> {
+                boolean[] mask = buildAlphaMask(img);
+                if (mask != null) {
+                    baseMasks.put(key, mask);
+                }
+            });
+        }
+
         // Parallel tinting to utilize multiple cores
         long tTint = VoxelBridgeLogger.now();
         List<AtlasRequest> requests = tintTasks.parallelStream()
@@ -340,7 +352,11 @@ public final class TextureAtlasManager {
                 if (base == null) {
                     base = createMissingTexture();
                 }
-                return new AtlasRequest(task.spriteKey(), task.tintIndex(), tintTile(base, task.tint()));
+                BufferedImage tinted = tintTile(base, task.tint());
+                BufferedImage output = padding > 0
+                    ? applyPadding(tinted, padding, baseMasks.get(task.spriteKey()))
+                    : tinted;
+                return new AtlasRequest(task.spriteKey(), task.tintIndex(), output, tinted.getWidth(), tinted.getHeight(), padding);
             })
             .collect(Collectors.toList());
         // Ensure deterministic order before packing
@@ -374,11 +390,15 @@ public final class TextureAtlasManager {
 
             int tileU = p.page() % 10;
             int tileV = p.page() / 10;
+            int innerX = p.x() + req.pad();
+            int innerY = p.y() + req.pad();
+            int innerW = req.innerWidth();
+            int innerH = req.innerHeight();
             // Double precision here to maximize UV accuracy before storage
-            double u0d = tileU + (double) p.x() / atlasSize;
-            double v0d = -tileV + (double) p.y() / atlasSize; // Keep UDIM vertical flip consistent
-            double u1d = tileU + (double) (p.x() + p.width()) / atlasSize;
-            double v1d = -tileV + (double) (p.y() + p.height()) / atlasSize;
+            double u0d = tileU + (double) innerX / atlasSize;
+            double v0d = -tileV + (double) innerY / atlasSize; // Keep UDIM vertical flip consistent
+            double u1d = tileU + (double) (innerX + innerW) / atlasSize;
+            double v1d = -tileV + (double) (innerY + innerH) / atlasSize;
             float u0 = (float) u0d;
             float v0 = (float) v0d;
             float u1 = (float) u1d;
@@ -400,7 +420,7 @@ public final class TextureAtlasManager {
             if (isBlockEntitySprite(req.spriteKey)) {
                 int udim = p.udim();
                 BlockEntityAtlasPlacement bePlacement = new BlockEntityAtlasPlacement(
-                    p.page(), udim, p.x(), p.y(), p.width(), p.height(), atlasSize
+                    p.page(), udim, innerX, innerY, innerW, innerH, atlasSize
                 );
                 ctx.getBlockEntityAtlasPlacements().put(req.spriteKey, bePlacement);
             }
@@ -527,7 +547,6 @@ public final class TextureAtlasManager {
         BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
 
         int[] srcData;
-        int[] dstData;
         int srcStride = w;
         int srcOffset = 0;
         var raster = tile.getRaster();
@@ -538,18 +557,21 @@ public final class TextureAtlasManager {
         } else {
             srcData = tile.getRGB(0, 0, w, h, null, 0, w);
         }
-        dstData = ((DataBufferInt) dst.getRaster().getDataBuffer()).getData();
+        int[] dstData = ((DataBufferInt) dst.getRaster().getDataBuffer()).getData();
 
         float rMul = ((tint >> 16) & 0xFF) / 255f;
         float gMul = ((tint >> 8) & 0xFF) / 255f;
         float bMul = (tint & 0xFF) / 255f;
 
-        int dstIdx = 0;
-        int srcRowStart = srcOffset;
-        for (int y = 0; y < h; y++) {
-            int srcIdx = srcRowStart;
+        final int finalSrcStride = srcStride;
+        final int finalSrcOffset = srcOffset;
+        final int[] finalSrcData = srcData;
+
+        java.util.stream.IntStream.range(0, h).parallel().forEach(y -> {
+            int srcIdx = finalSrcOffset + y * finalSrcStride;
+            int dstIdx = y * w;
             for (int x = 0; x < w; x++, srcIdx++, dstIdx++) {
-                int argb = srcData[srcIdx];
+                int argb = finalSrcData[srcIdx];
                 if ((argb & 0xFF000000) == 0) {
                     continue;
                 }
@@ -562,8 +584,120 @@ public final class TextureAtlasManager {
                 int bb = (int) (b * bMul);
                 dstData[dstIdx] = (a << 24) | (rr << 16) | (gg << 8) | bb;
             }
-            srcRowStart += srcStride;
+        });
+
+        return dst;
+    }
+
+    private static boolean[] buildAlphaMask(BufferedImage img) {
+        if (img == null) {
+            return null;
         }
+        int w = img.getWidth();
+        int h = img.getHeight();
+        int[] data = img.getRGB(0, 0, w, h, null, 0, w);
+        boolean[] mask = new boolean[w * h];
+        for (int i = 0; i < data.length; i++) {
+            if (((data[i] >>> 24) & 0xFF) != 0) {
+                mask[i] = true;
+            }
+        }
+        return mask;
+    }
+
+    private static BufferedImage applyPadding(BufferedImage src, int pad, boolean[] validMask) {
+        if (src == null || pad <= 0) {
+            return src;
+        }
+        int w = src.getWidth();
+        int h = src.getHeight();
+        
+        // Finalize validMask to be effectively final for lambda usage
+        final boolean[] finalValidMask = (validMask != null && validMask.length == w * h) ? validMask : null;
+
+        int outW = w + pad * 2;
+        int outH = h + pad * 2;
+
+        BufferedImage dst = new BufferedImage(outW, outH, BufferedImage.TYPE_INT_ARGB);
+        int[] srcData = src.getRGB(0, 0, w, h, null, 0, w);
+        int[] dstData = ((DataBufferInt) dst.getRaster().getDataBuffer()).getData();
+        boolean[] dstValid = new boolean[outW * outH];
+
+        // 1. Initial Copy & Setup (Parallel by row)
+        java.util.stream.IntStream.range(0, h).parallel().forEach(y -> {
+            int srcRowStart = y * w;
+            int dstRowStart = (y + pad) * outW + pad;
+            System.arraycopy(srcData, srcRowStart, dstData, dstRowStart, w);
+            for (int x = 0; x < w; x++) {
+                if (finalValidMask == null || finalValidMask[srcRowStart + x]) {
+                    dstValid[dstRowStart + x] = true;
+                }
+            }
+        });
+
+        // 2. Horizontal pad (Parallel by row)
+        // Only process the rows that contain the actual image content
+        java.util.stream.IntStream.range(pad, pad + h).parallel().forEach(y -> {
+            int rowStart = y * outW;
+            int firstX = -1;
+            int lastX = -1;
+            
+            // Find bounds
+            for (int x = pad; x < pad + w; x++) {
+                if (dstValid[rowStart + x]) {
+                    if (firstX == -1) firstX = x;
+                    lastX = x;
+                }
+            }
+
+            if (firstX != -1) {
+                int leftColor = dstData[rowStart + firstX];
+                int rightColor = dstData[rowStart + lastX];
+                
+                // Fill left padding
+                if (pad > 0) {
+                    java.util.Arrays.fill(dstData, rowStart, rowStart + pad, leftColor);
+                    // We also mark as valid for the vertical pass
+                    for(int k=0; k<pad; k++) dstValid[rowStart + k] = true;
+                }
+                
+                // Fill right padding
+                if (outW > pad + w) {
+                    java.util.Arrays.fill(dstData, rowStart + pad + w, rowStart + outW, rightColor);
+                    for(int k=pad+w; k<outW; k++) dstValid[rowStart + k] = true;
+                }
+            }
+        });
+
+        // 3. Vertical pad (Parallel by column)
+        java.util.stream.IntStream.range(0, outW).parallel().forEach(x -> {
+            int firstY = -1;
+            int lastY = -1;
+            
+            // Scan only the content rows (pad to pad+h) to find vertical bounds
+            // Because horizontal pass already extended valid pixels horizontally, 
+            // we can just check the column in that range.
+            for (int y = pad; y < pad + h; y++) {
+                if (dstValid[y * outW + x]) {
+                    if (firstY == -1) firstY = y;
+                    lastY = y;
+                }
+            }
+
+            if (firstY != -1) {
+                int topColor = dstData[firstY * outW + x];
+                int bottomColor = dstData[lastY * outW + x];
+
+                // Fill top
+                for (int y = 0; y < pad; y++) {
+                    dstData[y * outW + x] = topColor;
+                }
+                // Fill bottom
+                for (int y = pad + h; y < outH; y++) {
+                    dstData[y * outW + x] = bottomColor;
+                }
+            }
+        });
 
         return dst;
     }
@@ -619,6 +753,21 @@ public final class TextureAtlasManager {
             }
         }
 
+        int padding = ExportRuntimeConfig.getAtlasPadding();
+        Map<String, boolean[]> baseMasks = new java.util.concurrent.ConcurrentHashMap<>();
+        if (padding > 0) {
+            for (String spriteKey : entries.keySet()) {
+                BufferedImage base = ctx.getCachedSpriteImage(spriteKey);
+                if (base == null) {
+                    base = loadTextureForAtlas(ctx, spriteKey);
+                }
+                boolean[] mask = buildAlphaMask(base);
+                if (mask != null) {
+                    baseMasks.put(spriteKey, mask);
+                }
+            }
+        }
+
         // OPTIMIZATION: Use configured thread count instead of hardcoded 2
         // Respects user's ExportRuntimeConfig.exportThreadCount setting
         // Default: Runtime.getRuntime().availableProcessors()
@@ -627,13 +776,23 @@ public final class TextureAtlasManager {
         try {
             Future<?> futureNormal = executor.submit(() -> {
                 try {
+                    Map<String, BufferedImage> paddedNormalCache = new java.util.concurrent.ConcurrentHashMap<>();
                     PbrAtlasWriter.PbrAtlasConfig normalConfig = new PbrAtlasWriter.PbrAtlasConfig(
                         atlasDir, atlasSize, basePrefix + "n_",
                         PbrTextureHelper.DEFAULT_NORMAL_COLOR, usedPages, pageToUdim
                     );
                     PbrAtlasWriter.generatePbrAtlas(normalConfig, flatPlacements, key -> {
                         String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
-                        BufferedImage normalImage = ctx.getCachedSpriteImage(spriteKey + "_n");
+                        BufferedImage normalImage = paddedNormalCache.computeIfAbsent(spriteKey, k -> {
+                            BufferedImage img = ctx.getCachedSpriteImage(k + "_n");
+                            if (img == null) {
+                                return null;
+                            }
+                            if (padding > 0) {
+                                return applyPadding(img, padding, baseMasks.get(k));
+                            }
+                            return img;
+                        });
                         if (normalImage != null && !key.contains("#")) {
                             PbrAtlasWriter.Placement p = flatPlacements.get(key);
                             int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
@@ -649,13 +808,23 @@ public final class TextureAtlasManager {
 
             Future<?> futureSpec = executor.submit(() -> {
                 try {
+                    Map<String, BufferedImage> paddedSpecCache = new java.util.concurrent.ConcurrentHashMap<>();
                     PbrAtlasWriter.PbrAtlasConfig specConfig = new PbrAtlasWriter.PbrAtlasConfig(
                         atlasDir, atlasSize, basePrefix + "s_",
                         PbrTextureHelper.DEFAULT_SPECULAR_COLOR, usedPages, pageToUdim
                     );
                     PbrAtlasWriter.generatePbrAtlas(specConfig, flatPlacements, key -> {
                         String spriteKey = key.contains("#") ? key.substring(0, key.indexOf("#")) : key;
-                        BufferedImage specImage = ctx.getCachedSpriteImage(spriteKey + "_s");
+                        BufferedImage specImage = paddedSpecCache.computeIfAbsent(spriteKey, k -> {
+                            BufferedImage img = ctx.getCachedSpriteImage(k + "_s");
+                            if (img == null) {
+                                return null;
+                            }
+                            if (padding > 0) {
+                                return applyPadding(img, padding, baseMasks.get(k));
+                            }
+                            return img;
+                        });
                         if (specImage != null && !key.contains("#")) {
                             PbrAtlasWriter.Placement p = flatPlacements.get(key);
                             int udim = pageToUdim.getOrDefault(p.page(), p.page() + 1001);
@@ -902,8 +1071,3 @@ public final class TextureAtlasManager {
         }
     }
 }
-
-
-
-
-
