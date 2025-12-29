@@ -28,8 +28,8 @@ void main() {
     uint metadata = texelFetch(metaTexIn, samplePoint, 0).r;
     uint value = uint(depth*((1<<24)-1))<<8;
     value |= stencil&0xFFu;
-    //Use the very top bit of the stencil to mask if its tinted
-    value |= ((metadata>>2)&1u)<<7;
+    //Use the very top bit of the stencil to mask if its tinted (metaOut bit0)
+    value |= (metadata & 1u) << 7;
     outPoint.y = value;
 
     outBuffer[globalOutIndex] = outPoint;

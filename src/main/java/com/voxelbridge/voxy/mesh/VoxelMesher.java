@@ -9,6 +9,8 @@ import com.voxelbridge.voxy.common.world.WorldEngine;
 import com.voxelbridge.voxy.common.world.WorldSection;
 import com.voxelbridge.voxy.common.world.other.Mapper;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
@@ -93,6 +95,8 @@ public class VoxelMesher {
     private final Int2ObjectOpenHashMap<float[]> colorCache = new Int2ObjectOpenHashMap<>();
     private final Int2ObjectOpenHashMap<Biome> biomeCache = new Int2ObjectOpenHashMap<>();
     private final Long2IntOpenHashMap tintCache = new Long2IntOpenHashMap();
+    private final Int2ByteOpenHashMap fluidPresenceCache = new Int2ByteOpenHashMap();
+    private final Int2IntOpenHashMap fluidBlockIdCache = new Int2IntOpenHashMap();
     private static final float[] WHITE_COLORS = GeometryUtil.whiteColor();
 
     private static final class MeshStats {
@@ -159,12 +163,20 @@ public class VoxelMesher {
         }
         this.biomeEntries = mapper.getBiomeEntries();
         this.tintCache.defaultReturnValue(Integer.MIN_VALUE);
+        this.fluidPresenceCache.defaultReturnValue((byte) -1);
+        this.fluidBlockIdCache.defaultReturnValue(Integer.MIN_VALUE);
     }
 
     public void meshChunk(int chunkX, int chunkY, int chunkZ, int level) {
         int scale = 1 << level;
 
         WorldSection section = worldEngine.acquire(level, chunkX, chunkY, chunkZ);
+        WorldSection negX = worldEngine.acquireIfExists(level, chunkX - 1, chunkY, chunkZ);
+        WorldSection posX = worldEngine.acquireIfExists(level, chunkX + 1, chunkY, chunkZ);
+        WorldSection negY = worldEngine.acquireIfExists(level, chunkX, chunkY - 1, chunkZ);
+        WorldSection posY = worldEngine.acquireIfExists(level, chunkX, chunkY + 1, chunkZ);
+        WorldSection negZ = worldEngine.acquireIfExists(level, chunkX, chunkY, chunkZ - 1);
+        WorldSection posZ = worldEngine.acquireIfExists(level, chunkX, chunkY, chunkZ + 1);
         if (section == null) {
             VoxelBridgeLogger.info(LogModule.LOD, String.format(
                 "[LOD] mesh skip missing section lvl=%d pos=[%d,%d,%d]", level, chunkX, chunkY, chunkZ));
@@ -173,6 +185,12 @@ public class VoxelMesher {
 
         try {
             long[] data = section.copyData();
+            long[] dataNegX = negX != null ? negX.copyData() : null;
+            long[] dataPosX = posX != null ? posX.copyData() : null;
+            long[] dataNegY = negY != null ? negY.copyData() : null;
+            long[] dataPosY = posY != null ? posY.copyData() : null;
+            long[] dataNegZ = negZ != null ? negZ.copyData() : null;
+            long[] dataPosZ = posZ != null ? posZ.copyData() : null;
             MeshStats stats = new MeshStats();
             
             // Standard loop over 32x32x32 section
@@ -188,7 +206,9 @@ public class VoxelMesher {
                         int blockId = Mapper.getBlockId(blockIdLong);
                         int biomeId = Mapper.getBiomeId(blockIdLong);
                         BlockState state = mapper.getBlockStateFromBlockId(blockId);
-                        
+                        if (state.getBlock() instanceof LiquidBlock) {
+                            continue;
+                        }
                         // Simple Culling: Check neighbors
                         // TODO: Check neighbors across section boundaries (requires acquiring neighbor sections)
                         // For now, we only cull internal to the section. Boundary faces will be generated.
@@ -198,22 +218,22 @@ public class VoxelMesher {
                             continue;
                         }
 
-                        if (shouldRenderFace(data, x, y, z, Direction.UP, state)) {
+                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.UP, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.DOWN, state)) {
+                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.DOWN, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.NORTH, state)) {
+                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.NORTH, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.SOUTH, state)) {
+                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.SOUTH, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.WEST, state)) {
+                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.WEST, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.EAST, state)) {
+                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.EAST, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
                         }
                     }
@@ -222,20 +242,79 @@ public class VoxelMesher {
             VoxelBridgeLogger.info(LogModule.LOD, String.format(
                 "[LOD] mesh section lvl=%d pos=[%d,%d,%d] nonAir=%d faces=%d",
                 level, chunkX, chunkY, chunkZ, stats.nonAirBlocks, stats.faces));
+            emitFluidFaces(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ,
+                chunkX, chunkY, chunkZ, scale, stats);
+
         } finally {
+            if (negX != null) negX.release();
+            if (posX != null) posX.release();
+            if (negY != null) negY.release();
+            if (posY != null) posY.release();
+            if (negZ != null) negZ.release();
+            if (posZ != null) posZ.release();
             section.release();
         }
     }
 
-    private boolean shouldRenderFace(long[] data, int x, int y, int z, Direction dir, BlockState state) {
+    private boolean shouldRenderFace(long[] data,
+                                     long[] negX,
+                                     long[] posX,
+                                     long[] negY,
+                                     long[] posY,
+                                     long[] negZ,
+                                     long[] posZ,
+                                     int x, int y, int z, Direction dir, BlockState state) {
         int nx = x + dir.getStepX();
         int ny = y + dir.getStepY();
         int nz = z + dir.getStepZ();
 
         // If out of bounds of this section, render it (conservative approach)
-        // Optimally, we would check the neighbor section.
+        // If neighbor section exists, check it for occlusion.
         if (nx < 0 || nx >= 32 || ny < 0 || ny >= 32 || nz < 0 || nz >= 32) {
-            return true;
+            long[] neighbor = null;
+            int lx = x;
+            int ly = y;
+            int lz = z;
+            switch (dir) {
+                case WEST -> {
+                    neighbor = negX;
+                    lx = 31;
+                }
+                case EAST -> {
+                    neighbor = posX;
+                    lx = 0;
+                }
+                case DOWN -> {
+                    neighbor = negY;
+                    ly = 31;
+                }
+                case UP -> {
+                    neighbor = posY;
+                    ly = 0;
+                }
+                case NORTH -> {
+                    neighbor = negZ;
+                    lz = 31;
+                }
+                case SOUTH -> {
+                    neighbor = posZ;
+                    lz = 0;
+                }
+            }
+            if (neighbor == null) {
+                return true;
+            }
+            int neighborIdx = WorldSection.getIndex(lx, ly, lz);
+            long neighborId = neighbor[neighborIdx];
+            if (Mapper.isAir(neighborId)) return true;
+            BlockState neighborState = mapper.getBlockStateFromBlockId(Mapper.getBlockId(neighborId));
+            if (state.skipRendering(neighborState, dir)) {
+                return false;
+            }
+            if (neighborState.getRenderShape() == RenderShape.INVISIBLE) {
+                return true;
+            }
+            return !neighborState.canOcclude();
         }
 
         int neighborIdx = WorldSection.getIndex(nx, ny, nz);
@@ -252,6 +331,137 @@ public class VoxelMesher {
             return true;
         }
         return !neighborState.canOcclude();
+    }
+
+    private void emitFluidFaces(long[] data,
+                                long[] negX,
+                                long[] posX,
+                                long[] negY,
+                                long[] posY,
+                                long[] negZ,
+                                long[] posZ,
+                                int chunkX,
+                                int chunkY,
+                                int chunkZ,
+                                int scale,
+                                MeshStats stats) {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                for (int x = 0; x < 32; x++) {
+                    int index = WorldSection.getIndex(x, y, z);
+                    long blockIdLong = data[index];
+                    if (Mapper.isAir(blockIdLong)) continue;
+                    int blockId = Mapper.getBlockId(blockIdLong);
+                    if (!blockHasFluid(blockId)) continue;
+
+                    BlockState state = mapper.getBlockStateFromBlockId(blockId);
+                    FluidState fluidState = state.getFluidState();
+                    if (fluidState.isEmpty()) continue;
+
+                    BlockState fluidBlock = state.getBlock() instanceof LiquidBlock
+                        ? state
+                        : fluidState.createLegacyBlock();
+                    int fluidBlockId = state.getBlock() instanceof LiquidBlock
+                        ? blockId
+                        : resolveFluidBlockId(blockId, fluidBlock);
+                    if (fluidBlockId <= 0) continue;
+
+                    int biomeId = Mapper.getBiomeId(blockIdLong);
+
+                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.UP)) {
+                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
+                    }
+                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.DOWN)) {
+                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
+                    }
+                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.NORTH)) {
+                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
+                    }
+                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.SOUTH)) {
+                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
+                    }
+                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.WEST)) {
+                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
+                    }
+                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.EAST)) {
+                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean shouldRenderFluidFace(long[] data,
+                                          long[] negX,
+                                          long[] posX,
+                                          long[] negY,
+                                          long[] posY,
+                                          long[] negZ,
+                                          long[] posZ,
+                                          int x, int y, int z, Direction dir) {
+        int nx = x + dir.getStepX();
+        int ny = y + dir.getStepY();
+        int nz = z + dir.getStepZ();
+        return !hasFluidAt(data, negX, posX, negY, posY, negZ, posZ, nx, ny, nz);
+    }
+
+    private boolean hasFluidAt(long[] data,
+                               long[] negX,
+                               long[] posX,
+                               long[] negY,
+                               long[] posY,
+                               long[] negZ,
+                               long[] posZ,
+                               int x, int y, int z) {
+        if (x < 0) {
+            return negX != null && hasFluidAt(negX, 31, y, z);
+        }
+        if (x >= 32) {
+            return posX != null && hasFluidAt(posX, 0, y, z);
+        }
+        if (y < 0) {
+            return negY != null && hasFluidAt(negY, x, 31, z);
+        }
+        if (y >= 32) {
+            return posY != null && hasFluidAt(posY, x, 0, z);
+        }
+        if (z < 0) {
+            return negZ != null && hasFluidAt(negZ, x, y, 31);
+        }
+        if (z >= 32) {
+            return posZ != null && hasFluidAt(posZ, x, y, 0);
+        }
+        return hasFluidAt(data, x, y, z);
+    }
+
+    private boolean hasFluidAt(long[] data, int x, int y, int z) {
+        int idx = WorldSection.getIndex(x, y, z);
+        long id = data[idx];
+        if (Mapper.isAir(id)) {
+            return false;
+        }
+        return blockHasFluid(Mapper.getBlockId(id));
+    }
+
+    private boolean blockHasFluid(int blockId) {
+        byte cached = fluidPresenceCache.get(blockId);
+        if (cached != -1) {
+            return cached == 1;
+        }
+        BlockState state = mapper.getBlockStateFromBlockId(blockId);
+        boolean hasFluid = !state.getFluidState().isEmpty();
+        fluidPresenceCache.put(blockId, (byte) (hasFluid ? 1 : 0));
+        return hasFluid;
+    }
+
+    private int resolveFluidBlockId(int blockId, BlockState fluidBlock) {
+        int cached = fluidBlockIdCache.get(blockId);
+        if (cached != Integer.MIN_VALUE) {
+            return cached;
+        }
+        int resolved = mapper.getIdForBlockState(fluidBlock);
+        fluidBlockIdCache.put(blockId, resolved);
+        return resolved;
     }
 
     private void emitFace(BlockState state, int blockId, int biomeId, int chunkX, int chunkY, int chunkZ, int localX, int localY, int localZ, Direction dir, int scale, MeshStats stats) {
@@ -648,7 +858,7 @@ public class VoxelMesher {
                 if (!quads.isEmpty()) {
                     TextureAtlasSprite sprite = quads.get(0).getSprite();
                     faces[dir.ordinal()] = sprite.contents().name().toString();
-                    tintIndices[dir.ordinal()] = quads.get(0).getTintIndex();
+                    tintIndices[dir.ordinal()] = pickTintIndex(quads);
                 } else {
                     faces[dir.ordinal()] = fallback;
                 }
@@ -666,7 +876,7 @@ public class VoxelMesher {
                 if (!general.isEmpty()) {
                     TextureAtlasSprite sprite = general.get(0).getSprite();
                     String spriteName = sprite.contents().name().toString();
-                    int tintIdx = general.get(0).getTintIndex();
+                    int tintIdx = pickTintIndex(general);
                     for (Direction dir : Direction.values()) {
                         int idx = dir.ordinal();
                         if (faces[idx] == null || faces[idx].equals(fallback)) {
@@ -678,6 +888,16 @@ public class VoxelMesher {
             }
             return new FaceSpriteSet(fallback, faces, tintIndices);
         }).join();
+    }
+
+    private static int pickTintIndex(List<BakedQuad> quads) {
+        for (BakedQuad quad : quads) {
+            int tintIndex = quad.getTintIndex();
+            if (tintIndex >= 0) {
+                return tintIndex;
+            }
+        }
+        return -1;
     }
 
     private int resolveTintColor(int blockId, BlockState state, int biomeId, int tintIndex) {

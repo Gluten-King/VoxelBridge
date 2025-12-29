@@ -16,5 +16,7 @@ void main() {
     if (colour.a < 0.001f && ((metadata&1u)!=0)) {
         discard;
     }
-    metaOut = uvec4((metadata>>2)&1u);//Write if it is or isnt tinted
+    uint hasTint = (metadata >> 2) & 1u;
+    uint visible = colour.a >= 0.001f ? 1u : 0u;
+    metaOut = uvec4(hasTint & visible);//Write if it is or isnt tinted
 }
