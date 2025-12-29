@@ -3,14 +3,19 @@ package com.voxelbridge.export;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.scene.SceneWriteRequest;
-import com.voxelbridge.export.scene.gltf.GltfSceneSink;
+import com.voxelbridge.export.scene.gltf.GltfSceneBuilder;
+import com.voxelbridge.export.texture.ColorMapManager;
+import com.voxelbridge.export.texture.TextureAtlasManager;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.voxy.common.config.section.MemorySectionStorage;
 import com.voxelbridge.voxy.common.thread.ServiceManager;
 import com.voxelbridge.voxy.common.world.WorldEngine;
+import com.voxelbridge.voxy.common.world.WorldSection;
+import com.voxelbridge.voxy.common.world.other.Mapper;
 import com.voxelbridge.voxy.importer.WorldImporter;
 import com.voxelbridge.voxy.mesh.VoxelMesher;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -21,8 +26,8 @@ import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Minimal LOD export path: imports .mca directly and meshes with simplified white model.
- * Designed for testing; textures/UV are not generated.
+ * Minimal LOD export path: imports .mca directly and meshes with simplified proxy cubes.
+ * When an ExportContext is provided, GPU-baked textures are generated and added to the atlas.
  */
 public final class LodExportService {
 
@@ -34,6 +39,15 @@ public final class LodExportService {
         if (server == null) {
             throw new IllegalStateException("LOD export currently only supported in singleplayer.");
         }
+        ExportContext ctx = new ExportContext(mc);
+        ctx.resetConsumedBlocks();
+        ctx.clearTextureState();
+        ctx.setBlockEntityExportEnabled(false);
+        ctx.setCoordinateMode(ExportRuntimeConfig.getCoordinateMode());
+        ctx.setVanillaRandomTransformEnabled(ExportRuntimeConfig.isVanillaRandomTransformEnabled());
+        ctx.setDiscoveryMode(false);
+        TextureAtlasManager.initializeReservedSlots(ctx);
+        ColorMapManager.initializeReservedSlots(ctx);
 
         // Resolve correct dimension path (overworld/nether/end)
         Path regionDir;
@@ -52,7 +66,7 @@ public final class LodExportService {
         }
         VoxelBridgeLogger.info(LogModule.LOD, "[LOD] exportRegion start, regionDir=" + regionDir);
 
-        // Calculate LOD thresholds (in blocks, Chebyshev distance / radius)
+        // Calculate LOD thresholds (in blocks, Euclidean distance / radius)
         // LOD 0 covers [center - fineR, center + fineR]
         int fineChunks = ExportRuntimeConfig.getLodFineChunkRadius();
         double lod0Dist = fineChunks * 16.0;
@@ -90,11 +104,14 @@ public final class LodExportService {
             ? -(minZ + maxZ) / 2.0
             : 0;
 
-        try (GltfSceneSink sink = new GltfSceneSink(request)) {
-            int meshed = appendLodGeometry(level, regionDir, pos1, pos2, sink, cx, cy, cz,
+        try {
+            SceneSink sink = new GltfSceneBuilder(ctx, outDir);
+            int meshed = appendLodGeometry(level, regionDir, pos1, pos2, sink, ctx, outDir, cx, cy, cz,
                 lod0Dist, lod1Dist, lod2Dist, lod3Dist, -1, offsetX, offsetY, offsetZ, true);
             VoxelBridgeLogger.info(LogModule.LOD, "[LOD] exportRegion meshedSections=" + meshed);
             sink.write(request);
+        } finally {
+            ctx.clearTextureState();
         }
 
         VoxelBridgeLogger.info(LogModule.LOD, "[LOD] exportRegion done, output=" + outputPath);
@@ -106,6 +123,8 @@ public final class LodExportService {
                                         BlockPos pos1,
                                         BlockPos pos2,
                                         SceneSink sink,
+                                        ExportContext ctx,
+                                        Path outDir,
                                         double cx,
                                         double cy,
                                         double cz,
@@ -148,7 +167,7 @@ public final class LodExportService {
                                 Math.abs(cx - Math.max(pos1.getX(), pos2.getX())));
         double dzMax = Math.max(Math.abs(cz - Math.min(pos1.getZ(), pos2.getZ())),
                                 Math.abs(cz - Math.max(pos1.getZ(), pos2.getZ())));
-        double maxDist = Math.max(dxMax, dzMax);
+        double maxDist = Math.hypot(dxMax, dzMax);
         int maxRequiredLvl;
         if (!ExportRuntimeConfig.isLodEnabled()) {
             maxRequiredLvl = 0;
@@ -224,168 +243,190 @@ public final class LodExportService {
         final int[] visited = {0};
         CountingSceneSink countingSink = new CountingSceneSink(sink);
 
-        try {
-            VoxelMesher mesher = new VoxelMesher(engine, countingSink, offsetX, offsetY, offsetZ);
-            java.util.List<Long> sectionIds = new java.util.ArrayList<>();
-            java.util.Set<Long> availableSections = new java.util.HashSet<>();
-            storage.iterateStoredSectionPositions(sectionId -> {
-                sectionIds.add(sectionId);
-                availableSections.add(sectionId);
-            });
+        java.util.List<Long> sectionIds = new java.util.ArrayList<>();
+        java.util.Set<Long> availableSections = new java.util.HashSet<>();
+        storage.iterateStoredSectionPositions(sectionId -> {
+            sectionIds.add(sectionId);
+            availableSections.add(sectionId);
+        });
 
-            final int[] fallbackMeshed = {0};
-            int sectionsIntersecting = 0;
-            int debugLogCount = 0;
+        java.util.List<Long> sectionsToMesh = new java.util.ArrayList<>();
+        int sectionsIntersecting = 0;
+        int debugLogCount = 0;
+        int fallbackMeshed = 0;
+
+        VoxelBridgeLogger.info(LogModule.LOD, "[LOD] storage contains " + sectionIds.size() + " sections");
+
+        for (long sectionId : sectionIds) {
+            visited[0]++;
+            int lvl = WorldEngine.getLevel(sectionId);
+            int x = WorldEngine.getX(sectionId);
+            int y = WorldEngine.getY(sectionId);
+            int z = WorldEngine.getZ(sectionId);
+
+            // Section center in world space
+            int scale = 1 << lvl;
+            int size = 32 * scale;
+            double wx = (x * size) + (size / 2.0);
+            double wy = (y * size) + (size / 2.0);
+            double wz = (z * size) + (size / 2.0);
+
+            // Only process sections intersecting the selection AABB
+            if (!intersectsAabb(wx - size / 2.0, wy - size / 2.0, wz - size / 2.0, size,
+                    pos1, pos2)) {
+                continue;
+            }
+            sectionsIntersecting++;
+
+            double dx = cx - wx;
+            double dz = cz - wz;
+            // Euclidean distance
+            double dist = Math.hypot(dx, dz);
+            if (skipDist >= 0 && dist < skipDist) {
+                continue;
+            }
+
+            int myRequiredLvl = getRequiredLevel(dist, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
             
-            VoxelBridgeLogger.info(LogModule.LOD, "[LOD] storage contains " + sectionIds.size() + " sections");
+            if (debugLogCount < 5) {
+                VoxelBridgeLogger.info(LogModule.LOD, String.format(
+                    "[LOD] check section lvl=%d pos=[%d,%d,%d] wPos=[%.1f,%.1f,%.1f] dist=%.1f reqLvl=%d",
+                    lvl, x, y, z, wx, wy, wz, dist, myRequiredLvl));
+                debugLogCount++;
+            }
 
-            for (long sectionId : sectionIds) {
-                visited[0]++;
-                int lvl = WorldEngine.getLevel(sectionId);
-                int x = WorldEngine.getX(sectionId);
-                int y = WorldEngine.getY(sectionId);
-                int z = WorldEngine.getZ(sectionId);
+            if (lvl == myRequiredLvl) {
+                // Check if this section is blocked by any higher-detail child.
+                boolean blocked = false;
+                if (lvl > 0) {
+                    int childLvl = lvl - 1;
+                    int cScale = 1 << childLvl;
+                    int cSize = 32 * cScale;
+                    double childThreshold = getThreshold(childLvl, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
 
-                // Section center in world space
-                int scale = 1 << lvl;
-                int size = 32 * scale;
-                double wx = (x * size) + (size / 2.0);
-                double wy = (y * size) + (size / 2.0);
-                double wz = (z * size) + (size / 2.0);
-
-                // Only process sections intersecting the selection AABB
-                if (!intersectsAabb(wx - size / 2.0, wy - size / 2.0, wz - size / 2.0, size,
-                        pos1, pos2)) {
-                    continue;
+                    // Check 8 children
+                    for (int dx2 = 0; dx2 <= 1; dx2++) {
+                        for (int dy2 = 0; dy2 <= 1; dy2++) {
+                            for (int dz2 = 0; dz2 <= 1; dz2++) {
+                                int cx2 = x * 2 + dx2;
+                                int cy2 = y * 2 + dy2;
+                                int cz2 = z * 2 + dz2;
+                                long childId = WorldEngine.getWorldSectionId(childLvl, cx2, cy2, cz2);
+                                if (availableSections.contains(childId)) {
+                                    double cwx = (cx2 * cSize) + (cSize / 2.0);
+                                    double cwz = (cz2 * cSize) + (cSize / 2.0);
+                                    double cdx = cx - cwx;
+                                    double cdz = cz - cwz;
+                                    if (Math.hypot(cdx, cdz) < childThreshold) {
+                                        blocked = true;
+                                        // Break out of inner loops
+                                        dx2 = 2; dy2 = 2; dz2 = 2;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                sectionsIntersecting++;
 
-                double dx = cx - wx;
-                double dz = cz - wz;
-                // Chebyshev distance
-                double dist = Math.max(Math.abs(dx), Math.abs(dz));
-                if (skipDist >= 0 && dist < skipDist) {
-                    continue;
+                if (!blocked) {
+                    sectionsToMesh.add(sectionId);
                 }
+            } else if (lvl < myRequiredLvl) {
+                // Current section is more detailed than required.
+                // Check if Parent effectively covers this area.
+                int pLvl = lvl + 1;
+                int px = Math.floorDiv(x, 2);
+                int py = Math.floorDiv(y, 2);
+                int pz = Math.floorDiv(z, 2);
+                long parentId = WorldEngine.getWorldSectionId(pLvl, px, py, pz);
 
-                int myRequiredLvl = getRequiredLevel(dist, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
-                
-                if (debugLogCount < 5) {
-                    VoxelBridgeLogger.info(LogModule.LOD, String.format(
-                        "[LOD] check section lvl=%d pos=[%d,%d,%d] wPos=[%.1f,%.1f,%.1f] dist=%.1f reqLvl=%d",
-                        lvl, x, y, z, wx, wy, wz, dist, myRequiredLvl));
-                    debugLogCount++;
-                }
+                boolean parentEffective = false;
+                if (availableSections.contains(parentId)) {
+                    int pScale = 1 << pLvl;
+                    int pSize = 32 * pScale;
+                    double pWx = (px * pSize) + (pSize / 2.0);
+                    double pWz = (pz * pSize) + (pSize / 2.0);
+                    double pDx = cx - pWx;
+                    double pDz = cz - pWz;
+                    double pDist = Math.hypot(pDx, pDz);
+                    int pRequired = getRequiredLevel(pDist, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
 
-                if (lvl == myRequiredLvl) {
-                    // Check if this section is blocked by any higher-detail child.
-                    boolean blocked = false;
-                    if (lvl > 0) {
-                        int childLvl = lvl - 1;
-                        int cScale = 1 << childLvl;
-                        int cSize = 32 * cScale;
+                    if (pRequired > pLvl) {
+                        // Parent delegates up. Assume effective coverage from upstream.
+                        parentEffective = true;
+                    } else if (pRequired < pLvl) {
+                        // Parent wants more detail. It will NOT render.
+                        parentEffective = false;
+                    } else {
+                        // Parent wants to render. Check if it is blocked by any child.
+                        boolean parentBlocked = false;
+                        int childLvl = lvl; // Parent's child level is MY level
                         double childThreshold = getThreshold(childLvl, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
+                        int cSize = 32 * (1 << childLvl);
 
-                        // Check 8 children
+                        // Iterate parent's children (siblings + me)
                         for (int dx2 = 0; dx2 <= 1; dx2++) {
                             for (int dy2 = 0; dy2 <= 1; dy2++) {
                                 for (int dz2 = 0; dz2 <= 1; dz2++) {
-                                    int cx2 = x * 2 + dx2;
-                                    int cy2 = y * 2 + dy2;
-                                    int cz2 = z * 2 + dz2;
-                                    long childId = WorldEngine.getWorldSectionId(childLvl, cx2, cy2, cz2);
-                                    if (availableSections.contains(childId)) {
+                                    int cx2 = px * 2 + dx2;
+                                    int cy2 = py * 2 + dy2;
+                                    int cz2 = pz * 2 + dz2;
+                                    long siblingId = WorldEngine.getWorldSectionId(childLvl, cx2, cy2, cz2);
+                                    if (availableSections.contains(siblingId)) {
                                         double cwx = (cx2 * cSize) + (cSize / 2.0);
                                         double cwz = (cz2 * cSize) + (cSize / 2.0);
                                         double cdx = cx - cwx;
                                         double cdz = cz - cwz;
-                                        if (Math.max(Math.abs(cdx), Math.abs(cdz)) < childThreshold) {
-                                            blocked = true;
-                                            // Break out of inner loops
+                                        if (Math.hypot(cdx, cdz) < childThreshold) {
+                                            parentBlocked = true;
                                             dx2 = 2; dy2 = 2; dz2 = 2;
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-
-                    if (!blocked) {
-                        mesher.meshChunk(x, y, z, lvl);
-                        meshed[0]++;
-                    }
-                } else if (lvl < myRequiredLvl) {
-                    // Current section is more detailed than required.
-                    // Check if Parent effectively covers this area.
-                    int pLvl = lvl + 1;
-                    int px = Math.floorDiv(x, 2);
-                    int py = Math.floorDiv(y, 2);
-                    int pz = Math.floorDiv(z, 2);
-                    long parentId = WorldEngine.getWorldSectionId(pLvl, px, py, pz);
-
-                    boolean parentEffective = false;
-                    if (availableSections.contains(parentId)) {
-                        int pScale = 1 << pLvl;
-                        int pSize = 32 * pScale;
-                        double pWx = (px * pSize) + (pSize / 2.0);
-                        double pWz = (pz * pSize) + (pSize / 2.0);
-                        double pDx = cx - pWx;
-                        double pDz = cz - pWz;
-                        double pDist = Math.max(Math.abs(pDx), Math.abs(pDz));
-                        int pRequired = getRequiredLevel(pDist, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
-
-                        if (pRequired > pLvl) {
-                            // Parent delegates up. Assume effective coverage from upstream.
-                            parentEffective = true;
-                        } else if (pRequired < pLvl) {
-                            // Parent wants more detail. It will NOT render.
-                            parentEffective = false;
-                        } else {
-                            // Parent wants to render. Check if it is blocked by any child.
-                            boolean parentBlocked = false;
-                            int childLvl = lvl; // Parent's child level is MY level
-                            double childThreshold = getThreshold(childLvl, lod0Dist, lod1Dist, lod2Dist, lod3Dist);
-                            int cSize = 32 * (1 << childLvl);
-
-                            // Iterate parent's children (siblings + me)
-                            for (int dx2 = 0; dx2 <= 1; dx2++) {
-                                for (int dy2 = 0; dy2 <= 1; dy2++) {
-                                    for (int dz2 = 0; dz2 <= 1; dz2++) {
-                                        int cx2 = px * 2 + dx2;
-                                        int cy2 = py * 2 + dy2;
-                                        int cz2 = pz * 2 + dz2;
-                                        long siblingId = WorldEngine.getWorldSectionId(childLvl, cx2, cy2, cz2);
-                                        if (availableSections.contains(siblingId)) {
-                                            double cwx = (cx2 * cSize) + (cSize / 2.0);
-                                            double cwz = (cz2 * cSize) + (cSize / 2.0);
-                                            double cdx = cx - cwx;
-                                            double cdz = cz - cwz;
-                                            if (Math.max(Math.abs(cdx), Math.abs(cdz)) < childThreshold) {
-                                                parentBlocked = true;
-                                                dx2 = 2; dy2 = 2; dz2 = 2;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            parentEffective = !parentBlocked;
-                        }
-                    }
-
-                    if (!parentEffective) {
-                        mesher.meshChunk(x, y, z, lvl);
-                        meshed[0]++;
-                        fallbackMeshed[0]++;
+                        parentEffective = !parentBlocked;
                     }
                 }
+
+                if (!parentEffective) {
+                    sectionsToMesh.add(sectionId);
+                    fallbackMeshed++;
+                }
             }
-            if (fallbackMeshed[0] > 0) {
-                VoxelBridgeLogger.info(LogModule.LOD, "[LOD] fallback meshed sections=" + fallbackMeshed[0]);
+        }
+        if (fallbackMeshed > 0) {
+            VoxelBridgeLogger.info(LogModule.LOD, "[LOD] fallback meshed sections=" + fallbackMeshed);
+        }
+        if (sectionsIntersecting == 0) {
+            VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] no sections intersected the selection AABB");
+        }
+
+        LodGpuBakeService lodGpuBakeService = null;
+        try {
+            if (ctx != null && !sectionsToMesh.isEmpty()) {
+                IntOpenHashSet blockIds = collectBlockIds(engine, sectionsToMesh);
+                if (!blockIds.isEmpty()) {
+                    VoxelBridgeLogger.info(LogModule.LOD, "[LOD] gpu bake start, blocks=" + blockIds.size());
+                    lodGpuBakeService = new LodGpuBakeService(ctx, engine.getMapper(), outDir);
+                    lodGpuBakeService.bakeBlockIds(blockIds);
+                    VoxelBridgeLogger.info(LogModule.LOD, "[LOD] gpu bake done");
+                }
             }
-            if (sectionsIntersecting == 0) {
-                VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] no sections intersected the selection AABB");
+
+            VoxelMesher mesher = new VoxelMesher(engine, countingSink, offsetX, offsetY, offsetZ, lodGpuBakeService, ctx);
+            for (long sectionId : sectionsToMesh) {
+                int lvl = WorldEngine.getLevel(sectionId);
+                int x = WorldEngine.getX(sectionId);
+                int y = WorldEngine.getY(sectionId);
+                int z = WorldEngine.getZ(sectionId);
+                mesher.meshChunk(x, y, z, lvl);
+                meshed[0]++;
             }
         } finally {
+            if (lodGpuBakeService != null) {
+                lodGpuBakeService.close();
+            }
             engine.free();
         }
 
@@ -404,6 +445,31 @@ public final class LodExportService {
             throw new IllegalStateException("LOD export produced no geometry (selection empty or not imported)");
         }
         return meshed[0];
+    }
+
+    private static IntOpenHashSet collectBlockIds(WorldEngine engine, java.util.List<Long> sectionsToMesh) {
+        IntOpenHashSet blockIds = new IntOpenHashSet();
+        for (long sectionId : sectionsToMesh) {
+            int lvl = WorldEngine.getLevel(sectionId);
+            int x = WorldEngine.getX(sectionId);
+            int y = WorldEngine.getY(sectionId);
+            int z = WorldEngine.getZ(sectionId);
+            WorldSection section = engine.acquire(lvl, x, y, z);
+            if (section == null) {
+                continue;
+            }
+            try {
+                long[] data = section.copyData();
+                for (long blockIdLong : data) {
+                    if (!Mapper.isAir(blockIdLong)) {
+                        blockIds.add(Mapper.getBlockId(blockIdLong));
+                    }
+                }
+            } finally {
+                section.release();
+            }
+        }
+        return blockIds;
     }
 
     private static int getRequiredLevel(double dist, double d0, double d1, double d2, double d3) {

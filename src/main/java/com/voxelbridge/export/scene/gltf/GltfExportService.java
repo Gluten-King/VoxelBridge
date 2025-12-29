@@ -112,19 +112,21 @@ public final class GltfExportService {
                 VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] enabled but singleplayer server is unavailable; skipping LOD append.");
             } else {
                 int viewDistance = mc.options != null ? mc.options.getEffectiveRenderDistance() : 0;
-                // Reduce view distance slightly to avoid Z-fighting at the very edge of the fog
-                double viewDistBlocks = Math.max(0, viewDistance - 1) * 16.0;
-                double skipDist = viewDistBlocks;
+                
+                // Use configured fine radius for LOD start
+                int fineChunks = ExportRuntimeConfig.getLodFineChunkRadius();
+                double skipDist = fineChunks * 16.0;
 
-                double lod0Dist = ExportRuntimeConfig.getLodFineChunkRadius() * 16.0;
+                // Ensure LOD bands start relative to the fine region
+                // LOD0 covers [skipDist, lod0Dist]
+                double lod0Dist = Math.max(skipDist + 64.0, skipDist * 2.0); 
                 double lod1Dist = lod0Dist * 2.0;
                 double lod2Dist = lod0Dist * 4.0;
                 double lod3Dist = lod0Dist * 8.0;
 
-            var playerPos = level.getNearestPlayer(pos1.getX(), pos1.getY(), pos1.getZ(), 1024, false);
-            double cx = playerPos != null ? playerPos.getX() : (pos1.getX() + pos2.getX()) / 2.0;
-            double cy = playerPos != null ? playerPos.getY() : (pos1.getY() + pos2.getY()) / 2.0;
-            double cz = playerPos != null ? playerPos.getZ() : (pos1.getZ() + pos2.getZ()) / 2.0;
+                double cx = (pos1.getX() + pos2.getX()) / 2.0;
+                double cy = (pos1.getY() + pos2.getY()) / 2.0;
+                double cz = (pos1.getZ() + pos2.getZ()) / 2.0;
 
                 Path regionDir = level.dimension() == Level.OVERWORLD
                 ? mc.getSingleplayerServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("region")
@@ -160,6 +162,8 @@ public final class GltfExportService {
                             pos1,
                             pos2,
                             sceneSink,
+                            ctx,
+                            gltfDir,
                             cx,
                             cy,
                             cz,

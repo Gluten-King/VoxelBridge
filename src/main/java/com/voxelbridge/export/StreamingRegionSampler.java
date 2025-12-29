@@ -59,6 +59,8 @@ public final class StreamingRegionSampler {
         int maxX = Math.max(pos1.getX(), pos2.getX());
         int maxY = Math.max(pos1.getY(), pos2.getY());
         int maxZ = Math.max(pos1.getZ(), pos2.getZ());
+        double centerX = (minX + maxX) / 2.0;
+        double centerZ = (minZ + maxZ) / 2.0;
 
         int minChunkX = minX >> 4;
         int maxChunkX = maxX >> 4;
@@ -136,6 +138,10 @@ public final class StreamingRegionSampler {
                     ExportProgressTracker.Progress progress = ExportProgressTracker.progress();
                     final ChunkPos playerChunk = mc.player != null ? mc.player.chunkPosition() : null;
                     final int activeDistance = Math.max(0, mc.options != null ? mc.options.getEffectiveRenderDistance() : 0);
+                    
+                    // Use configured radius for fine region, decoupled from view distance
+                    final int fineChunks = ExportRuntimeConfig.getLodFineChunkRadius();
+                    final double fineRadiusBlocks = fineChunks * 16.0;
 
                     if (progress.isComplete()) break;
 
@@ -162,6 +168,23 @@ public final class StreamingRegionSampler {
 
                         // Re-check processing state as it might have changed concurrently (though unlikely in this single consumer thread)
                         if (processing.contains(chunkPos)) continue;
+
+                        if (ExportRuntimeConfig.isLodEnabled()) {
+                            // Align Fine/LOD boundary to LOD grid (32x32 blocks / 2x2 chunks)
+                            // This matches LodExportService's section logic to prevent gaps/overlaps.
+                            int lodSectionX = Math.floorDiv(chunkPos.x, 2);
+                            int lodSectionZ = Math.floorDiv(chunkPos.z, 2);
+                            // Center of the 32x32 section in world space
+                            double sectionCenterX = (lodSectionX * 32) + 16.0;
+                            double sectionCenterZ = (lodSectionZ * 32) + 16.0;
+
+                            double dist = Math.hypot(sectionCenterX - centerX, sectionCenterZ - centerZ);
+                            if (dist >= fineRadiusBlocks) {
+                                // LOD will cover outside the fine radius (based on section center).
+                                ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
+                                continue;
+                            }
+                        }
 
                         if (playerChunk != null) {
                             int dist = Math.max(Math.abs(chunkPos.x - playerChunk.x), Math.abs(chunkPos.z - playerChunk.z));

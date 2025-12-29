@@ -182,3 +182,4 @@ public class ServiceManager {
         Logger.error("Service '"+service.name+"' on thread '"+Thread.currentThread().getName()+"' had an exception", exception);
     }
 }
+

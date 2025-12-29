@@ -87,9 +87,13 @@ public final class ExportRuntimeConfig {
     // Export decoded LabPBR channel maps from _n/_s.
     private static boolean pbrDecodeEnabled = false;
     // LOD export toggle (experimental): when true, far chunks may use lower LOD/white mesh.
-    private static boolean lodEnabled = false;
+    private static boolean lodEnabled = true;
     // Radius in chunks for the finest detail level (LOD 0).
     private static int lodFineChunkRadius = 8;
+    // Debug: dump LOD GPU bake textures and metadata.
+    private static boolean lodBakeDebugEnabled = false;
+    // Debug: only dump this blockId; -1 dumps all.
+    private static int lodBakeDebugBlockId = -1;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -205,6 +209,22 @@ public final class ExportRuntimeConfig {
         if (radius > 0) {
             lodFineChunkRadius = radius;
         }
+    }
+
+    public static boolean isLodBakeDebugEnabled() {
+        return lodBakeDebugEnabled;
+    }
+
+    public static void setLodBakeDebugEnabled(boolean enabled) {
+        lodBakeDebugEnabled = enabled;
+    }
+
+    public static int getLodBakeDebugBlockId() {
+        return lodBakeDebugBlockId;
+    }
+
+    public static void setLodBakeDebugBlockId(int blockId) {
+        lodBakeDebugBlockId = blockId;
     }
 
 

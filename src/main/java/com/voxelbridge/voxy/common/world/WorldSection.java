@@ -294,3 +294,4 @@ public final class WorldSection {
         return (((int)ATOMIC_STATE_HANDLE.get(this))&1)==0;
     }
 }
+

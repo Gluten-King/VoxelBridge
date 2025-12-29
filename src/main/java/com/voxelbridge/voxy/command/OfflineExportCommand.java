@@ -159,13 +159,13 @@ public class OfflineExportCommand {
         String trimmed = raw.trim();
         boolean lodEnabled = true;
 
-        // 解析尾部可选标记，例如 "--nolod" / "--lod=off"
+        // Parse optional trailing flags like "--nolod" or "--lod=off".
         String[] parts = trimmed.split("\\s+");
         if (parts.length > 1) {
             String last = parts[parts.length - 1].toLowerCase();
             if (last.equals("--nolod") || last.equals("--lod=off")) {
                 lodEnabled = false;
-                // 去掉最后一个标记
+                // Strip the last token from the command string.
                 StringBuilder sb = new StringBuilder();
                 for (int i = 0; i < parts.length - 1; i++) {
                     if (i > 0) sb.append(' ');
@@ -177,3 +177,4 @@ public class OfflineExportCommand {
         return new ParsedArgs(trimmed, lodEnabled);
     }
 }
+

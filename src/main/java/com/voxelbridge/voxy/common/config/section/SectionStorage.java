@@ -8,3 +8,4 @@ public abstract class SectionStorage implements IMappingStorage {
 
     public abstract void saveSection(WorldSection section);
 }
+

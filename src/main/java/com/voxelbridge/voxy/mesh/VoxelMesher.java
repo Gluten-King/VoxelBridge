@@ -1,48 +1,164 @@
 package com.voxelbridge.voxy.mesh;
 
 import com.voxelbridge.export.scene.SceneSink;
+import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.util.geometry.GeometryUtil;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.voxy.common.world.WorldEngine;
 import com.voxelbridge.voxy.common.world.WorldSection;
 import com.voxelbridge.voxy.common.world.other.Mapper;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.VertexFormatElement;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.BlockAndTintGetter;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.block.LiquidBlock;
+import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.Biomes;
+import net.minecraft.world.level.lighting.LevelLightEngine;
+import net.minecraft.world.level.material.FluidState;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
-import java.util.BitSet;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.awt.image.BufferedImage;
 
 public class VoxelMesher {
+    public interface LodTextureProvider {
+        boolean hasTextures(int blockId);
+        String getSpriteKey(int blockId, Direction dir);
+    }
+
+    public interface LodFaceProvider extends LodTextureProvider {
+        LodFaceMeta getFaceMeta(int blockId, Direction dir);
+    }
+
+    public interface LodOverlayProvider extends LodFaceProvider {
+        String getOverlaySpriteKey(int blockId, Direction dir);
+    }
+
+    public static final class LodFaceMeta {
+        public final int minX;
+        public final int maxX;
+        public final int minY;
+        public final int maxY;
+        public final float depth;
+        public final boolean empty;
+
+        public LodFaceMeta(int minX, int maxX, int minY, int maxY, float depth, boolean empty) {
+            this.minX = minX;
+            this.maxX = maxX;
+            this.minY = minY;
+            this.maxY = maxY;
+            this.depth = depth;
+            this.empty = empty;
+        }
+    }
     private final WorldEngine worldEngine;
     private final Mapper mapper;
     private final SceneSink sink;
+    private final LodTextureProvider lodTextureProvider;
+    private final com.voxelbridge.export.ExportContext exportContext;
     private final RandomSource random = RandomSource.create();
+    private final BlockColors blockColors;
+    private final net.minecraft.core.Registry<Biome> biomeRegistry;
+    private final Biome defaultBiome;
+    private final Mapper.BiomeEntry[] biomeEntries;
     private final double offsetX;
     private final double offsetY;
     private final double offsetZ;
-    private static final boolean FORCE_LOD_MATERIAL = true;
+    private static final boolean FORCE_LOD_MATERIAL = false;
     private static final String LOD_MATERIAL_KEY = "lod";
     private static final String LOD_SPRITE_KEY = "minecraft:block/white_wool";
+    private static final long SPRITE_RANDOM_SEED = 42L;
+
+    private final Int2ObjectOpenHashMap<FaceSpriteSet> faceSpriteCache = new Int2ObjectOpenHashMap<>();
+    private final Int2ObjectOpenHashMap<List<ModelQuadTemplate>> modelQuadCache = new Int2ObjectOpenHashMap<>();
+    private final Int2ObjectOpenHashMap<float[]> colorCache = new Int2ObjectOpenHashMap<>();
+    private final Int2ObjectOpenHashMap<Biome> biomeCache = new Int2ObjectOpenHashMap<>();
+    private final Long2IntOpenHashMap tintCache = new Long2IntOpenHashMap();
+    private static final float[] WHITE_COLORS = GeometryUtil.whiteColor();
 
     private static final class MeshStats {
         int nonAirBlocks;
         int faces;
     }
 
+    private static final class FaceSpriteSet {
+        private final String[] faces;
+        private final int[] tintIndices;
+        private final String fallback;
+
+        private FaceSpriteSet(String fallback, String[] faces, int[] tintIndices) {
+            this.fallback = fallback;
+            this.faces = faces;
+            this.tintIndices = tintIndices;
+        }
+    }
+
+    private static final class ModelQuadTemplate {
+        private final String spriteKey;
+        private final float[] localPositions;
+        private final float[] uv;
+        private final float[] normal;
+        private final int tintIndex;
+
+        private ModelQuadTemplate(String spriteKey, float[] localPositions, float[] uv, float[] normal, int tintIndex) {
+            this.spriteKey = spriteKey;
+            this.localPositions = localPositions;
+            this.uv = uv;
+            this.normal = normal;
+            this.tintIndex = tintIndex;
+        }
+    }
+
     public VoxelMesher(WorldEngine worldEngine, SceneSink sink) {
-        this(worldEngine, sink, 0, 0, 0);
+        this(worldEngine, sink, 0, 0, 0, null, null);
     }
 
     public VoxelMesher(WorldEngine worldEngine, SceneSink sink, double offsetX, double offsetY, double offsetZ) {
+        this(worldEngine, sink, offsetX, offsetY, offsetZ, null, null);
+    }
+
+    public VoxelMesher(WorldEngine worldEngine, SceneSink sink, double offsetX, double offsetY, double offsetZ, LodTextureProvider lodTextureProvider) {
+        this(worldEngine, sink, offsetX, offsetY, offsetZ, lodTextureProvider, null);
+    }
+
+    public VoxelMesher(WorldEngine worldEngine, SceneSink sink, double offsetX, double offsetY, double offsetZ, LodTextureProvider lodTextureProvider, com.voxelbridge.export.ExportContext exportContext) {
         this.worldEngine = worldEngine;
         this.mapper = worldEngine.getMapper();
         this.sink = sink;
         this.offsetX = offsetX;
         this.offsetY = offsetY;
         this.offsetZ = offsetZ;
+        this.lodTextureProvider = lodTextureProvider;
+        this.exportContext = exportContext;
+        this.blockColors = Minecraft.getInstance().getBlockColors();
+        if (Minecraft.getInstance().level != null) {
+            this.biomeRegistry = Minecraft.getInstance().level.registryAccess().registryOrThrow(Registries.BIOME);
+            this.defaultBiome = this.biomeRegistry.getHolderOrThrow(Biomes.PLAINS).value();
+        } else {
+            this.biomeRegistry = null;
+            this.defaultBiome = null;
+        }
+        this.biomeEntries = mapper.getBiomeEntries();
+        this.tintCache.defaultReturnValue(Integer.MIN_VALUE);
     }
 
     public void meshChunk(int chunkX, int chunkY, int chunkZ, int level) {
@@ -70,29 +186,35 @@ public class VoxelMesher {
                         stats.nonAirBlocks++;
 
                         int blockId = Mapper.getBlockId(blockIdLong);
+                        int biomeId = Mapper.getBiomeId(blockIdLong);
                         BlockState state = mapper.getBlockStateFromBlockId(blockId);
                         
                         // Simple Culling: Check neighbors
                         // TODO: Check neighbors across section boundaries (requires acquiring neighbor sections)
                         // For now, we only cull internal to the section. Boundary faces will be generated.
                         
-                        if (shouldRenderFace(data, x, y, z, Direction.UP)) {
-                            emitFace(state, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
+                        if (shouldUseModelQuads(state, blockId)) {
+                            emitModelQuads(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, scale, stats);
+                            continue;
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.DOWN)) {
-                            emitFace(state, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
+
+                        if (shouldRenderFace(data, x, y, z, Direction.UP, state)) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.NORTH)) {
-                            emitFace(state, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
+                        if (shouldRenderFace(data, x, y, z, Direction.DOWN, state)) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.SOUTH)) {
-                            emitFace(state, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
+                        if (shouldRenderFace(data, x, y, z, Direction.NORTH, state)) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.WEST)) {
-                            emitFace(state, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
+                        if (shouldRenderFace(data, x, y, z, Direction.SOUTH, state)) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
                         }
-                        if (shouldRenderFace(data, x, y, z, Direction.EAST)) {
-                            emitFace(state, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
+                        if (shouldRenderFace(data, x, y, z, Direction.WEST, state)) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
+                        }
+                        if (shouldRenderFace(data, x, y, z, Direction.EAST, state)) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
                         }
                     }
                 }
@@ -105,7 +227,7 @@ public class VoxelMesher {
         }
     }
 
-    private boolean shouldRenderFace(long[] data, int x, int y, int z, Direction dir) {
+    private boolean shouldRenderFace(long[] data, int x, int y, int z, Direction dir, BlockState state) {
         int nx = x + dir.getStepX();
         int ny = y + dir.getStepY();
         int nz = z + dir.getStepZ();
@@ -122,31 +244,100 @@ public class VoxelMesher {
         // If neighbor is air, we must render
         if (Mapper.isAir(neighborId)) return true;
 
-        // If neighbor is not air, usually we cull. 
-        // But transparent blocks (glass) generally don't cull other blocks, only themselves if same type.
-        // For simplicity in this v1, we cull if neighbor is solid.
-        // TODO: use BlockState.isOccluding or skipRendering checks
-        return false;
+        BlockState neighborState = mapper.getBlockStateFromBlockId(Mapper.getBlockId(neighborId));
+        if (state.skipRendering(neighborState, dir)) {
+            return false;
+        }
+        if (neighborState.getRenderShape() == RenderShape.INVISIBLE) {
+            return true;
+        }
+        return !neighborState.canOcclude();
     }
 
-    private void emitFace(BlockState state, int chunkX, int chunkY, int chunkZ, int localX, int localY, int localZ, Direction dir, int scale, MeshStats stats) {
+    private void emitFace(BlockState state, int blockId, int biomeId, int chunkX, int chunkY, int chunkZ, int localX, int localY, int localZ, Direction dir, int scale, MeshStats stats) {
+        if (state.getRenderShape() == RenderShape.INVISIBLE && !(state.getBlock() instanceof LiquidBlock)) {
+            return;
+        }
         String materialKey;
         String spriteName;
+        LodFaceMeta faceMeta = null;
+        String overlaySprite = null;
         if (FORCE_LOD_MATERIAL) {
             materialKey = LOD_MATERIAL_KEY;
             spriteName = LOD_SPRITE_KEY;
         } else {
-            BakedModel model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
-            var sprite = model.getParticleIcon();
-            spriteName = sprite.contents().name().toString();
+            spriteName = resolveSpriteKey(state, blockId, dir);
             materialKey = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+            if (hasLodTextures(blockId) && lodTextureProvider instanceof LodFaceProvider faceProvider) {
+                faceMeta = faceProvider.getFaceMeta(blockId, dir);
+                if (lodTextureProvider instanceof LodOverlayProvider overlayProvider) {
+                    overlaySprite = overlayProvider.getOverlaySpriteKey(blockId, dir);
+                }
+            }
+        }
+
+        int tintIndex = resolveTintIndex(state, blockId, dir);
+        if (tintIndex < 0 && state.getBlock() instanceof LiquidBlock) {
+            tintIndex = 0;
+        }
+        int tintColor = resolveTintColor(blockId, state, biomeId, tintIndex);
+        boolean hasTint = tintColor != -1;
+        float[] baseColors = resolveColors(tintColor, hasTint);
+        float[] overlayColors = baseColors;
+
+        String combinedSprite = null;
+        if (overlaySprite != null && exportContext != null) {
+            combinedSprite = buildCombinedOverlaySprite(exportContext, spriteName, overlaySprite, tintColor);
+            if (combinedSprite != null) {
+                spriteName = combinedSprite;
+                overlaySprite = null;
+                hasTint = false;
+                baseColors = WHITE_COLORS;
+                overlayColors = WHITE_COLORS;
+            } else {
+                // overlay 单独着色，基底保持白色避免整面染色
+                baseColors = WHITE_COLORS;
+                overlayColors = resolveColors(tintColor, hasTint);
+            }
+        } else if (overlaySprite != null) {
+            baseColors = WHITE_COLORS;
+            overlayColors = resolveColors(tintColor, hasTint);
+        }
+
+        // Register tinted sprites to atlas for proper UV remapping
+        if (exportContext != null) {
+            if (combinedSprite != null) {
+                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, 0xFFFFFF);
+            } else {
+            // Overlay sprites must always be registered as tinted, even if tintColor is -1
+            // This allows grass_block_side_overlay and similar textures to be properly separated
+            boolean isBaseTinted = hasTint;
+            boolean isOverlay = overlaySprite != null && isOverlaySprite(overlaySprite);
+            boolean isBaseSpriteOverlay = isOverlaySprite(spriteName);
+
+            if (isBaseTinted || isBaseSpriteOverlay) {
+                int colorToRegister = (overlaySprite != null) ? 0xFFFFFF : (isBaseTinted ? tintColor : 0xFFFFFF);
+                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, colorToRegister);
+            }
+
+            if (overlaySprite != null) {
+                // overlay 使用白色基底，着色交给顶点色
+                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, 0xFFFFFF);
+
+                // Only log when overlay is present (rare case)
+                if (com.voxelbridge.util.debug.VoxelBridgeLogger.isDebugEnabled(com.voxelbridge.util.debug.LogModule.LOD_BAKE)) {
+                    com.voxelbridge.util.debug.VoxelBridgeLogger.debug(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
+                        String.format("[VoxelMesher] blockId=%d dir=%s HAS_OVERLAY overlay=%s tint=%08X",
+                            blockId, dir.getName(), overlaySprite, hasTint ? tintColor : 0xFFFFFF));
+                }
+            }
+            }
         }
 
         // Generate geometry for a standard unit face
         float[] positions = new float[12];
         float[] uvs = new float[8];
         float[] normals = new float[]{dir.getStepX(), dir.getStepY(), dir.getStepZ()};
-        float[] colors = new float[]{1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1}; // White
         
         // Basic Unit Cube Geometry
         float baseX = (float) ((chunkX * 32 + localX) * scale + offsetX);
@@ -156,84 +347,544 @@ public class VoxelMesher {
         float y0 = baseY, y1 = baseY + scale;
         float z0 = baseZ, z1 = baseZ + scale;
 
+        if (faceMeta != null && faceMeta.empty) {
+            return;
+        }
+
+        float u0 = 0f;
+        float u1 = 1f;
+        float v0 = 0f;
+        float v1 = 1f;
+        float depthOffset = 0f;
+        if (faceMeta != null) {
+            u0 = faceMeta.minX / 16.0f;
+            u1 = (faceMeta.maxX + 1) / 16.0f;
+            v0 = faceMeta.minY / 16.0f;
+            v1 = (faceMeta.maxY + 1) / 16.0f;
+            depthOffset = clamp01(faceMeta.depth);
+            if ((dir.get3DDataValue() & 1) == 1) {
+                depthOffset = 1.0f - depthOffset;
+            }
+        }
+
         switch (dir) {
             case DOWN -> {
+                float xx0 = lerp(x0, x1, u0);
+                float xx1 = lerp(x0, x1, u1);
+                float zz0 = lerp(z0, z1, v0);
+                float zz1 = lerp(z0, z1, v1);
+                float yy = faceMeta != null ? (baseY + depthOffset * scale) : y0;
                 // y0 face: (x0, z1), (x0, z0), (x1, z0), (x1, z1)
                 positions = new float[]{
-                    x0, y0, z1,
-                    x0, y0, z0,
-                    x1, y0, z0,
-                    x1, y0, z1
+                    xx0, yy, zz1,
+                    xx0, yy, zz0,
+                    xx1, yy, zz0,
+                    xx1, yy, zz1
                 };
             }
             case UP -> {
+                float xx0 = lerp(x0, x1, u0);
+                float xx1 = lerp(x0, x1, u1);
+                float zz0 = lerp(z0, z1, v0);
+                float zz1 = lerp(z0, z1, v1);
+                float yy = faceMeta != null ? (baseY + depthOffset * scale) : y1;
                 // y1 face: (x0, z0), (x0, z1), (x1, z1), (x1, z0)
                 positions = new float[]{
-                    x0, y1, z0,
-                    x0, y1, z1,
-                    x1, y1, z1,
-                    x1, y1, z0
+                    xx0, yy, zz0,
+                    xx0, yy, zz1,
+                    xx1, yy, zz1,
+                    xx1, yy, zz0
                 };
             }
             case NORTH -> {
+                float xx0 = lerp(x0, x1, u0);
+                float xx1 = lerp(x0, x1, u1);
+                float yy0 = lerp(y0, y1, v0);
+                float yy1 = lerp(y0, y1, v1);
+                float zz = faceMeta != null ? (baseZ + depthOffset * scale) : z0;
                 // z0 face: (x1, y1), (x1, y0), (x0, y0), (x0, y1)
                 positions = new float[]{
-                    x1, y1, z0,
-                    x1, y0, z0,
-                    x0, y0, z0,
-                    x0, y1, z0
+                    xx1, yy1, zz,
+                    xx1, yy0, zz,
+                    xx0, yy0, zz,
+                    xx0, yy1, zz
                 };
             }
             case SOUTH -> {
+                float xx0 = lerp(x0, x1, u0);
+                float xx1 = lerp(x0, x1, u1);
+                float yy0 = lerp(y0, y1, v0);
+                float yy1 = lerp(y0, y1, v1);
+                float zz = faceMeta != null ? (baseZ + depthOffset * scale) : z1;
                 // z1 face: (x0, y1), (x0, y0), (x1, y0), (x1, y1)
                 positions = new float[]{
-                    x0, y1, z1,
-                    x0, y0, z1,
-                    x1, y0, z1,
-                    x1, y1, z1
+                    xx0, yy1, zz,
+                    xx0, yy0, zz,
+                    xx1, yy0, zz,
+                    xx1, yy1, zz
                 };
             }
             case WEST -> {
+                float zz0 = lerp(z0, z1, u0);
+                float zz1 = lerp(z0, z1, u1);
+                float yy0 = lerp(y0, y1, v0);
+                float yy1 = lerp(y0, y1, v1);
+                float xx = faceMeta != null ? (baseX + depthOffset * scale) : x0;
                 positions = new float[]{
-                    x0, y1, z0,
-                    x0, y0, z0,
-                    x0, y0, z1,
-                    x0, y1, z1
+                    xx, yy1, zz0,
+                    xx, yy0, zz0,
+                    xx, yy0, zz1,
+                    xx, yy1, zz1
                 };
             }
             case EAST -> {
+                float zz0 = lerp(z0, z1, u0);
+                float zz1 = lerp(z0, z1, u1);
+                float yy0 = lerp(y0, y1, v0);
+                float yy1 = lerp(y0, y1, v1);
+                float xx = faceMeta != null ? (baseX + depthOffset * scale) : x1;
                 // x1 face: (x1, y1, z0), (x1, y0, z0), (x1, y0, z1), (x1, y1, z1)
                 positions = new float[]{
-                    x1, y1, z1,
-                    x1, y0, z1,
-                    x1, y0, z0,
-                    x1, y1, z0
+                    xx, yy1, zz1,
+                    xx, yy0, zz1,
+                    xx, yy0, zz0,
+                    xx, yy1, zz0
                 };
             }
         }
         
-        // Simple UVs (0-1)
+        // Simple UVs (0-1) or per-face bounds from LOD bake
         uvs = new float[]{
-            0, 0,
-            0, 1,
-            1, 1,
-            1, 0
+            u0, v0,
+            u0, v1,
+            u1, v1,
+            u1, v0
         };
 
         sink.addQuad(
             materialKey,
             spriteName,
-            null, // No overlay
+            null,
             positions,
             uvs,
-            null, // No biome UVs for now
+            null,
             normals,
-            colors,
+            baseColors,
             false
         );
+
+        if (overlaySprite != null) {
+            float eps = 0.001f * scale;
+            float[] overlayPos = positions.clone();
+            for (int i = 0; i < 4; i++) {
+                int p = i * 3;
+                overlayPos[p] += normals[0] * eps;
+                overlayPos[p + 1] += normals[1] * eps;
+                overlayPos[p + 2] += normals[2] * eps;
+            }
+            sink.addQuad(
+                materialKey,
+                overlaySprite,
+                null,
+                overlayPos,
+                uvs,
+                null,
+                normals,
+                overlayColors,
+                false
+            );
+        }
         stats.faces++;
     }
-    
+
+    private boolean shouldUseModelQuads(BlockState state, int blockId) {
+        if (state.getRenderShape() != RenderShape.MODEL) {
+            return false;
+        }
+        if (state.canOcclude()) {
+            return false;
+        }
+        return !hasLodTextures(blockId);
+    }
+
+    private void emitModelQuads(BlockState state, int blockId, int biomeId, int chunkX, int chunkY, int chunkZ, int localX, int localY, int localZ, int scale, MeshStats stats) {
+        List<ModelQuadTemplate> templates = modelQuadCache.get(blockId);
+        if (templates == null) {
+            templates = buildModelQuadTemplates(state);
+            modelQuadCache.put(blockId, templates);
+        }
+        if (templates.isEmpty()) {
+            return;
+        }
+
+        float baseX = (float) ((chunkX * 32 + localX) * scale + offsetX);
+        float baseY = (float) ((chunkY * 32 + localY) * scale + offsetY);
+        float baseZ = (float) ((chunkZ * 32 + localZ) * scale + offsetZ);
+
+        String materialKey = FORCE_LOD_MATERIAL
+            ? LOD_MATERIAL_KEY
+            : net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+
+        for (ModelQuadTemplate template : templates) {
+            float[] positions = new float[12];
+            for (int i = 0; i < 4; i++) {
+                int p = i * 3;
+                positions[p] = baseX + template.localPositions[p] * scale;
+                positions[p + 1] = baseY + template.localPositions[p + 1] * scale;
+                positions[p + 2] = baseZ + template.localPositions[p + 2] * scale;
+            }
+
+            int tintColor = resolveTintColor(blockId, state, biomeId, template.tintIndex);
+            float[] colors = resolveColors(tintColor, tintColor != -1);
+
+            // Register tinted sprites to atlas for proper UV remapping
+            String spriteKey = FORCE_LOD_MATERIAL ? LOD_SPRITE_KEY : template.spriteKey;
+            if (exportContext != null) {
+                // Always register overlay sprites, even if tintColor is -1
+                boolean isTinted = tintColor != -1;
+                boolean isOverlay = isOverlaySprite(spriteKey);
+
+                if (isTinted || isOverlay) {
+                    int colorToRegister = isTinted ? tintColor : 0xFFFFFF;
+                    com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteKey, colorToRegister);
+                }
+            }
+
+            sink.addQuad(
+                materialKey,
+                spriteKey,
+                null,
+                positions,
+                template.uv,
+                null,
+                template.normal,
+                colors,
+                true
+            );
+            stats.faces++;
+        }
+    }
+
+    private List<ModelQuadTemplate> buildModelQuadTemplates(BlockState state) {
+        return Minecraft.getInstance().submit(() -> {
+            BakedModel model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
+            RandomSource rand = RandomSource.create(SPRITE_RANDOM_SEED);
+            List<BakedQuad> quads = new ArrayList<>();
+            quads.addAll(model.getQuads(state, null, rand, ModelData.EMPTY, null));
+            for (Direction dir : Direction.values()) {
+                quads.addAll(model.getQuads(state, dir, rand, ModelData.EMPTY, null));
+            }
+            if (quads.isEmpty()) {
+                return Collections.<ModelQuadTemplate>emptyList();
+            }
+
+            int stride = DefaultVertexFormat.BLOCK.getVertexSize() / 4;
+            int uvOffset = DefaultVertexFormat.BLOCK.getOffset(VertexFormatElement.UV0) / 4;
+            List<ModelQuadTemplate> templates = new ArrayList<>(quads.size());
+            for (BakedQuad quad : quads) {
+                TextureAtlasSprite sprite = quad.getSprite();
+                String spriteKey = sprite.contents().name().toString();
+                int[] vertices = quad.getVertices();
+                float[] localPos = new float[12];
+                float[] atlasUv = new float[8];
+                for (int i = 0; i < 4; i++) {
+                    int base = i * stride;
+                    localPos[i * 3] = Float.intBitsToFloat(vertices[base]);
+                    localPos[i * 3 + 1] = Float.intBitsToFloat(vertices[base + 1]);
+                    localPos[i * 3 + 2] = Float.intBitsToFloat(vertices[base + 2]);
+                    atlasUv[i * 2] = Float.intBitsToFloat(vertices[base + uvOffset]);
+                    atlasUv[i * 2 + 1] = Float.intBitsToFloat(vertices[base + uvOffset + 1]);
+                }
+                float[] uv = GeometryUtil.normalizeUVs(atlasUv, sprite);
+                float[] normal = GeometryUtil.computeFaceNormal(localPos);
+                templates.add(new ModelQuadTemplate(spriteKey, localPos, uv, normal, quad.getTintIndex()));
+            }
+            return templates;
+        }).join();
+    }
+
+    private String resolveSpriteKey(BlockState state, int blockId, Direction dir) {
+        if (hasLodTextures(blockId)) {
+            String spriteKey = lodTextureProvider.getSpriteKey(blockId, dir);
+            if (spriteKey != null) {
+                return spriteKey;
+            }
+        }
+        FaceSpriteSet cached = faceSpriteCache.get(blockId);
+        if (cached == null) {
+            cached = buildFaceSprites(state);
+            faceSpriteCache.put(blockId, cached);
+        }
+        String sprite = cached.faces[dir.ordinal()];
+        return sprite != null ? sprite : cached.fallback;
+    }
+
+    private int resolveTintIndex(BlockState state, int blockId, Direction dir) {
+        FaceSpriteSet cached = faceSpriteCache.get(blockId);
+        if (cached == null) {
+            cached = buildFaceSprites(state);
+            faceSpriteCache.put(blockId, cached);
+        }
+        return cached.tintIndices[dir.ordinal()];
+    }
+
+    private boolean hasLodTextures(int blockId) {
+        return lodTextureProvider != null && lodTextureProvider.hasTextures(blockId);
+    }
+
+    private FaceSpriteSet buildFaceSprites(BlockState state) {
+        return Minecraft.getInstance().submit(() -> {
+            BakedModel model = Minecraft.getInstance().getBlockRenderer().getBlockModel(state);
+            TextureAtlasSprite particle = model.getParticleIcon();
+            String fallback = particle.contents().name().toString();
+            String[] faces = new String[6];
+            int[] tintIndices = new int[6];
+            for (int i = 0; i < tintIndices.length; i++) {
+                tintIndices[i] = -1;
+            }
+            for (Direction dir : Direction.values()) {
+                RandomSource rand = RandomSource.create(SPRITE_RANDOM_SEED);
+                List<BakedQuad> quads = model.getQuads(state, dir, rand, ModelData.EMPTY, null);
+                if (!quads.isEmpty()) {
+                    TextureAtlasSprite sprite = quads.get(0).getSprite();
+                    faces[dir.ordinal()] = sprite.contents().name().toString();
+                    tintIndices[dir.ordinal()] = quads.get(0).getTintIndex();
+                } else {
+                    faces[dir.ordinal()] = fallback;
+                }
+            }
+            // 如果方向性 quad 为空，尝试使用通用（dir=null）的 quad 作为兜底，确保带 tint 的植被类有颜色
+            boolean needGeneral = false;
+            for (int i = 0; i < faces.length; i++) {
+                if (faces[i] == null || faces[i].equals(fallback)) {
+                    needGeneral = true;
+                    break;
+                }
+            }
+            if (needGeneral) {
+                List<BakedQuad> general = model.getQuads(state, null, RandomSource.create(SPRITE_RANDOM_SEED), ModelData.EMPTY, null);
+                if (!general.isEmpty()) {
+                    TextureAtlasSprite sprite = general.get(0).getSprite();
+                    String spriteName = sprite.contents().name().toString();
+                    int tintIdx = general.get(0).getTintIndex();
+                    for (Direction dir : Direction.values()) {
+                        int idx = dir.ordinal();
+                        if (faces[idx] == null || faces[idx].equals(fallback)) {
+                            faces[idx] = spriteName;
+                            tintIndices[idx] = tintIdx;
+                        }
+                    }
+                }
+            }
+            return new FaceSpriteSet(fallback, faces, tintIndices);
+        }).join();
+    }
+
+    private int resolveTintColor(int blockId, BlockState state, int biomeId, int tintIndex) {
+        if (tintIndex < 0 || blockColors == null || biomeRegistry == null) {
+            return -1;
+        }
+        long key = ((long) blockId << 32) | ((long) biomeId << 16) | (tintIndex & 0xFFFFL);
+        int cached = tintCache.get(key);
+        if (cached != Integer.MIN_VALUE) {
+            return cached;
+        }
+
+        int color = Minecraft.getInstance().submit(() -> {
+            Biome biome = resolveBiome(biomeId);
+            if (biome == null) {
+                return -2; // Special marker for not found
+            }
+            LodTintGetter getter = new LodTintGetter(state, biome);
+            return blockColors.getColor(state, getter, BlockPos.ZERO, tintIndex);
+        }).join();
+
+        if (color == -2) {
+            tintCache.put(key, -1);
+            return -1;
+        }
+
+        int argb = color == -1 ? -1 : (color | 0xFF000000);
+        tintCache.put(key, argb);
+        return argb;
+    }
+
+    private Biome resolveBiome(int biomeId) {
+        if (biomeId < 0 || biomeId >= biomeEntries.length) {
+            return defaultBiome;
+        }
+        Biome cached = biomeCache.get(biomeId);
+        if (cached != null) {
+            return cached;
+        }
+        Mapper.BiomeEntry entry = biomeEntries[biomeId];
+        if (entry == null || entry.biome == null) {
+            return defaultBiome;
+        }
+        Biome biome = biomeRegistry.get(ResourceLocation.parse(entry.biome));
+        if (biome == null) {
+            biome = defaultBiome;
+        }
+        if (biome != null) {
+            biomeCache.put(biomeId, biome);
+        }
+        return biome;
+    }
+
+    private float[] resolveColors(int tintColor, boolean hasTint) {
+        if (!hasTint || tintColor == -1) {
+            return WHITE_COLORS;
+        }
+        float[] cached = colorCache.get(tintColor);
+        if (cached != null) {
+            return cached;
+        }
+        float[] colors = GeometryUtil.computeVertexColors(tintColor, true);
+        colorCache.put(tintColor, colors);
+        return colors;
+    }
+
+    private static float lerp(float a, float b, float t) {
+        return a + (b - a) * t;
+    }
+
+    private static float clamp01(float v) {
+        if (v < 0f) return 0f;
+        if (v > 1f) return 1f;
+        return v;
+    }
+
+    private static final class LodTintGetter implements BlockAndTintGetter {
+        private final BlockState state;
+        private final Biome biome;
+
+        private LodTintGetter(BlockState state, Biome biome) {
+            this.state = state;
+            this.biome = biome;
+        }
+
+        @Override
+        public float getShade(Direction direction, boolean shaded) {
+            return 0;
+        }
+
+        @Override
+        public int getBrightness(LightLayer type, BlockPos pos) {
+            return 0;
+        }
+
+        @Override
+        public LevelLightEngine getLightEngine() {
+            return null;
+        }
+
+        @Override
+        public int getBlockTint(BlockPos pos, net.minecraft.world.level.ColorResolver colorResolver) {
+            return colorResolver.getColor(biome, 0, 0);
+        }
+
+        @Override
+        public BlockEntity getBlockEntity(BlockPos pos) {
+            return null;
+        }
+
+        @Override
+        public BlockState getBlockState(BlockPos pos) {
+            return state;
+        }
+
+        @Override
+        public FluidState getFluidState(BlockPos pos) {
+            return state.getFluidState();
+        }
+
+        @Override
+        public int getHeight() {
+            return 0;
+        }
+
+        @Override
+        public int getMinBuildHeight() {
+            return 0;
+        }
+    }
+
+    /**
+     * Check if a sprite key represents an overlay texture.
+     * Overlay textures (like grass_block_side_overlay) need special handling for tint.
+     */
+    private static boolean isOverlaySprite(String spriteKey) {
+        if (spriteKey == null) {
+            return false;
+        }
+        return spriteKey.contains("overlay");
+    }
+
+    private static String buildCombinedOverlaySprite(ExportContext ctx, String baseKey, String overlayKey, int tintColor) {
+        if (ctx == null || baseKey == null || overlayKey == null) {
+            return null;
+        }
+        int color = tintColor == -1 ? 0xFFFFFF : (tintColor & 0xFFFFFF);
+        String combinedKey = baseKey + "|overlay|" + overlayKey + "|tint|" + String.format("%06X", color);
+        if (ctx.getCachedSpriteImage(combinedKey) != null) {
+            return combinedKey;
+        }
+        BufferedImage base = ctx.getCachedSpriteImage(baseKey);
+        BufferedImage overlay = ctx.getCachedSpriteImage(overlayKey);
+        if (base == null || overlay == null) {
+            return null;
+        }
+        int w = base.getWidth();
+        int h = base.getHeight();
+        if (overlay.getWidth() != w || overlay.getHeight() != h) {
+            return null;
+        }
+
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        int[] basePixels = base.getRGB(0, 0, w, h, null, 0, w);
+        int[] overlayPixels = overlay.getRGB(0, 0, w, h, null, 0, w);
+        int[] outPixels = new int[basePixels.length];
+
+        int rMul = (color >> 16) & 0xFF;
+        int gMul = (color >> 8) & 0xFF;
+        int bMul = color & 0xFF;
+
+        for (int i = 0; i < basePixels.length; i++) {
+            int baseArgb = basePixels[i];
+            int overArgb = overlayPixels[i];
+            int oa = (overArgb >>> 24) & 0xFF;
+            if (oa == 0) {
+                outPixels[i] = baseArgb;
+                continue;
+            }
+            int or = (overArgb >>> 16) & 0xFF;
+            int og = (overArgb >>> 8) & 0xFF;
+            int ob = overArgb & 0xFF;
+
+            or = (or * rMul) / 255;
+            og = (og * gMul) / 255;
+            ob = (ob * bMul) / 255;
+
+            int ba = (baseArgb >>> 24) & 0xFF;
+            int br = (baseArgb >>> 16) & 0xFF;
+            int bg = (baseArgb >>> 8) & 0xFF;
+            int bb = baseArgb & 0xFF;
+
+            int inv = 255 - oa;
+            int outA = oa + (ba * inv) / 255;
+            int outR = (or * oa + br * inv) / 255;
+            int outG = (og * oa + bg * inv) / 255;
+            int outB = (ob * oa + bb * inv) / 255;
+
+            outPixels[i] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
+        }
+
+        out.setRGB(0, 0, w, h, outPixels, 0, w);
+        ctx.cacheSpriteImage(combinedKey, out);
+        return combinedKey;
+    }
+
     // Removed emitDebugQuad
 
 }
+

@@ -112,6 +112,9 @@ final class StreamingGeometryWriter implements AutoCloseable {
         // Get current quad offset (logical index, still useful for debugging/stats)
         long logicalOffset = spriteIndex.nextQuadOffset();
         spriteIndex.recordUsage(spriteKey, 0xFFFFFF, logicalOffset);
+        if (overlaySpriteKey != null) {
+            spriteIndex.recordUsage(overlaySpriteKey, 0xFFFFFF, logicalOffset);
+        }
 
         // Get or create bucket
         Bucket bucket = buckets.computeIfAbsent(materialGroupKey, k -> new Bucket());
@@ -267,5 +270,4 @@ final class StreamingGeometryWriter implements AutoCloseable {
         } catch (Throwable ignored) {}
     }
 }
-
 

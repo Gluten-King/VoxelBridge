@@ -297,6 +297,49 @@ public final class VoxelBridgeCommands {
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD export -> OFF (full detail only)"));
                     return 1;
                 }))
+                .then(Commands.literal("radius")
+                    .executes(ctx -> {
+                        ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Current LOD fine radius: f" + ExportRuntimeConfig.getLodFineChunkRadius() + " chunks"));
+                        ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lod radius <chunks>"));
+                        return 1;
+                    })
+                    .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 64)).executes(ctx -> {
+                        int radius = IntegerArgumentType.getInteger(ctx, "chunks");
+                        ExportRuntimeConfig.setLodFineChunkRadius(radius);
+                        ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD fine radius -> " + radius + " chunks"));
+                        return 1;
+                    }))
+                )
+        );
+
+        root.then(Commands.literal("lodbake")
+                .executes(ctx -> {
+                    String enabled = ExportRuntimeConfig.isLodBakeDebugEnabled() ? "on" : "off";
+                    int blockId = ExportRuntimeConfig.getLodBakeDebugBlockId();
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] LOD bake debug is currently f" + enabled));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   blockId filter: f" + blockId + "7 (-1 = all)"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lodbake <on|off>"));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lodbake block <id|-1>"));
+                    return 1;
+                })
+                .then(Commands.literal("on").executes(ctx -> {
+                    ExportRuntimeConfig.setLodBakeDebugEnabled(true);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD bake debug -> ON"));
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(ctx -> {
+                    ExportRuntimeConfig.setLodBakeDebugEnabled(false);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD bake debug -> OFF"));
+                    return 1;
+                }))
+                .then(Commands.literal("block")
+                        .then(Commands.argument("id", IntegerArgumentType.integer(-1, 1048575)).executes(ctx -> {
+                            int id = IntegerArgumentType.getInteger(ctx, "id");
+                            ExportRuntimeConfig.setLodBakeDebugBlockId(id);
+                            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD bake debug blockId -> " + id));
+                            return 1;
+                        }))
+                )
         );
 
         root.then(Commands.literal("colormode")

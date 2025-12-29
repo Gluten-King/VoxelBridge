@@ -12,3 +12,4 @@ public interface IMappingStorage {
     void flush();
     void close();
 }
+
