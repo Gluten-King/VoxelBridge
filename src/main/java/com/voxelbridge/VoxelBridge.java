@@ -3,12 +3,15 @@
  */
 package com.voxelbridge;
 import com.voxelbridge.command.VoxelBridgeCommands;
+import com.voxelbridge.voxy.command.OfflineExportCommand;
 
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 
 @Mod(VoxelBridge.MODID)
@@ -16,6 +19,17 @@ public class VoxelBridge {
     public static final String MODID = "voxelbridge";
 
     public VoxelBridge(IEventBus modBus, ModContainer container, Dist dist) {
-        NeoForge.EVENT_BUS.addListener(VoxelBridgeCommands::register);
+        NeoForge.EVENT_BUS.addListener(this::registerCommands);
+        if (dist == Dist.CLIENT) {
+            NeoForge.EVENT_BUS.addListener(this::registerClientCommands);
+        }
+    }
+
+    private void registerCommands(RegisterCommandsEvent event) {
+        OfflineExportCommand.register(event.getDispatcher());
+    }
+
+    private void registerClientCommands(RegisterClientCommandsEvent event) {
+        VoxelBridgeCommands.register(event);
     }
 }

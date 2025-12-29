@@ -94,6 +94,8 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("e  Color mode: f" + ExportRuntimeConfig.getColorMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("e  Vanilla random transform: f" +
                     (ExportRuntimeConfig.isVanillaRandomTransformEnabled() ? "on" : "off")));
+            ctx.getSource().sendSystemMessage(Component.literal("e  LOD export: f" +
+                    (ExportRuntimeConfig.isLodEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Animation export: f" +
                     (ExportRuntimeConfig.isAnimationEnabled() ? "on" : "off")));
             ctx.getSource().sendSystemMessage(Component.literal("e  Fill cave (dark cave_air): f" +
@@ -274,6 +276,25 @@ public final class VoxelBridgeCommands {
                 .then(Commands.literal("off").executes(ctx -> {
                     ExportRuntimeConfig.setVanillaRandomTransformEnabled(false);
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Vanilla random transform -> OFF"));
+                    return 1;
+                }))
+        );
+
+        root.then(Commands.literal("lod")
+                .executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] LOD export is currently f"
+                            + (ExportRuntimeConfig.isLodEnabled() ? "on" : "off")));
+                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lod <on|off>"));
+                    return 1;
+                })
+                .then(Commands.literal("on").executes(ctx -> {
+                    ExportRuntimeConfig.setLodEnabled(true);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD export -> ON (far chunks use lower LOD/white mesh)"));
+                    return 1;
+                }))
+                .then(Commands.literal("off").executes(ctx -> {
+                    ExportRuntimeConfig.setLodEnabled(false);
+                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD export -> OFF (full detail only)"));
                     return 1;
                 }))
         );

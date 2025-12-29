@@ -35,8 +35,7 @@ public class ExportThread extends Thread {
         try {
             long start = System.currentTimeMillis();
 
-            Path file;
-            file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
+            Path file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
 
             long time = System.currentTimeMillis() - start;
             String msg = String.format("[VoxelBridge] Export completed! File: %s (%.2fs)",

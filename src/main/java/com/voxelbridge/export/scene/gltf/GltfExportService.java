@@ -1,6 +1,7 @@
 package com.voxelbridge.export.scene.gltf;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
+import com.voxelbridge.export.LodExportService;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.StreamingRegionSampler;
 import com.voxelbridge.export.ExportProgressTracker;
@@ -105,6 +106,83 @@ public final class GltfExportService {
         StreamingRegionSampler.sampleRegion(level, pos1, pos2, sceneSink, ctx);
         VoxelBridgeLogger.duration("block_sampling", VoxelBridgeLogger.elapsedSince(tSampling));
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+
+        if (ExportRuntimeConfig.isLodEnabled()) {
+            if (mc.getSingleplayerServer() == null) {
+                VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] enabled but singleplayer server is unavailable; skipping LOD append.");
+            } else {
+                int viewDistance = mc.options != null ? mc.options.getEffectiveRenderDistance() : 0;
+                // Reduce view distance slightly to avoid Z-fighting at the very edge of the fog
+                double viewDistBlocks = Math.max(0, viewDistance - 1) * 16.0;
+                double skipDist = viewDistBlocks;
+
+                double lod0Dist = ExportRuntimeConfig.getLodFineChunkRadius() * 16.0;
+                double lod1Dist = lod0Dist * 2.0;
+                double lod2Dist = lod0Dist * 4.0;
+                double lod3Dist = lod0Dist * 8.0;
+
+            var playerPos = level.getNearestPlayer(pos1.getX(), pos1.getY(), pos1.getZ(), 1024, false);
+            double cx = playerPos != null ? playerPos.getX() : (pos1.getX() + pos2.getX()) / 2.0;
+            double cy = playerPos != null ? playerPos.getY() : (pos1.getY() + pos2.getY()) / 2.0;
+            double cz = playerPos != null ? playerPos.getZ() : (pos1.getZ() + pos2.getZ()) / 2.0;
+
+                Path regionDir = level.dimension() == Level.OVERWORLD
+                ? mc.getSingleplayerServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("region")
+                : mc.getSingleplayerServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                    .resolve("dimensions")
+                    .resolve(level.dimension().location().getNamespace())
+                    .resolve(level.dimension().location().getPath())
+                    .resolve("region");
+
+                if (Files.isDirectory(regionDir)) {
+                    // Force save world to ensure chunks are on disk for WorldImporter
+                    try {
+                        VoxelBridgeLogger.info(LogModule.LOD, "[LOD] Forcing world save...");
+                        mc.getSingleplayerServer().submit(() -> mc.getSingleplayerServer().saveEverything(true, true, true)).get();
+                    } catch (Exception e) {
+                        VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] Failed to save world: " + e.getMessage());
+                    }
+
+                    VoxelBridgeLogger.info(LogModule.LOD, "[LOD] appending far geometry, viewDistance=" + viewDistance);
+                    double offsetX = (ExportRuntimeConfig.getCoordinateMode() == com.voxelbridge.export.CoordinateMode.CENTERED)
+                        ? -(minX + maxX) / 2.0
+                        : 0;
+                    double offsetY = (ExportRuntimeConfig.getCoordinateMode() == com.voxelbridge.export.CoordinateMode.CENTERED)
+                        ? -(minY + maxY) / 2.0
+                        : 0;
+                    double offsetZ = (ExportRuntimeConfig.getCoordinateMode() == com.voxelbridge.export.CoordinateMode.CENTERED)
+                        ? -(minZ + maxZ) / 2.0
+                        : 0;
+                    try {
+                        int meshed = LodExportService.appendLodGeometry(
+                            level,
+                            regionDir,
+                            pos1,
+                            pos2,
+                            sceneSink,
+                            cx,
+                            cy,
+                            cz,
+                            lod0Dist,
+                            lod1Dist,
+                            lod2Dist,
+                            lod3Dist,
+                            skipDist,
+                            offsetX,
+                            offsetY,
+                            offsetZ,
+                            false
+                        );
+                        VoxelBridgeLogger.info(LogModule.LOD, "[LOD] append done, meshedSections=" + meshed);
+                    } catch (Exception e) {
+                        VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] append failed: " + e.getMessage());
+                        VoxelBridgeLogger.error(LogModule.GLTF, e.toString());
+                    }
+                } else {
+                    VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] Region directory not found for LOD append: " + regionDir);
+                }
+            }
+        }
 
         // OPTIMIZATION: Removed forced GC calls to eliminate 1-5 second Full GC pauses
         // Let JVM manage GC automatically for better throughput

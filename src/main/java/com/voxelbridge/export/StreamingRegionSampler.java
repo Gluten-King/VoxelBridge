@@ -21,6 +21,9 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -108,7 +111,16 @@ public final class StreamingRegionSampler {
             }
         };
 
-        ExecutorService executor = Executors.newFixedThreadPool(workerCount, factory);
+        // Use a bounded queue to prevent the monitor thread from flooding memory with pending tasks.
+        // LevelChunk objects are heavy; queuing thousands of them exhausts heap.
+        // CallerRunsPolicy throttles the monitor thread when the queue is full.
+        ExecutorService executor = new ThreadPoolExecutor(
+            workerCount, workerCount,
+            0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(workerCount * 8),
+            factory,
+            new ThreadPoolExecutor.CallerRunsPolicy()
+        );
         Set<ChunkPos> processing = ConcurrentHashMap.newKeySet();
         AtomicBoolean keepRunning = new AtomicBoolean(true);
         AtomicInteger scanCycles = new AtomicInteger(0);
@@ -127,29 +139,45 @@ public final class StreamingRegionSampler {
 
                     if (progress.isComplete()) break;
 
+                    // Collect and sort pending chunks to prioritize those closest to the player
+                    List<ChunkPos> candidates = new ArrayList<>();
                     for (ChunkPos chunkPos : allChunks) {
                         if (processing.contains(chunkPos)) continue;
-
+                        
                         long key = chunkPos.toLong();
                         ExportProgressTracker.ChunkState state = ExportProgressTracker.snapshot().get(key);
-
-                    if (state != ExportProgressTracker.ChunkState.PENDING) {
-                        continue;
-                    }
-
-                    if (playerChunk != null) {
-                        int dist = Math.max(Math.abs(chunkPos.x - playerChunk.x), Math.abs(chunkPos.z - playerChunk.z));
-                        if (dist > activeDistance) {
-                            if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                                VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Skip chunk " + chunkPos + " (outside render distance, dist=" + dist + ", active=" + activeDistance + ")");
-                            }
-                            continue;
+                        if (state == ExportProgressTracker.ChunkState.PENDING) {
+                            candidates.add(chunkPos);
                         }
                     }
 
-                    LevelChunk chunk = chunkCache.getChunk(chunkPos.x, chunkPos.z, false);
-                    if (chunk != null && !chunk.isEmpty()) {
-                        processing.add(chunkPos);
+                    if (playerChunk != null) {
+                        candidates.sort(Comparator.comparingInt(c -> 
+                            Math.max(Math.abs(c.x - playerChunk.x), Math.abs(c.z - playerChunk.z))
+                        ));
+                    }
+
+                    for (ChunkPos chunkPos : candidates) {
+                        if (progress.isComplete()) break;
+
+                        // Re-check processing state as it might have changed concurrently (though unlikely in this single consumer thread)
+                        if (processing.contains(chunkPos)) continue;
+
+                        if (playerChunk != null) {
+                            int dist = Math.max(Math.abs(chunkPos.x - playerChunk.x), Math.abs(chunkPos.z - playerChunk.z));
+                            if (dist > activeDistance) {
+                                if (ExportRuntimeConfig.isLodEnabled()) {
+                                    // LOD will cover far chunks; mark done to avoid waiting forever.
+                                    ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
+                                }
+                                // Too far, skip for now
+                                continue;
+                            }
+                        }
+
+                        LevelChunk chunk = chunkCache.getChunk(chunkPos.x, chunkPos.z, false);
+                        if (chunk != null && !chunk.isEmpty()) {
+                            processing.add(chunkPos);
 
                             int cminX = Math.max(minX, chunkPos.x << 4);
                             int cmaxX = Math.min(maxX, (chunkPos.x << 4) + 15);
@@ -160,16 +188,13 @@ public final class StreamingRegionSampler {
                                 chunk, chunkPos, level, chunkCache, sink, ctx,
                                 regionMin, regionMax,
                                 cminX, cmaxX, cminZ, cmaxZ, minY, maxY,
-                            mc, processing, playerChunk, activeDistance,
-                            sharedBeBatch, offsetX, offsetY, offsetZ, processedEntityIds  // OPTIMIZATION: Pass shared batch
-                        ));
-                    } else {
-                        String reason = (chunk == null) ? "null" : "empty";
-                        if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                            VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Chunk " + chunkPos + " not ready (" + reason + "), stay pending");
+                                mc, processing, playerChunk, activeDistance,
+                                sharedBeBatch, offsetX, offsetY, offsetZ, processedEntityIds
+                            ));
+                        } else {
+                            // Not loaded yet, skip
                         }
                     }
-                }
 
                     int cycle = scanCycles.incrementAndGet();
                     if (progress.pending() > 0 && cycle % 5 == 0) {
@@ -546,10 +571,15 @@ public final class StreamingRegionSampler {
             int nx = chunkPos.x + off[0];
             int nz = chunkPos.z + off[1];
             if (nx < minChunkX || nx > maxChunkX || nz < minChunkZ || nz > maxChunkZ) continue;
+            
+            // Check if neighbor is within view distance. If not, we can't wait for it.
             if (playerChunk != null && activeDistance > 0) {
                 int dist = Math.max(Math.abs(nx - playerChunk.x), Math.abs(nz - playerChunk.z));
+                // If neighbor is outside view distance, we assume it's "ready" (or rather, we skip waiting for it)
+                // because it will likely never load.
                 if (dist > activeDistance) continue;
             }
+            
             LevelChunk neighbor = chunkCache.getChunk(nx, nz, false);
             if (neighbor == null || neighbor.isEmpty()) return false;
         }

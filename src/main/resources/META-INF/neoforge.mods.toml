@@ -13,6 +13,7 @@ version = "1.0.0-alpha.3"
 displayName = "VoxelBridge"        
 authors = "Gluten King"    
 logoFile = "assets/voxelbridge/logo.png"
+accessTransformer = "META-INF/accesstransformer.cfg"
 description = '''Exports Minecraft blocks, fluids, and block entities into glTF files.
 '''
 

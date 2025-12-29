@@ -9,6 +9,8 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,6 +41,23 @@ final class StreamingGeometryWriter implements AutoCloseable {
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
     
     private boolean closed = false;
+
+    // Best-effort cleaner for direct buffers to release native memory without waiting for GC
+    private static final Object UNSAFE;
+    private static final Method INVOKE_CLEANER;
+    static {
+        Object unsafe = null;
+        Method invokeCleaner = null;
+        try {
+            Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+            Field f = unsafeClass.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            unsafe = f.get(null);
+            invokeCleaner = unsafeClass.getMethod("invokeCleaner", ByteBuffer.class);
+        } catch (Throwable ignored) {}
+        UNSAFE = unsafe;
+        INVOKE_CLEANER = invokeCleaner;
+    }
 
     StreamingGeometryWriter(Path tempFile, Path unusedUvPath, SpriteIndex spriteIndex, GeometryIndex geometryIndex) throws IOException {
         this.spriteIndex = spriteIndex;
@@ -211,6 +230,10 @@ final class StreamingGeometryWriter implements AutoCloseable {
         long totalQuads = spriteIndex.getTotalQuadCount();
         VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] Finalized. Total quads: %d", totalQuads));
         VoxelBridgeLogger.info(LogModule.GLTF, String.format("[StreamingWriter] Temp file size: %.2f MB", tempChannel.size() / 1024.0 / 1024.0));
+
+        // Explicitly free direct buffers to avoid lingering native memory until GC
+        buckets.values().forEach(bucket -> cleanDirect(bucket.buffer));
+        buckets.clear();
     }
 
     SpriteIndex getSpriteIndex() {
@@ -229,9 +252,20 @@ final class StreamingGeometryWriter implements AutoCloseable {
         finalizeWrite();
         tempChannel.close();
 
+        // In case finalizeWrite was skipped or threw, ensure buffers are freed
+        buckets.values().forEach(bucket -> cleanDirect(bucket.buffer));
+        buckets.clear();
+
         VoxelBridgeLogger.info(LogModule.GLTF, "[StreamingWriter] Closed");
     }
-}
 
+    private static void cleanDirect(ByteBuffer buffer) {
+        if (buffer == null || !buffer.isDirect()) return;
+        if (UNSAFE == null || INVOKE_CLEANER == null) return;
+        try {
+            INVOKE_CLEANER.invoke(UNSAFE, buffer);
+        } catch (Throwable ignored) {}
+    }
+}
 
 

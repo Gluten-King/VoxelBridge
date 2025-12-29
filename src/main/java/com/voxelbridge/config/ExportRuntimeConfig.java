@@ -86,6 +86,10 @@ public final class ExportRuntimeConfig {
     private static boolean fillCaveEnabled = false;
     // Export decoded LabPBR channel maps from _n/_s.
     private static boolean pbrDecodeEnabled = false;
+    // LOD export toggle (experimental): when true, far chunks may use lower LOD/white mesh.
+    private static boolean lodEnabled = false;
+    // Radius in chunks for the finest detail level (LOD 0).
+    private static int lodFineChunkRadius = 8;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -183,6 +187,24 @@ public final class ExportRuntimeConfig {
 
     public static void setPbrDecodeEnabled(boolean enabled) {
         pbrDecodeEnabled = enabled;
+    }
+
+    public static boolean isLodEnabled() {
+        return lodEnabled;
+    }
+
+    public static void setLodEnabled(boolean enabled) {
+        lodEnabled = enabled;
+    }
+
+    public static int getLodFineChunkRadius() {
+        return lodFineChunkRadius;
+    }
+
+    public static void setLodFineChunkRadius(int radius) {
+        if (radius > 0) {
+            lodFineChunkRadius = radius;
+        }
     }
 
 

@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
@@ -23,6 +25,23 @@ final class BinaryChunk implements Closeable {
     private final ByteBuffer scratch;
     private long size = 0;
     private long flushCount = 0;
+
+    // Best-effort direct buffer cleaner
+    private static final Object UNSAFE;
+    private static final Method INVOKE_CLEANER;
+    static {
+        Object unsafe = null;
+        Method invokeCleaner = null;
+        try {
+            Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+            Field f = unsafeClass.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            unsafe = f.get(null);
+            invokeCleaner = unsafeClass.getMethod("invokeCleaner", ByteBuffer.class);
+        } catch (Throwable ignored) {}
+        UNSAFE = unsafe;
+        INVOKE_CLEANER = invokeCleaner;
+    }
 
     BinaryChunk(Path path) throws IOException {
         this.channel = FileChannel.open(path,
@@ -136,6 +155,7 @@ final class BinaryChunk implements Closeable {
         channel.close();
         VoxelBridgeLogger.stat("binary_flush_count", flushCount);
         VoxelBridgeLogger.size("binary_buffer_size", DEFAULT_BUFFER_SIZE);
+        cleanDirect(scratch);
     }
 
     private int align(int alignment) throws IOException {
@@ -180,6 +200,13 @@ final class BinaryChunk implements Closeable {
         scratch.clear();
         flushCount++;
     }
-}
 
+    private static void cleanDirect(ByteBuffer buffer) {
+        if (buffer == null || !buffer.isDirect()) return;
+        if (UNSAFE == null || INVOKE_CLEANER == null) return;
+        try {
+            INVOKE_CLEANER.invoke(UNSAFE, buffer);
+        } catch (Throwable ignored) {}
+    }
+}
 
