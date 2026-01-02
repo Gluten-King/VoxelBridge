@@ -11,7 +11,6 @@ import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.voxy.common.config.section.MemorySectionStorage;
 import com.voxelbridge.voxy.common.thread.ServiceManager;
 import com.voxelbridge.voxy.common.world.WorldEngine;
-import com.voxelbridge.voxy.common.world.WorldSection;
 import com.voxelbridge.voxy.common.world.other.Mapper;
 import com.voxelbridge.voxy.importer.WorldImporter;
 import com.voxelbridge.voxy.mesh.VoxelMesher;
@@ -27,7 +26,6 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Minimal LOD export path: imports .mca directly and meshes with simplified proxy cubes.
- * When an ExportContext is provided, GPU-baked textures are generated and added to the atlas.
  */
 public final class LodExportService {
 
@@ -157,16 +155,24 @@ public final class LodExportService {
 
         CompletableFuture<Void> importFuture = new CompletableFuture<>();
         final long[] lastLogNanos = {0L};
-        int minChunkX = Math.min(pos1.getX(), pos2.getX()) >> 4;
-        int maxChunkX = Math.max(pos1.getX(), pos2.getX()) >> 4;
-        int minChunkZ = Math.min(pos1.getZ(), pos2.getZ()) >> 4;
-        int maxChunkZ = Math.max(pos1.getZ(), pos2.getZ()) >> 4;
+        int selMinX = Math.min(pos1.getX(), pos2.getX());
+        int selMaxX = Math.max(pos1.getX(), pos2.getX());
+        int selMinY = Math.min(pos1.getY(), pos2.getY());
+        int selMaxY = Math.max(pos1.getY(), pos2.getY());
+        int selMinZ = Math.min(pos1.getZ(), pos2.getZ());
+        int selMaxZ = Math.max(pos1.getZ(), pos2.getZ());
+
+        BlockPos selMin = new BlockPos(selMinX, selMinY, selMinZ);
+        BlockPos selMax = new BlockPos(selMaxX, selMaxY, selMaxZ);
+
+        int minChunkX = selMinX >> 4;
+        int maxChunkX = selMaxX >> 4;
+        int minChunkZ = selMinZ >> 4;
+        int maxChunkZ = selMaxZ >> 4;
 
         // Align import bounds to LOD section size to avoid partial LOD sections at the edges.
-        double dxMax = Math.max(Math.abs(cx - Math.min(pos1.getX(), pos2.getX())),
-                                Math.abs(cx - Math.max(pos1.getX(), pos2.getX())));
-        double dzMax = Math.max(Math.abs(cz - Math.min(pos1.getZ(), pos2.getZ())),
-                                Math.abs(cz - Math.max(pos1.getZ(), pos2.getZ())));
+        double dxMax = Math.max(Math.abs(cx - selMinX), Math.abs(cx - selMaxX));
+        double dzMax = Math.max(Math.abs(cz - selMinZ), Math.abs(cz - selMaxZ));
         double maxDist = Math.hypot(dxMax, dzMax);
         int maxRequiredLvl;
         if (!ExportRuntimeConfig.isLodEnabled()) {
@@ -273,7 +279,7 @@ public final class LodExportService {
 
             // Only process sections intersecting the selection AABB
             if (!intersectsAabb(wx - size / 2.0, wy - size / 2.0, wz - size / 2.0, size,
-                    pos1, pos2)) {
+                    selMin, selMax)) {
                 continue;
             }
             sectionsIntersecting++;
@@ -402,19 +408,14 @@ public final class LodExportService {
             VoxelBridgeLogger.warn(LogModule.LOD, "[LOD] no sections intersected the selection AABB");
         }
 
-        LodGpuBakeService lodGpuBakeService = null;
+        LodGpuBakeService gpuBake = null;
         try {
-            if (ctx != null && !sectionsToMesh.isEmpty()) {
-                IntOpenHashSet blockIds = collectBlockIds(engine, sectionsToMesh);
-                if (!blockIds.isEmpty()) {
-                    VoxelBridgeLogger.info(LogModule.LOD, "[LOD] gpu bake start, blocks=" + blockIds.size());
-                    lodGpuBakeService = new LodGpuBakeService(ctx, engine.getMapper(), outDir);
-                    lodGpuBakeService.bakeBlockIds(blockIds);
-                    VoxelBridgeLogger.info(LogModule.LOD, "[LOD] gpu bake done");
-                }
+            IntOpenHashSet blockIds = collectBlockIds(engine, sectionsToMesh);
+            if (!blockIds.isEmpty()) {
+                gpuBake = new LodGpuBakeService(engine.getMapper(), ctx);
+                gpuBake.bakeBlockIds(blockIds);
             }
-
-            VoxelMesher mesher = new VoxelMesher(engine, countingSink, offsetX, offsetY, offsetZ, lodGpuBakeService, ctx);
+            VoxelMesher mesher = new VoxelMesher(engine, countingSink, offsetX, offsetY, offsetZ, gpuBake, ctx);
             for (long sectionId : sectionsToMesh) {
                 int lvl = WorldEngine.getLevel(sectionId);
                 int x = WorldEngine.getX(sectionId);
@@ -424,8 +425,8 @@ public final class LodExportService {
                 meshed[0]++;
             }
         } finally {
-            if (lodGpuBakeService != null) {
-                lodGpuBakeService.close();
+            if (gpuBake != null) {
+                gpuBake.close();
             }
             engine.free();
         }
@@ -445,31 +446,6 @@ public final class LodExportService {
             throw new IllegalStateException("LOD export produced no geometry (selection empty or not imported)");
         }
         return meshed[0];
-    }
-
-    private static IntOpenHashSet collectBlockIds(WorldEngine engine, java.util.List<Long> sectionsToMesh) {
-        IntOpenHashSet blockIds = new IntOpenHashSet();
-        for (long sectionId : sectionsToMesh) {
-            int lvl = WorldEngine.getLevel(sectionId);
-            int x = WorldEngine.getX(sectionId);
-            int y = WorldEngine.getY(sectionId);
-            int z = WorldEngine.getZ(sectionId);
-            WorldSection section = engine.acquire(lvl, x, y, z);
-            if (section == null) {
-                continue;
-            }
-            try {
-                long[] data = section.copyData();
-                for (long blockIdLong : data) {
-                    if (!Mapper.isAir(blockIdLong)) {
-                        blockIds.add(Mapper.getBlockId(blockIdLong));
-                    }
-                }
-            } finally {
-                section.release();
-            }
-        }
-        return blockIds;
     }
 
     private static int getRequiredLevel(double dist, double d0, double d1, double d2, double d3) {
@@ -501,6 +477,32 @@ public final class LodExportService {
         double ey = sy + size;
         double ez = sz + size;
         return sx <= maxX && ex >= minX && sy <= maxY && ey >= minY && sz <= maxZ && ez >= minZ;
+    }
+
+    private static IntOpenHashSet collectBlockIds(WorldEngine engine, java.util.List<Long> sectionsToMesh) {
+        IntOpenHashSet ids = new IntOpenHashSet();
+        for (long sectionId : sectionsToMesh) {
+            int lvl = WorldEngine.getLevel(sectionId);
+            int x = WorldEngine.getX(sectionId);
+            int y = WorldEngine.getY(sectionId);
+            int z = WorldEngine.getZ(sectionId);
+            com.voxelbridge.voxy.common.world.WorldSection section = engine.acquire(lvl, x, y, z);
+            if (section == null) {
+                continue;
+            }
+            try {
+                long[] data = section.copyData();
+                for (long entry : data) {
+                    if (Mapper.isAir(entry)) {
+                        continue;
+                    }
+                    ids.add(Mapper.getBlockId(entry));
+                }
+            } finally {
+                section.release();
+            }
+        }
+        return ids;
     }
 
     private static final class CountingSceneSink implements SceneSink {

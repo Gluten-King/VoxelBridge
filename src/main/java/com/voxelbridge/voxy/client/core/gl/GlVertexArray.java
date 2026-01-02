@@ -28,10 +28,8 @@ public class GlVertexArray extends TrackedObject {
     }
 
     public GlVertexArray bindBuffer(int buffer) {
-        //TODO: optimization, use glVertexArrayVertexBuffers
-        for (int index : this.indices) {
-            glVertexArrayVertexBuffer(this.id, index, buffer, 0, this.stride);
-        }
+        // All attributes use binding point 0, so only bind buffer to binding point 0
+        glVertexArrayVertexBuffer(this.id, 0, buffer, 0, this.stride);
         return this;
     }
 
@@ -49,6 +47,7 @@ public class GlVertexArray extends TrackedObject {
         this.addIndex(index);
         glEnableVertexArrayAttrib(this.id, index);
         glVertexArrayAttribIFormat(this.id, index, count, type, offset);
+        glVertexArrayAttribBinding(this.id, index, 0);  // All attributes use binding point 0
         return this;
     }
 
@@ -60,6 +59,7 @@ public class GlVertexArray extends TrackedObject {
         this.addIndex(index);
         glEnableVertexArrayAttrib(this.id, index);
         glVertexArrayAttribFormat(this.id, index, count, type, normalize, offset);
+        glVertexArrayAttribBinding(this.id, index, 0);  // All attributes use binding point 0
         return this;
     }
 

@@ -77,8 +77,10 @@ public class ModelFactory {
             .value();
 
     public final ModelTextureBakery bakery;
+    private final RawDownloadStream downstream;
+    private final ConcurrentLinkedDeque<RawBakeResult> rawBakeResults = new ConcurrentLinkedDeque<>();
+    private final boolean useGpuBake;
     private final com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery cpuBakery;
-    private static final boolean USE_CPU_BAKE = true;
     public interface BakeListener {
         void onBaked(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting);
     }
@@ -121,7 +123,6 @@ public class ModelFactory {
     private final Object2IntOpenHashMap<ModelEntry> modelTexture2id = new Object2IntOpenHashMap<>();
 
     //Contains the set of all block ids that are currently inflight/being baked
-    // this is required due to "async" nature of gpu feedback
     private final IntOpenHashSet blockStatesInFlight = new IntOpenHashSet();
     private final ReentrantLock blockStatesInFlightLock = new ReentrantLock();
 
@@ -132,10 +133,6 @@ public class ModelFactory {
 
     private final Mapper mapper;
     private final ModelStore storage;
-    private final RawDownloadStream downstream = new RawDownloadStream(8*1024*1024);//8mb downstream
-
-    private final ConcurrentLinkedDeque<RawBakeResult> rawBakeResults = new ConcurrentLinkedDeque<>();
-
     private final ConcurrentLinkedDeque<ResultUploader> uploadResults = new ConcurrentLinkedDeque<>();
 
     private Object2IntMap<BlockState> customBlockStateIdMapping;
@@ -143,9 +140,15 @@ public class ModelFactory {
     //TODO: NOTE!!! is it worth even uploading as a 16x16 texture, since automatic lod selection... doing 8x8 textures might be perfectly ok!!!
     // this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
     public ModelFactory(Mapper mapper, ModelStore storage) {
+        this(mapper, storage, false);
+    }
+
+    public ModelFactory(Mapper mapper, ModelStore storage, boolean useGpuBake) {
         this.mapper = mapper;
         this.storage = storage;
-        this.bakery = new ModelTextureBakery(MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE);
+        this.useGpuBake = useGpuBake;
+        this.bakery = useGpuBake ? new ModelTextureBakery(MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE) : null;
+        this.downstream = useGpuBake ? new RawDownloadStream(8 * 1024 * 1024) : null;
         this.cpuBakery = new com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery();
 
         this.metadataCache = new long[1<<16];
@@ -181,7 +184,7 @@ public class ModelFactory {
         }
 
         public RawBakeResult(int blockId, BlockState blockState) {
-            this(blockId, blockState, new MemoryBuffer(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*2*4*6));
+            this(blockId, blockState, new MemoryBuffer(MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE * 2 * 4 * 6));
         }
 
         public RawBakeResult cpyBuf(long ptr) {
@@ -226,53 +229,51 @@ public class ModelFactory {
             if (this.idMappings[fluidStateId] == -1) {
                 //Dont have to check for inflight as that is done recursively :p
 
-                //This is a hack but does work :tm: due to how the download stream is setup
-                // it should enforce that the fluid state is processed before our blockstate
+                // Ensure the fluid state is processed before the owning blockstate.
                 addEntry(fluidStateId);
             }
         }
 
-        if (USE_CPU_BAKE) {
-            var bake = this.cpuBakery.bake(blockState);
-            var bakeResult = this.processTextureBakeResult(blockId, blockState, bake.textures(), bake.isShaded(), bake.darkenedTinting());
-            if (bakeResult != null) {
-                this.uploadResults.add(bakeResult);
-            }
-            return true;
-        } else {
+        if (this.useGpuBake) {
             RawBakeResult result = new RawBakeResult(blockId, blockState);
-            int allocation = this.downstream.download(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*2*4*6, ptr -> this.rawBakeResults.add(result.cpyBuf(ptr)));
+            int allocation = this.downstream.download(MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE * 2 * 4 * 6,
+                    ptr -> this.rawBakeResults.add(result.cpyBuf(ptr)));
             int flags = this.bakery.renderToStream(blockState, this.downstream.getBufferId(), allocation);
-            result.hasDarkenedTextures = (flags&2)!=0;
-            result.isShaded = (flags&1)!=0;
+            result.hasDarkenedTextures = (flags & 2) != 0;
+            result.isShaded = (flags & 1) != 0;
             return true;
         }
+
+        var bake = this.cpuBakery.bake(blockState);
+        var bakeResult = this.processTextureBakeResult(blockId, blockState, bake.textures(), bake.isShaded(), bake.darkenedTinting());
+        if (bakeResult != null) {
+            this.uploadResults.add(bakeResult);
+        }
+        return true;
     }
 
     private boolean processModelResult() {
         var result = this.rawBakeResults.poll();
         if (result == null) return false;
         ColourDepthTextureData[] textureData = new ColourDepthTextureData[6];
-        {//Create texture data
-            long ptr = result.rawData.address;
-            final int FACE_SIZE = MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE;
-            for (int face = 0; face < 6; face++) {
-                long faceDataPtr = ptr + (FACE_SIZE * 4) * face * 2;
-                int[] colour = new int[FACE_SIZE];
-                int[] depth = new int[FACE_SIZE];
+        // Create texture data
+        long ptr = result.rawData.address;
+        final int faceSize = MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE;
+        for (int face = 0; face < 6; face++) {
+            long faceDataPtr = ptr + (faceSize * 4L) * face * 2L;
+            int[] colour = new int[faceSize];
+            int[] depth = new int[faceSize];
 
-                //Copy out colour
-                for (int i = 0; i < FACE_SIZE; i++) {
-                    //De-interpolate results
-                    colour[i] = MemoryUtil.memGetInt(faceDataPtr + (i * 4 * 2));
-                    depth[i] = MemoryUtil.memGetInt(faceDataPtr + (i * 4 * 2) + 4);
-                }
-                textureData[face] = new ColourDepthTextureData(colour, depth, MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE);
+            for (int i = 0; i < faceSize; i++) {
+                colour[i] = MemoryUtil.memGetInt(faceDataPtr + (i * 4L * 2L));
+                depth[i] = MemoryUtil.memGetInt(faceDataPtr + (i * 4L * 2L) + 4L);
             }
+            textureData[face] = new ColourDepthTextureData(colour, depth, MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE);
         }
         result.rawData.free();
-        var bakeResult = this.processTextureBakeResult(result.blockId, result.blockState, textureData, result.isShaded, result.hasDarkenedTextures);
-        if (bakeResult!=null) {
+        var bakeResult = this.processTextureBakeResult(result.blockId, result.blockState, textureData,
+                result.isShaded, result.hasDarkenedTextures);
+        if (bakeResult != null) {
             this.uploadResults.add(bakeResult);
         }
         return !this.rawBakeResults.isEmpty();
@@ -294,13 +295,15 @@ public class ModelFactory {
             }
             biomeEntry = this.biomeQueue.poll();
         }
-
-        while (this.processModelResult());
+        if (this.useGpuBake) {
+            while (this.processModelResult());
+        }
     }
 
     public void tickAndProcessUploads() {
-        this.downstream.tick();
-
+        if (this.useGpuBake) {
+            this.downstream.tick();
+        }
         var upload = this.uploadResults.poll();
         if (upload==null) return;
 
@@ -402,18 +405,7 @@ public class ModelFactory {
         }
 
         BlockColors blockColors = Minecraft.getInstance().getBlockColors();
-        boolean tintedSeen = false;
-        for (ColourDepthTextureData tex : textureData) {
-            int[] d = tex.depth();
-            for (int val : d) {
-                if ((val & 0x80) != 0) { // stencil bit7 = tint flag
-                    tintedSeen = true;
-                    break;
-                }
-            }
-            if (tintedSeen) break;
-        }
-        boolean hasColourProvider = hasColourProvider(blockColors, blockState) || tintedSeen;
+        boolean hasColourProvider = hasColourProvider(blockColors, blockState);
 
         boolean isBiomeColourDependent = false;
         if (hasColourProvider) {
@@ -612,16 +604,6 @@ public class ModelFactory {
             faceModelData |= needsAlphaDiscard?1<<22:0;
 
             faceModelData |= ((!faceCoversFullBlock) && !isTranslucent(blockRenderLayer)) ? 1<<23 : 0;//Alpha discard override, translucency doesnt have alpha discard
-
-            //Bits 24,25 are tint metadata
-            if (hasColourProvider) {//We have a tint
-                int tintState = TextureUtils.computeFaceTint(textureData[face], checkMode);
-                if (tintState == 2) {//Partial tint
-                    faceModelData |= 1<<24;
-                } else if (tintState == 3) {//Full tint
-                    faceModelData |= 2<<24;
-                }
-            }
 
             MemoryUtil.memPutInt(faceUploadPtr, faceModelData);
         }
@@ -881,10 +863,16 @@ public class ModelFactory {
 
 
     public void free() {
-        this.bakery.free();
-        this.downstream.free();
-        while (!this.rawBakeResults.isEmpty()) {
-            this.rawBakeResults.poll().rawData.free();
+        if (this.useGpuBake) {
+            if (this.bakery != null) {
+                this.bakery.free();
+            }
+            if (this.downstream != null) {
+                this.downstream.free();
+            }
+            while (!this.rawBakeResults.isEmpty()) {
+                this.rawBakeResults.poll().rawData.free();
+            }
         }
         while (!this.uploadResults.isEmpty()) {
             this.uploadResults.poll().free();

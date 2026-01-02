@@ -12,6 +12,7 @@ import org.lwjgl.system.MemoryUtil;
 
 import static org.lwjgl.opengl.GL20.glUniformMatrix4fv;
 import static org.lwjgl.opengl.GL33.glBindSampler;
+import static org.lwjgl.opengl.GL44C.GL_DYNAMIC_STORAGE_BIT;
 import static org.lwjgl.opengl.GL45.*;
 
 public class BudgetBufferRenderer {
@@ -22,15 +23,34 @@ public class BudgetBufferRenderer {
             .add(ShaderType.FRAGMENT, "voxy:bakery/position_tex.fsh")
             .compile();
 
+    public static void init() {}
 
-    public static void init(){}
+    private static final int INDEX_QUAD_COUNT = 4096;
     private static final GlBuffer indexBuffer;
+    private static volatile boolean indexBufferInitialized = false;
     static {
-        int indexCount = 4096 * 6;
+        int indexCount = INDEX_QUAD_COUNT * 6;
         int byteSize = indexCount * 2;
-        indexBuffer = new GlBuffer(byteSize, 0, false);
+        indexBuffer = new GlBuffer(byteSize, GL_DYNAMIC_STORAGE_BIT, false);
+    }
+
+    private static final int STRIDE = 24;
+    private static final GlVertexArray VA = new GlVertexArray()
+            .setStride(STRIDE)
+            .setF(0, GL_FLOAT, 4, 0) // pos, metadata
+            .setF(1, GL_FLOAT, 2, 4 * 4) // UV
+            .bindElementBuffer(indexBuffer.id);
+
+    private static GlBuffer immediateBuffer;
+    private static int quadCount;
+
+    private static void ensureIndexBuffer() {
+        if (indexBufferInitialized) {
+            return;
+        }
+        int indexCount = INDEX_QUAD_COUNT * 6;
         var indices = MemoryUtil.memAllocShort(indexCount);
-        for (int i = 0; i < 4096; i++) {
+        for (int i = 0; i < INDEX_QUAD_COUNT; i++) {
             int base = i * 4;
             indices.put((short) base);
             indices.put((short) (base + 1));
@@ -42,17 +62,9 @@ public class BudgetBufferRenderer {
         indices.flip();
         glNamedBufferSubData(indexBuffer.id, 0, indices);
         MemoryUtil.memFree(indices);
+        indexBufferInitialized = true;
     }
 
-    private static final int STRIDE = 24;
-    private static final GlVertexArray VA = new GlVertexArray()
-            .setStride(STRIDE)
-            .setF(0, GL_FLOAT, 4, 0)//pos, metadata
-            .setF(1, GL_FLOAT, 2, 4 * 4)//UV
-            .bindElementBuffer(indexBuffer.id);
-
-    private static GlBuffer immediateBuffer;
-    private static int quadCount;
     public static void drawFast(MeshData buffer, int texId, Matrix4f matrix) {
         if (buffer.drawState().mode() != VertexFormat.Mode.QUADS) {
             throw new IllegalStateException("Fast only supports quads");
@@ -60,9 +72,9 @@ public class BudgetBufferRenderer {
 
         var buff = buffer.vertexBuffer();
         int size = buff.remaining();
-        if (size%STRIDE != 0) throw new IllegalStateException();
+        if (size % STRIDE != 0) throw new IllegalStateException();
         size /= STRIDE;
-        if (size%4 != 0) throw new IllegalStateException();
+        if (size % 4 != 0) throw new IllegalStateException();
         size /= 4;
         setup(MemoryUtil.memAddress(buff), size, texId);
         buffer.close();
@@ -71,21 +83,19 @@ public class BudgetBufferRenderer {
     }
 
     public static void setup(long dataPtr, int quads, int texId) {
-        // Clear any pre-existing OpenGL errors to avoid false positives
-        while (org.lwjgl.opengl.GL11.glGetError() != org.lwjgl.opengl.GL11.GL_NO_ERROR);
-
         if (quads == 0) {
             throw new IllegalStateException();
         }
 
+        ensureIndexBuffer();
         quadCount = quads;
 
         long size = quads * 4L * STRIDE;
-        if (immediateBuffer == null || immediateBuffer.size()<size) {
+        if (immediateBuffer == null || immediateBuffer.size() < size) {
             if (immediateBuffer != null) {
                 immediateBuffer.free();
             }
-            immediateBuffer = new GlBuffer(size*2L);//This also accounts for when immediateBuffer == null
+            immediateBuffer = new GlBuffer(size * 2L);
             VA.bindBuffer(immediateBuffer.id);
         }
         long ptr = UploadStream.INSTANCE.upload(immediateBuffer, 0, size);
@@ -104,4 +114,3 @@ public class BudgetBufferRenderer {
         glDrawElements(GL_TRIANGLES, quadCount * 2 * 3, GL_UNSIGNED_SHORT, 0);
     }
 }
-

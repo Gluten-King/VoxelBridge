@@ -83,11 +83,6 @@ public final class TextureAtlasManager {
                 VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[Tint] sprite=%s tint=%06X slot=%d totalSlots=%d",
                         spriteKey, normalized, slot, totalSlots));
             }
-            // Only log overlay sprites in LOD_BAKE
-            if (VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE) && spriteKey.contains("overlay")) {
-                VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[AtlasManager] ALLOCATED_OVERLAY sprite=%s slot=%d",
-                        spriteKey, slot));
-            }
             return slot;
         });
     }
@@ -459,20 +454,12 @@ public final class TextureAtlasManager {
         int tintIndex = getTintIndex(ctx, spriteKey, normalizedTint);
         ExportContext.TintAtlas atlas = ctx.getAtlasBook().get(spriteKey);
 
-        boolean isOverlay = spriteKey.contains("overlay");
-
         if (atlas == null) {
             VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[RemapUV][WARN] No atlas found for %s", spriteKey));
-            if (isOverlay && VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-                VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[RemapUV] OVERLAY_FAILED: No atlas for %s", spriteKey));
-            }
             return new float[]{u, v};
         }
         if (atlas.placements.isEmpty()) {
             VoxelBridgeLogger.warn(LogModule.TEXTURE_ATLAS, String.format("[RemapUV][WARN] Atlas for %s has no placements", spriteKey));
-            if (isOverlay && VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-                VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[RemapUV] OVERLAY_FAILED: Empty placements for %s", spriteKey));
-            }
             return new float[]{u, v};
         }
 
@@ -482,21 +469,11 @@ public final class TextureAtlasManager {
         }
         if (placement == null) {
             VoxelBridgeLogger.error(LogModule.TEXTURE_ATLAS, String.format("[RemapUV][ERROR] No placement for %s tintIndex=%d", spriteKey, tintIndex));
-            if (isOverlay && VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-                VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[RemapUV] OVERLAY_FAILED: No placement for %s tintIndex=%d slots=%d",
-                        spriteKey, tintIndex, atlas.placements.size()));
-            }
             return new float[]{u, v};
         }
 
         double uu = placement.u0() + (double) u * (placement.u1() - placement.u0());
         double vv = placement.v0() + (double) v * (placement.v1() - placement.v0());
-
-        // Only log overlay UV remapping success
-        if (isOverlay && VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-            VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[RemapUV] OVERLAY_SUCCESS sprite=%s slot=%d",
-                    spriteKey, tintIndex));
-        }
 
         return new float[]{(float) uu, (float) vv};
     }
@@ -1047,21 +1024,11 @@ public final class TextureAtlasManager {
                 VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][CACHE HIT] Loaded %s from cache (%dx%d)",
                     spriteKey, cached.getWidth(), cached.getHeight()));
             }
-            // Special log for overlay sprites
-            if (spriteKey.contains("overlay") && VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-                VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[AtlasGen] OVERLAY_LOADED sprite=%s size=%dx%d",
-                    spriteKey, cached.getWidth(), cached.getHeight()));
-            }
             return cached;
         }
 
         if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
             VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen][CACHE MISS] %s not in cache, trying disk", spriteKey));
-        }
-        // Special log for overlay sprite cache miss
-        if (spriteKey.contains("overlay") && VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-            VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format("[AtlasGen] OVERLAY_NOT_IN_CACHE sprite=%s",
-                spriteKey));
         }
         BufferedImage diskImage = TextureLoader.readTexture(textureLocation, ExportRuntimeConfig.isAnimationEnabled());
         if (diskImage != null) {

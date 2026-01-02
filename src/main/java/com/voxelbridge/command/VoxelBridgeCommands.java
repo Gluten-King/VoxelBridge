@@ -1,21 +1,47 @@
 package com.voxelbridge.command;
 
+import java.awt.AlphaComposite;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.CoordinateMode;
+import com.voxelbridge.export.GpuBakeDebugService;
+import com.voxelbridge.export.SimpleGpuBakeDebugService;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.util.io.IOUtil;
 import com.voxelbridge.util.client.RayCastUtil;
 import com.voxelbridge.thread.ExportThread;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import com.voxelbridge.voxy.common.config.section.MemorySectionStorage;
+import com.voxelbridge.voxy.client.core.model.GpuBakeDebugProbe;
+import com.voxelbridge.voxy.client.core.model.ColourDepthTextureData;
+import com.voxelbridge.voxy.client.core.model.TextureUtils;
+import com.voxelbridge.export.texture.TextureLoader;
+import com.voxelbridge.voxy.common.world.other.Mapper;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.tree.CommandNode;
+import javax.imageio.ImageIO;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 /**
@@ -26,6 +52,9 @@ public final class VoxelBridgeCommands {
 
     private static BlockPos pos1;
     private static BlockPos pos2;
+    private static final int BAKE_DEBUG_MIN_ID = 0;
+    private static final int BAKE_DEBUG_MAX_ID = 50;
+    private static final int BAKE_DEBUG_SIZE = 256;
 
     private VoxelBridgeCommands() {}
 
@@ -312,36 +341,6 @@ public final class VoxelBridgeCommands {
                 )
         );
 
-        root.then(Commands.literal("lodbake")
-                .executes(ctx -> {
-                    String enabled = ExportRuntimeConfig.isLodBakeDebugEnabled() ? "on" : "off";
-                    int blockId = ExportRuntimeConfig.getLodBakeDebugBlockId();
-                    ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] LOD bake debug is currently f" + enabled));
-                    ctx.getSource().sendSystemMessage(Component.literal("7   blockId filter: f" + blockId + "7 (-1 = all)"));
-                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lodbake <on|off>"));
-                    ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lodbake block <id|-1>"));
-                    return 1;
-                })
-                .then(Commands.literal("on").executes(ctx -> {
-                    ExportRuntimeConfig.setLodBakeDebugEnabled(true);
-                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD bake debug -> ON"));
-                    return 1;
-                }))
-                .then(Commands.literal("off").executes(ctx -> {
-                    ExportRuntimeConfig.setLodBakeDebugEnabled(false);
-                    ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD bake debug -> OFF"));
-                    return 1;
-                }))
-                .then(Commands.literal("block")
-                        .then(Commands.argument("id", IntegerArgumentType.integer(-1, 1048575)).executes(ctx -> {
-                            int id = IntegerArgumentType.getInteger(ctx, "id");
-                            ExportRuntimeConfig.setLodBakeDebugBlockId(id);
-                            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD bake debug blockId -> " + id));
-                            return 1;
-                        }))
-                )
-        );
-
         root.then(Commands.literal("colormode")
                 .executes(ctx -> {
                     ExportRuntimeConfig.ColorMode current = ExportRuntimeConfig.getColorMode();
@@ -423,8 +422,659 @@ public final class VoxelBridgeCommands {
             }
         }));
 
+        root.then(Commands.literal("bakedebug").executes(ctx -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level == null) {
+                ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No world loaded."));
+                return 0;
+            }
+            CommandSourceStack source = ctx.getSource();
+            source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake debug started (ids 0-50)."));
+            Thread worker = new Thread(() -> runBakeDebug(source), "VoxelBridge-BakeDebug");
+            worker.setDaemon(true);
+            worker.start();
+            return 1;
+        }));
+
+        root.then(Commands.literal("simplebakedebug").executes(ctx -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level == null) {
+                ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No world loaded."));
+                return 0;
+            }
+            CommandSourceStack source = ctx.getSource();
+            source.sendSystemMessage(Component.literal("a[VoxelBridge] Simple bake debug started (ids 0-50)."));
+            Thread worker = new Thread(() -> runSimpleBakeDebug(source), "VoxelBridge-SimpleBakeDebug");
+            worker.setDaemon(true);
+            worker.start();
+            return 1;
+        }));
+
+        root.then(Commands.literal("bakeprobe")
+                .executes(ctx -> armBakeProbe(ctx.getSource(), 120, 2))
+                .then(Commands.argument("frames", IntegerArgumentType.integer(1, 6000)).executes(ctx -> {
+                    int frames = IntegerArgumentType.getInteger(ctx, "frames");
+                    return armBakeProbe(ctx.getSource(), frames, 2);
+                }).then(Commands.argument("blockId", IntegerArgumentType.integer(0, 1_000_000)).executes(ctx -> {
+                    int frames = IntegerArgumentType.getInteger(ctx, "frames");
+                    int blockId = IntegerArgumentType.getInteger(ctx, "blockId");
+                    return armBakeProbe(ctx.getSource(), frames, blockId);
+                })))
+        );
+
+        root.then(Commands.literal("fbtest").executes(ctx -> {
+            Minecraft mc = Minecraft.getInstance();
+            CommandSourceStack source = ctx.getSource();
+            source.sendSystemMessage(Component.literal("e[VoxelBridge] Running framebuffer test..."));
+            mc.submit(() -> {
+                try (var test = new com.voxelbridge.export.MinimalBakeTest(16)) {
+                    String fbStatus = test.testFramebufferStatus();
+                    source.sendSystemMessage(Component.literal("7  Framebuffer status: " + fbStatus));
+
+                    var clearResult = test.testClearColor();
+                    source.sendSystemMessage(Component.literal("7  " + clearResult.summary()));
+
+                    var readResult = test.testReadPixels();
+                    source.sendSystemMessage(Component.literal("7  " + readResult.summary()));
+
+                    var quadResult = test.testRenderQuad();
+                    source.sendSystemMessage(Component.literal("7  " + quadResult.summary()));
+
+                    var blockResult = test.testRenderBlock();
+                    source.sendSystemMessage(Component.literal("7  " + blockResult.summary()));
+
+                    if (clearResult.expectedColorPixels() == clearResult.totalPixels()) {
+                        source.sendSystemMessage(Component.literal("a  ClearColor test PASSED"));
+                    } else {
+                        source.sendSystemMessage(Component.literal("c  ClearColor test FAILED"));
+                    }
+
+                    if (readResult.expectedColorPixels() == readResult.totalPixels()) {
+                        source.sendSystemMessage(Component.literal("a  ReadPixels test PASSED"));
+                    } else {
+                        source.sendSystemMessage(Component.literal("c  ReadPixels test FAILED"));
+                    }
+
+                    if (quadResult.nonZeroPixels() > 0) {
+                        source.sendSystemMessage(Component.literal("a  RenderQuad test PASSED"));
+                    } else {
+                        source.sendSystemMessage(Component.literal("c  RenderQuad test FAILED (no pixels rendered)"));
+                    }
+
+                    if (blockResult.nonZeroPixels() > 0) {
+                        source.sendSystemMessage(Component.literal("a  RenderBlock test PASSED"));
+                    } else {
+                        source.sendSystemMessage(Component.literal("c  RenderBlock test FAILED (no pixels rendered)"));
+                    }
+                } catch (Exception e) {
+                    source.sendSystemMessage(Component.literal("c  Test failed: " + e.getMessage()));
+                    e.printStackTrace();
+                }
+                return null;
+            });
+            return 1;
+        }));
+
         // Register the literal once and reuse the returned node for the "vb" shortcut.
         CommandNode<CommandSourceStack> rootNode = event.getDispatcher().register(root);
         event.getDispatcher().register(Commands.literal("vb").redirect(rootNode));
     }
+
+    private static int armBakeProbe(CommandSourceStack source, int frames, int blockId) {
+        BlockState state = Block.BLOCK_STATE_REGISTRY.byId(blockId);
+        if (state == null) {
+            state = Blocks.GRANITE.defaultBlockState();
+            source.sendSystemMessage(Component.literal("e[VoxelBridge] Unknown blockId " + blockId + ", fallback to granite."));
+        }
+        GpuBakeDebugProbe.arm(state, frames);
+        source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake probe armed: id=" + blockId + " frames=" + frames));
+        return 1;
+    }
+
+    private static void runBakeDebug(CommandSourceStack source) {
+        Minecraft mc = Minecraft.getInstance();
+        Path outDir;
+        Path debugDir;
+        boolean loggerStarted = false;
+        try {
+            outDir = IOUtil.ensureExportDir();
+            debugDir = outDir.resolve("bakedebug");
+            Files.createDirectories(debugDir);
+            VoxelBridgeLogger.initialize(outDir);
+            loggerStarted = true;
+        } catch (Exception e) {
+            mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Bake debug failed: " + e.getMessage())));
+            return;
+        }
+
+        MemorySectionStorage storage = new MemorySectionStorage();
+        Mapper mapper = new Mapper(storage);
+        ensureMapperSize(mapper, BAKE_DEBUG_MAX_ID + 1);
+
+        int availableMaxId = Math.min(BAKE_DEBUG_MAX_ID, mapper.getBlockStateCount() - 1);
+        if (availableMaxId < BAKE_DEBUG_MIN_ID) {
+            mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Bake debug aborted: no mapped block states.")));
+            return;
+        }
+
+        GpuBakeDebugService debugService = null;
+        try {
+            debugService = mc.submit(() -> new GpuBakeDebugService(BAKE_DEBUG_SIZE)).join();
+            writeBakeDebugOutput(debugDir, mapper, debugService, mc, availableMaxId);
+        } catch (Exception e) {
+            mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Bake debug failed: " + e.getMessage())));
+            return;
+        } finally {
+            if (debugService != null) {
+                GpuBakeDebugService svc = debugService;
+                mc.submit(() -> {
+                    svc.close();
+                    return null;
+                }).join();
+            }
+            if (loggerStarted) {
+                VoxelBridgeLogger.close();
+            }
+        }
+
+        mc.execute(() -> source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake debug done: " + debugDir.toAbsolutePath())));
+    }
+
+    private static void ensureMapperSize(Mapper mapper, int minSize) {
+        int registrySize = Block.BLOCK_STATE_REGISTRY.size();
+        for (int i = 0; i < registrySize && mapper.getBlockStateCount() < minSize; i++) {
+            BlockState state = Block.BLOCK_STATE_REGISTRY.byId(i);
+            if (state != null) {
+                mapper.getIdForBlockState(state);
+            }
+        }
+    }
+
+    private static void writeBakeDebugOutput(Path debugDir,
+                                             Mapper mapper,
+                                             GpuBakeDebugService debugService,
+                                             Minecraft mc,
+                                             int maxId) throws Exception {
+        Path indexFile = debugDir.resolve("index.txt");
+        AtlasDebugOverlay overlay = AtlasDebugOverlay.tryCreate(mc, debugDir);
+        try (BufferedWriter writer = Files.newBufferedWriter(indexFile, StandardCharsets.UTF_8)) {
+            for (int id = BAKE_DEBUG_MIN_ID; id <= maxId; id++) {
+                BlockState state = mapper.getBlockStateFromBlockId(id);
+                GpuBakeDebugService.BakeResult result = mc.submit(() -> debugService.bake(state)).join();
+                ColourDepthTextureData[] textures = result.textures();
+                var uvStats = result.uvStats();
+                writer.write(String.format(Locale.ROOT, "id=%d state=%s", id, state));
+                writer.newLine();
+                if (uvStats != null && uvStats.count() > 0) {
+                    writer.write(String.format(Locale.ROOT,
+                        "  uv min=[%.6f, %.6f] max=[%.6f, %.6f] count=%d invalid=%s",
+                        uvStats.minU(), uvStats.minV(), uvStats.maxU(), uvStats.maxV(),
+                        uvStats.count(), uvStats.invalid()));
+                    writer.newLine();
+                    if (uvStats.debugLog() != null && !uvStats.debugLog().isEmpty()) {
+                        writer.write("  [DEBUG LOG]");
+                        writer.newLine();
+                        for (String line : uvStats.debugLog().split("\n")) {
+                            writer.write("    " + line);
+                            writer.newLine();
+                        }
+                    }
+                } else {
+                    writer.write("  uv empty");
+                    writer.newLine();
+                }
+                for (Direction dir : Direction.values()) {
+                    String face = dir.getSerializedName();
+                    ColourDepthTextureData tex = textures[dir.get3DDataValue()];
+                    DebugFaceOutput out = writeDebugFace(debugDir, id, face, tex, TextureUtils.WRITE_CHECK_ALPHA, true);
+                    writer.write(String.format(Locale.ROOT, "  %s base=%s overlay=%s combined=%s meta=%s stencil=%s", face,
+                        out.baseName != null ? out.baseName : "-",
+                        out.overlayName != null ? out.overlayName : "-",
+                        out.combinedName != null ? out.combinedName : "-",
+                        out.metaName != null ? out.metaName : "-",
+                        out.stencilName != null ? out.stencilName : "-"));
+                    writer.newLine();
+                }
+                if (overlay != null && uvStats != null && uvStats.pointCount() > 0) {
+                    overlay.addPoints(id, uvStats.points(), uvStats.pointCount());
+                    overlay.addLines(id, uvStats.points(), uvStats.pointCount());
+                }
+            }
+        }
+        if (overlay != null) {
+            overlay.writeOutputs();
+        }
+    }
+
+    private static DebugFaceOutput writeDebugFace(Path debugDir,
+                                                  int id,
+                                                  String face,
+                                                  ColourDepthTextureData tex,
+                                                  int checkMode,
+                                                  boolean forceWrite) throws IOException {
+        int w = tex.width();
+        int h = tex.height();
+        int[] basePixels = new int[w * h];
+        int[] overlayPixels = new int[w * h];
+        int[] combinedPixels = new int[w * h];
+        int[] metaPixels = new int[w * h];
+        int[] stencilPixels = new int[w * h];
+        int[] colours = tex.colour();
+        int[] depths = tex.depth();
+        boolean hasBase = false;
+        boolean hasOverlay = false;
+        boolean hasCombined = false;
+        boolean hasMeta = false;
+        boolean hasStencil = false;
+
+        for (int y = 0; y < h; y++) {
+            int srcRow = y * w;
+            int dstRow = (h - 1 - y) * w;
+            for (int x = 0; x < w; x++) {
+                int srcIdx = srcRow + x;
+                if (!isWritten(colours[srcIdx], depths[srcIdx], checkMode)) {
+                    continue;
+                }
+                int argb = toArgb(colours[srcIdx]);
+                int dstIdx = dstRow + x;
+                combinedPixels[dstIdx] = argb;
+                hasCombined = true;
+                int depthVal = depths[srcIdx];
+                metaPixels[dstIdx] = 0xFF000000;
+                hasMeta = true;
+                int stencil = depthVal & 0xFF;
+                int gray = stencil;
+                stencilPixels[dstIdx] = (0xFF << 24) | (gray << 16) | (gray << 8) | gray;
+                if (stencil != 0) {
+                    hasStencil = true;
+                }
+                basePixels[dstIdx] = argb;
+                hasBase = true;
+            }
+        }
+
+        String baseName = null;
+        if (hasBase || forceWrite) {
+            baseName = String.format(Locale.ROOT, "block_%03d_%s.png", id, face);
+            BufferedImage baseImage = createImage(w, h, basePixels);
+            ImageIO.write(baseImage, "PNG", debugDir.resolve(baseName).toFile());
+        }
+
+        String overlayName = null;
+        if (hasOverlay) {
+            overlayName = String.format(Locale.ROOT, "block_%03d_%s_overlay.png", id, face);
+            BufferedImage overlayImage = createImage(w, h, overlayPixels);
+            ImageIO.write(overlayImage, "PNG", debugDir.resolve(overlayName).toFile());
+        }
+
+        String combinedName = null;
+        if (hasCombined || forceWrite) {
+            combinedName = String.format(Locale.ROOT, "block_%03d_%s_combined.png", id, face);
+            BufferedImage combinedImage = createImage(w, h, combinedPixels);
+            ImageIO.write(combinedImage, "PNG", debugDir.resolve(combinedName).toFile());
+        }
+
+        String metaName = null;
+        if (hasMeta || forceWrite) {
+            metaName = String.format(Locale.ROOT, "block_%03d_%s_meta.png", id, face);
+            BufferedImage metaImage = createImage(w, h, metaPixels);
+            ImageIO.write(metaImage, "PNG", debugDir.resolve(metaName).toFile());
+        }
+
+        String stencilName = null;
+        if (hasStencil || forceWrite) {
+            stencilName = String.format(Locale.ROOT, "block_%03d_%s_stencil.png", id, face);
+            BufferedImage stencilImage = createImage(w, h, stencilPixels);
+            ImageIO.write(stencilImage, "PNG", debugDir.resolve(stencilName).toFile());
+        }
+
+        return new DebugFaceOutput(baseName, overlayName, combinedName, metaName, stencilName);
+    }
+
+    private static boolean isWritten(int colour, int depth, int checkMode) {
+        if (checkMode == TextureUtils.WRITE_CHECK_STENCIL) {
+            return (depth & 0xFF) != 0;
+        }
+        if (checkMode == TextureUtils.WRITE_CHECK_DEPTH) {
+            return (depth >>> 8) != ((1 << 24) - 1);
+        }
+        return ((colour >>> 24) & 0xFF) > 1;
+    }
+
+    private static int toArgb(int abgr) {
+        int a = (abgr >>> 24) & 0xFF;
+        int b = (abgr >>> 16) & 0xFF;
+        int g = (abgr >>> 8) & 0xFF;
+        int r = abgr & 0xFF;
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    private static BufferedImage createImage(int w, int h, int[] pixels) {
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        img.setRGB(0, 0, w, h, pixels, 0, w);
+        return img;
+    }
+
+    private static final class AtlasDebugOverlay {
+        private static final String ATLAS_BASE_NAME = "atlas_blocks.png";
+        private static final String ATLAS_POINTS_NAME = "atlas_blocks_uv_points.png";
+        private static final String ATLAS_LINES_NAME = "atlas_blocks_uv_lines.png";
+        private static final String ATLAS_LEGEND_NAME = "atlas_blocks_uv_points_legend.txt";
+
+        private final BufferedImage base;
+        private final BufferedImage overlay;
+        private final BufferedImage lineOverlay;
+        private final Graphics2D graphics;
+        private final Graphics2D lineGraphics;
+        private final int width;
+        private final int height;
+        private final Path debugDir;
+        private final StringBuilder legend = new StringBuilder();
+
+        private AtlasDebugOverlay(BufferedImage base, Path debugDir) {
+            this.base = base;
+            this.debugDir = debugDir;
+            this.width = base.getWidth();
+            this.height = base.getHeight();
+            this.overlay = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            this.lineOverlay = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = this.overlay.createGraphics();
+            g.setComposite(AlphaComposite.Src);
+            g.drawImage(base, 0, 0, null);
+            g.setComposite(AlphaComposite.SrcOver);
+            this.graphics = g;
+            Graphics2D lg = this.lineOverlay.createGraphics();
+            lg.setComposite(AlphaComposite.Src);
+            lg.drawImage(base, 0, 0, null);
+            lg.setComposite(AlphaComposite.SrcOver);
+            lg.setStroke(new BasicStroke(1.0f));
+            this.lineGraphics = lg;
+        }
+
+        static AtlasDebugOverlay tryCreate(Minecraft mc, Path debugDir) {
+            TextureAtlas atlas = mc.getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            if (atlas == null || atlas.getTextures().isEmpty()) {
+                return null;
+            }
+            Integer widthVal = readIntProperty(atlas, "getWidth", "width");
+            Integer heightVal = readIntProperty(atlas, "getHeight", "height");
+            int width = widthVal != null ? widthVal : -1;
+            int height = heightVal != null ? heightVal : -1;
+            if (width <= 0 || height <= 0) {
+                int[] bounds = computeAtlasBounds(atlas.getTextures().values());
+                width = bounds[0];
+                height = bounds[1];
+            }
+            if (width <= 0 || height <= 0) {
+                return null;
+            }
+
+            BufferedImage base = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = base.createGraphics();
+            g.setComposite(AlphaComposite.Src);
+            g.setColor(new Color(0, 0, 0, 0));
+            g.fillRect(0, 0, width, height);
+            for (TextureAtlasSprite sprite : atlas.getTextures().values()) {
+                BufferedImage spriteImg = TextureLoader.fromSprite(sprite);
+                if (spriteImg == null) {
+                    continue;
+                }
+                Integer x = readSpriteCoord(sprite, "getX", "x");
+                Integer y = readSpriteCoord(sprite, "getY", "y");
+                if (x == null || y == null) {
+                    continue;
+                }
+                g.drawImage(spriteImg, x, y, null);
+            }
+            g.dispose();
+            return new AtlasDebugOverlay(base, debugDir);
+        }
+
+        void addPoints(int id, float[] points, int pointCount) {
+            if (points == null || pointCount <= 0) {
+                return;
+            }
+            Color baseColor = colorForId(id);
+            this.graphics.setColor(baseColor);
+            int outOfRange = 0;
+            int plotted = 0;
+            for (int i = 0; i < pointCount; i++) {
+                int idx = i * 2;
+                if (idx + 1 >= points.length) {
+                    break;
+                }
+                float u = points[idx];
+                float v = points[idx + 1];
+                if (!Float.isFinite(u) || !Float.isFinite(v)) {
+                    continue;
+                }
+                int x = Math.round(u * (width - 1));
+                int y = Math.round(v * (height - 1));
+                boolean oob = x < 0 || x >= width || y < 0 || y >= height;
+                if (oob) {
+                    outOfRange++;
+                    x = clamp(x, 0, width - 1);
+                    y = clamp(y, 0, height - 1);
+                }
+                drawCross(this.graphics, x, y);
+                plotted++;
+            }
+            if (plotted > 0) {
+                String hex = String.format(Locale.ROOT, "#%02X%02X%02X", baseColor.getRed(), baseColor.getGreen(), baseColor.getBlue());
+                legend.append(String.format(Locale.ROOT, "id=%d color=%s points=%d outOfRange=%d%n", id, hex, plotted, outOfRange));
+            }
+        }
+
+        void addLines(int id, float[] points, int pointCount) {
+            if (points == null || pointCount < 4) {
+                return;
+            }
+            Color baseColor = colorForId(id);
+            this.lineGraphics.setColor(baseColor);
+            int maxPoints = Math.min(pointCount, points.length / 2);
+            for (int i = 0; i + 3 < maxPoints; i += 4) {
+                int[] xs = new int[4];
+                int[] ys = new int[4];
+                boolean validQuad = true;
+                for (int v = 0; v < 4; v++) {
+                    int idx = (i + v) * 2;
+                    float u = points[idx];
+                    float vv = points[idx + 1];
+                    if (!Float.isFinite(u) || !Float.isFinite(vv)) {
+                        validQuad = false;
+                        break;
+                    }
+                    int x = Math.round(u * (width - 1));
+                    int y = Math.round(vv * (height - 1));
+                    xs[v] = clamp(x, 0, width - 1);
+                    ys[v] = clamp(y, 0, height - 1);
+                }
+                if (!validQuad) {
+                    continue;
+                }
+                drawQuadOutline(this.lineGraphics, xs, ys);
+            }
+        }
+
+        void writeOutputs() throws IOException {
+            ImageIO.write(base, "PNG", debugDir.resolve(ATLAS_BASE_NAME).toFile());
+            ImageIO.write(overlay, "PNG", debugDir.resolve(ATLAS_POINTS_NAME).toFile());
+            ImageIO.write(lineOverlay, "PNG", debugDir.resolve(ATLAS_LINES_NAME).toFile());
+            graphics.dispose();
+            lineGraphics.dispose();
+            if (legend.length() > 0) {
+                Files.writeString(debugDir.resolve(ATLAS_LEGEND_NAME), legend.toString(), StandardCharsets.UTF_8);
+            }
+        }
+
+        private static int[] computeAtlasBounds(Iterable<TextureAtlasSprite> sprites) {
+            int maxX = 0;
+            int maxY = 0;
+            for (TextureAtlasSprite sprite : sprites) {
+                Integer x = readSpriteCoord(sprite, "getX", "x");
+                Integer y = readSpriteCoord(sprite, "getY", "y");
+                if (x == null || y == null) {
+                    continue;
+                }
+                int w = sprite.contents().width();
+                int h = sprite.contents().height();
+                maxX = Math.max(maxX, x + w);
+                maxY = Math.max(maxY, y + h);
+            }
+            return new int[]{maxX, maxY};
+        }
+
+        private static Color colorForId(int id) {
+            float hue = (id % 360) / 360.0f;
+            Color base = Color.getHSBColor(hue, 0.85f, 1.0f);
+            return new Color(base.getRed(), base.getGreen(), base.getBlue(), 200);
+        }
+
+        private static void drawCross(Graphics2D g, int x, int y) {
+            g.fillRect(x - 1, y, 3, 1);
+            g.fillRect(x, y - 1, 1, 3);
+        }
+
+        private static void drawQuadOutline(Graphics2D g, int[] xs, int[] ys) {
+            g.drawLine(xs[0], ys[0], xs[1], ys[1]);
+            g.drawLine(xs[1], ys[1], xs[2], ys[2]);
+            g.drawLine(xs[2], ys[2], xs[3], ys[3]);
+            g.drawLine(xs[3], ys[3], xs[0], ys[0]);
+        }
+    }
+
+    private static Integer readSpriteCoord(TextureAtlasSprite sprite, String... names) {
+        Integer val = readIntProperty(sprite, names);
+        if (val != null) {
+            return val;
+        }
+        Object contents = invokeOptional(sprite, "contents");
+        if (contents != null) {
+            return readIntProperty(contents, names);
+        }
+        return null;
+    }
+
+    private static Integer readIntProperty(Object obj, String... names) {
+        if (obj == null) {
+            return null;
+        }
+        for (String name : names) {
+            try {
+                java.lang.reflect.Field field = obj.getClass().getField(name);
+                Object val = field.get(obj);
+                if (val instanceof Number num) {
+                    return num.intValue();
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                java.lang.reflect.Method method = obj.getClass().getMethod(name);
+                Object val = method.invoke(obj);
+                if (val instanceof Number num) {
+                    return num.intValue();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static Object invokeOptional(Object target, String methodName) {
+        try {
+            java.lang.reflect.Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static int clamp(int value, int min, int max) {
+        if (value < min) {
+            return min;
+        }
+        if (value > max) {
+            return max;
+        }
+        return value;
+    }
+
+    private static void runSimpleBakeDebug(CommandSourceStack source) {
+        Minecraft mc = Minecraft.getInstance();
+        Path outDir;
+        Path debugDir;
+        try {
+            outDir = IOUtil.ensureExportDir();
+            debugDir = outDir.resolve("simplebakedebug");
+            Files.createDirectories(debugDir);
+        } catch (Exception e) {
+            mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Simple bake debug failed: " + e.getMessage())));
+            return;
+        }
+
+        MemorySectionStorage storage = new MemorySectionStorage();
+        Mapper mapper = new Mapper(storage);
+        ensureMapperSize(mapper, BAKE_DEBUG_MAX_ID + 1);
+
+        int availableMaxId = Math.min(BAKE_DEBUG_MAX_ID, mapper.getBlockStateCount() - 1);
+        if (availableMaxId < BAKE_DEBUG_MIN_ID) {
+            mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Simple bake debug aborted: no mapped block states.")));
+            return;
+        }
+
+        SimpleGpuBakeDebugService debugService = null;
+        try {
+            debugService = mc.submit(() -> new SimpleGpuBakeDebugService(BAKE_DEBUG_SIZE)).join();
+            writeSimpleBakeDebugOutput(debugDir, mapper, debugService, mc, availableMaxId);
+        } catch (Exception e) {
+            e.printStackTrace();
+            mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Simple bake debug failed: " + e.getMessage())));
+            return;
+        } finally {
+            if (debugService != null) {
+                SimpleGpuBakeDebugService svc = debugService;
+                mc.submit(() -> {
+                    svc.close();
+                    return null;
+                }).join();
+            }
+        }
+
+        mc.execute(() -> source.sendSystemMessage(Component.literal("a[VoxelBridge] Simple bake debug done: " + debugDir.toAbsolutePath())));
+    }
+
+    private static void writeSimpleBakeDebugOutput(Path debugDir,
+                                                   Mapper mapper,
+                                                   SimpleGpuBakeDebugService debugService,
+                                                   Minecraft mc,
+                                                   int maxId) throws Exception {
+        Path indexFile = debugDir.resolve("index.txt");
+        try (BufferedWriter writer = Files.newBufferedWriter(indexFile, StandardCharsets.UTF_8)) {
+            for (int id = BAKE_DEBUG_MIN_ID; id <= maxId; id++) {
+                BlockState state = mapper.getBlockStateFromBlockId(id);
+                SimpleGpuBakeDebugService.BakeResult result = mc.submit(() -> debugService.bake(state)).join();
+                ColourDepthTextureData[] textures = result.textures();
+                writer.write(String.format(Locale.ROOT, "id=%d state=%s", id, state));
+                writer.newLine();
+                for (Direction dir : Direction.values()) {
+                    String face = dir.getSerializedName();
+                    ColourDepthTextureData tex = textures[dir.get3DDataValue()];
+                    DebugFaceOutput out = writeDebugFace(debugDir, id, face, tex, TextureUtils.WRITE_CHECK_ALPHA, true);
+                    writer.write(String.format(Locale.ROOT, "  %s base=%s overlay=%s combined=%s meta=%s stencil=%s", face,
+                        out.baseName != null ? out.baseName : "-",
+                        out.overlayName != null ? out.overlayName : "-",
+                        out.combinedName != null ? out.combinedName : "-",
+                        out.metaName != null ? out.metaName : "-",
+                        out.stencilName != null ? out.stencilName : "-"));
+                    writer.newLine();
+                }
+            }
+        }
+    }
+
+    private record DebugFaceOutput(String baseName,
+                                   String overlayName,
+                                   String combinedName,
+                                   String metaName,
+                                   String stencilName) {}
 }

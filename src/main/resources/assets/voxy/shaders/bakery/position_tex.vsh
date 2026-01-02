@@ -8,7 +8,7 @@ out vec2 texCoord;
 out flat uint metadata;
 
 void main() {
-    metadata = floatBitsToUint(pos.w);//Fuck you intel
+    metadata = floatBitsToUint(pos.w);
 
     gl_Position = transform * vec4(pos.xyz, 1.0);
     texCoord = uv;

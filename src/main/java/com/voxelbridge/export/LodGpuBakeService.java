@@ -1,100 +1,116 @@
 package com.voxelbridge.export;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.voxelbridge.voxy.client.core.model.ColourDepthTextureData;
-import com.voxelbridge.voxy.client.core.model.ModelFactory;
-import com.voxelbridge.voxy.client.core.model.ModelStore;
+import com.voxelbridge.voxy.client.core.model.GpuBakeRenderPump;
+import com.voxelbridge.voxy.client.core.model.ModelBakerySubsystem;
+import com.voxelbridge.voxy.client.core.model.TextureUtils;
+import com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery;
 import com.voxelbridge.voxy.common.world.other.Mapper;
 import com.voxelbridge.voxy.mesh.VoxelMesher;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ItemBlockRenderTypes;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
-import net.minecraft.world.level.block.LeavesBlock;
-import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.client.model.data.ModelData;
 
 import java.awt.image.BufferedImage;
-import java.awt.image.DataBufferInt;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import javax.imageio.ImageIO;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
-public final class LodGpuBakeService implements AutoCloseable, VoxelMesher.LodOverlayProvider {
+public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, AutoCloseable {
+    private static final String SPRITE_PREFIX = "voxelbridge:lod/bake";
+    private static final String TRANSPARENT_SPRITE = "voxelbridge:transparent";
+
     private final ExportContext ctx;
-    private final ModelStore modelStore;
-    private final ModelFactory modelFactory;
-    private final Int2ObjectOpenHashMap<String[]> bakedSpriteKeys = new Int2ObjectOpenHashMap<>();
-    private final Int2ObjectOpenHashMap<String[]> bakedOverlayKeys = new Int2ObjectOpenHashMap<>();
-    private final Int2ObjectOpenHashMap<VoxelMesher.LodFaceMeta[]> bakedFaceMeta = new Int2ObjectOpenHashMap<>();
+    private final ModelBakerySubsystem modelBakery;
+    private final ConcurrentHashMap<Integer, FaceBakeData> bakedData = new ConcurrentHashMap<>();
+    private final Set<Integer> bakedIds = ConcurrentHashMap.newKeySet();
+    private final CpuModelTextureBakery overlayBakery = new CpuModelTextureBakery();
 
-    private final Path debugOutDir;
-
-    public LodGpuBakeService(ExportContext ctx, Mapper mapper, Path outDir) {
+    public LodGpuBakeService(Mapper mapper, ExportContext ctx) {
         this.ctx = ctx;
-        this.debugOutDir = outDir;
-        // Initialize model subsystems on the main thread to ensure thread safety (OpenGL context, etc.)
-        Object[] systems = Minecraft.getInstance().submit(() -> {
-            ModelStore ms = new ModelStore();
-            ModelFactory mf = new ModelFactory(mapper, ms);
-            mf.setBakeListener(this::handleBakeResult);
-            return new Object[]{ms, mf};
-        }).join();
-        
-        this.modelStore = (ModelStore) systems[0];
-        this.modelFactory = (ModelFactory) systems[1];
+        this.modelBakery = runOnRenderThread(() -> new ModelBakerySubsystem(mapper, true));
+        if (this.modelBakery.factory.bakery != null) {
+            this.modelBakery.factory.bakery.setIncludeOverlay(false);
+        }
+        this.modelBakery.factory.setBakeListener(this::handleBakeResult);
+        GpuBakeRenderPump.register(this.modelBakery);
     }
 
-    public void bakeBlockIds(Set<Integer> blockIds) {
+    public void bakeBlockIds(IntOpenHashSet blockIds) {
         if (blockIds == null || blockIds.isEmpty()) {
             return;
         }
+        for (int blockId : blockIds) {
+            modelBakery.requestBlockBake(blockId);
+        }
+        waitForBakes(blockIds);
+    }
 
-        // 1. Submit requests to add entries (Main Thread)
-        Minecraft.getInstance().submit(() -> {
-            for (int blockId : blockIds) {
-                if (blockId == 0) {
-                    continue;
-                }
-                modelFactory.addEntry(blockId);
-            }
-        }).join();
+    @Override
+    public boolean hasTextures(int blockId) {
+        return bakedData.containsKey(blockId);
+    }
 
-        // 2. Process baking in a loop, yielding to the main thread between ticks
-        // This prevents freezing the game or triggering the watchdog by blocking the main thread for too long.
-        while (true) {
-            boolean done = Minecraft.getInstance().submit(() -> {
-                modelFactory.tickAndProcessUploads();
-                modelFactory.processAllThings();
-                return allBaked(blockIds);
-            }).join();
+    @Override
+    public String getSpriteKey(int blockId, Direction dir) {
+        FaceBakeData data = bakedData.get(blockId);
+        if (data == null) {
+            return null;
+        }
+        return data.spriteKeys[dir.get3DDataValue()];
+    }
 
-            if (done) {
-                break;
-            }
+    @Override
+    public String getOverlaySpriteKey(int blockId, Direction dir) {
+        FaceBakeData data = bakedData.get(blockId);
+        if (data == null) {
+            return null;
+        }
+        return data.overlayKeys[dir.get3DDataValue()];
+    }
 
+    @Override
+    public VoxelMesher.LodFaceMeta getFaceMeta(int blockId, Direction dir) {
+        FaceBakeData data = bakedData.get(blockId);
+        if (data == null) {
+            return null;
+        }
+        return data.metas[dir.get3DDataValue()];
+    }
+
+    @Override
+    public void close() {
+        GpuBakeRenderPump.unregister(this.modelBakery);
+        runOnRenderThread(() -> {
+            this.modelBakery.shutdown();
+            return null;
+        });
+    }
+
+    private void waitForBakes(IntOpenHashSet blockIds) {
+        while (!allBaked(blockIds)) {
             try {
-                // Short sleep to allow other tasks on the main thread to run / prevent busy loop
-                Thread.sleep(5);
+                Thread.sleep(5L);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted during GPU bake", e);
+                break;
             }
         }
     }
 
-    private boolean allBaked(Set<Integer> blockIds) {
+    private boolean allBaked(IntOpenHashSet blockIds) {
         for (int blockId : blockIds) {
-            if (blockId == 0) {
-                continue;
-            }
-            if (!modelFactory.hasModelForBlockId(blockId)) {
+            if (!bakedIds.contains(blockId)) {
                 return false;
             }
         }
@@ -102,188 +118,142 @@ public final class LodGpuBakeService implements AutoCloseable, VoxelMesher.LodOv
     }
 
     private void handleBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting) {
-        String[] faceKeys = bakedSpriteKeys.get(blockId);
-        if (faceKeys == null) {
-            faceKeys = new String[6];
-            bakedSpriteKeys.put(blockId, faceKeys);
+        int checkMode = selectCheckMode(blockState);
+        if (VoxelBridgeLogger.isDebugEnabled(LogModule.BAKE)) {
+            VoxelBridgeLogger.debug(LogModule.BAKE, String.format(
+                "[Bake] blockId=%d state=%s check=%s darkened=%s",
+                blockId, blockState, checkModeName(checkMode), darkenedTinting));
         }
-        String[] overlayKeys = bakedOverlayKeys.get(blockId);
-        if (overlayKeys == null) {
-            overlayKeys = new String[6];
-            bakedOverlayKeys.put(blockId, overlayKeys);
-        }
-        VoxelMesher.LodFaceMeta[] faceMeta = bakedFaceMeta.get(blockId);
-        if (faceMeta == null) {
-            faceMeta = new VoxelMesher.LodFaceMeta[6];
-            bakedFaceMeta.put(blockId, faceMeta);
-        }
-        int checkMode = resolveCheckMode(blockState);
-
+        String[] overlaySprites = resolveOverlaySprites(blockId, blockState);
+        FaceBakeData data = new FaceBakeData();
         for (Direction dir : Direction.values()) {
-            int faceIndex = dir.get3DDataValue();
-            String spriteKey = makeSpriteKey(blockId, dir);
-            String overlayKey = makeOverlayKey(blockId, dir);
-            BufferedImage[] split = splitTinted(textureData[faceIndex], checkMode);
-            ctx.cacheSpriteImage(spriteKey, split[0]);
-            faceKeys[faceIndex] = spriteKey;
-            if (split[1] != null) {
-                ctx.cacheSpriteImage(overlayKey, split[1]);
-                overlayKeys[faceIndex] = overlayKey;
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-                    VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format(
-                        "[LodGpuBakeService] blockId=%d dir=%s HAS OVERLAY: base=%s overlay=%s",
-                        blockId, dir.getName(), spriteKey, overlayKey));
-                }
-            } else {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-                    VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format(
-                        "[LodGpuBakeService] blockId=%d dir=%s NO OVERLAY: base=%s",
-                        blockId, dir.getName(), spriteKey));
-                }
-            }
-            faceMeta[faceIndex] = computeFaceMeta(textureData[faceIndex], checkMode);
+            int face = dir.get3DDataValue();
+            FaceEntry entry = bakeFace(blockId, dir, textureData[face], checkMode);
+            data.spriteKeys[face] = entry.spriteKey();
+            data.overlayKeys[face] = overlaySprites[face];
+            data.metas[face] = entry.meta();
         }
-
-        if (shouldDumpDebug(blockId)) {
-            VoxelBridgeLogger.info(LogModule.LOD_BAKE, String.format(
-                "[Bake] blockId=%d state=%s checkMode=%s",
-                blockId,
-                blockState,
-                checkMode == WriteCheckMode.STENCIL ? "stencil" : "alpha"));
-            for (Direction dir : Direction.values()) {
-                int faceIndex = dir.get3DDataValue();
-                VoxelMesher.LodFaceMeta meta = faceMeta[faceIndex];
-                if (meta != null) {
-                    VoxelBridgeLogger.info(LogModule.LOD_BAKE, String.format(
-                        "[Bake] face=%s sprite=%s minX=%d maxX=%d minY=%d maxY=%d depthOffset=%.6f empty=%s",
-                        dir.getName(),
-                        faceKeys[faceIndex],
-                        meta.minX,
-                        meta.maxX,
-                        meta.minY,
-                        meta.maxY,
-                        meta.depth,
-                        meta.empty));
-                }
-                dumpDebug(blockId, dir, textureData[faceIndex], checkMode, faceMeta[faceIndex]);
-            }
-        }
+        bakedData.put(blockId, data);
+        bakedIds.add(blockId);
     }
 
-    private static String makeSpriteKey(int blockId, Direction dir) {
-        return "voxelbridge:lod/baked/" + blockId + "/" + dir.getName();
-    }
+    private FaceEntry bakeFace(int blockId, Direction dir, ColourDepthTextureData tex, int checkMode) {
+        int w = tex.width();
+        int h = tex.height();
+        int[] basePixels = new int[w * h];
 
-    private static String makeOverlayKey(int blockId, Direction dir) {
-        return "voxelbridge:lod/baked/" + blockId + "/" + dir.getName() + "/overlay";
-    }
-
-    private static BufferedImage toImage(ColourDepthTextureData data, int checkMode) {
-        int width = data.width();
-        int height = data.height();
-        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        int[] out = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        int[] colours = data.colour();
-        int[] depth = data.depth();
-        int maxDepth = (1 << 24) - 1;
-        boolean wroteAny = false;
-
-        for (int y = 0; y < height; y++) {
-            int flippedY = (height - 1 - y) * width;
-            int row = y * width;
-            for (int x = 0; x < width; x++) {
-                int idx = row + x;
-                if (!wasPixelWritten(colours[idx], depth[idx], checkMode, maxDepth)) {
-                    out[flippedY + x] = 0;
+        int[] colours = tex.colour();
+        int[] depths = tex.depth();
+        boolean hasBase = false;
+        int written = 0;
+        int baseCount = 0;
+        for (int y = 0; y < h; y++) {
+            int srcRow = y * w;
+            int dstRow = (h - 1 - y) * w;
+            for (int x = 0; x < w; x++) {
+                int srcIdx = srcRow + x;
+                if (!isWritten(colours[srcIdx], depths[srcIdx], checkMode)) {
                     continue;
                 }
-                out[flippedY + x] = abgrToArgb(colours[idx]);
-                wroteAny = true;
+                written++;
+                int argb = toArgb(colours[srcIdx]);
+                int dstIdx = dstRow + x;
+                basePixels[dstIdx] = argb;
+                hasBase = true;
+                baseCount++;
             }
         }
 
-        if (!wroteAny && checkMode == WriteCheckMode.STENCIL) {
-            for (int y = 0; y < height; y++) {
-                int flippedY = (height - 1 - y) * width;
-                int row = y * width;
-                for (int x = 0; x < width; x++) {
-                    int idx = row + x;
-                    int depth24 = depth[idx] >>> 8;
-                    if (depth24 >= maxDepth) {
-                        out[flippedY + x] = 0;
-                        continue;
-                    }
-                    out[flippedY + x] = abgrToArgb(colours[idx]);
-                }
-            }
+        VoxelMesher.LodFaceMeta meta = buildFaceMeta(tex, checkMode);
+
+        String baseKey;
+        if (hasBase) {
+            baseKey = buildSpriteKey(blockId, dir, false);
+            ctx.cacheSpriteImage(baseKey, createImage(w, h, basePixels));
+        } else {
+            baseKey = TRANSPARENT_SPRITE;
         }
 
-        return image;
+        String overlayKey = null;
+
+        if (VoxelBridgeLogger.isDebugEnabled(LogModule.BAKE) && written > 0) {
+            VoxelBridgeLogger.debug(LogModule.BAKE, String.format(
+                "[Bake][Face] blockId=%d dir=%s size=%dx%d written=%d base=%d overlay=%d metaEmpty=%s bounds=[%d,%d,%d,%d] depth=%.4f",
+                blockId,
+                dir.getSerializedName(),
+                w,
+                h,
+                written,
+                baseCount,
+                0,
+                meta.empty,
+                meta.minX,
+                meta.maxX,
+                meta.minY,
+                meta.maxY,
+                meta.depth));
+        }
+        if (written > 0 && meta.empty) {
+            VoxelBridgeLogger.warn(LogModule.BAKE, String.format(
+                "[Bake][Face] blockId=%d dir=%s written=%d but meta marked empty",
+                blockId, dir.getSerializedName(), written));
+        }
+
+        return new FaceEntry(baseKey, meta);
     }
 
-    /**
-     * 将 tint 区域拆成独立贴图：基底清除 tint 像素，overlay 只保留 tint 像素，
-     * 这样在导出时可以用 overlay sprite 乘以顶点色，而基底保持原色。
-     */
-    private static BufferedImage[] splitTinted(ColourDepthTextureData data, int checkMode) {
-        int len = data.colour().length;
-        int[] baseColour = data.colour().clone();
-        int[] baseDepth = data.depth().clone();
-        int[] overlayColour = new int[len];
-        int[] overlayDepth = new int[len];
-        int maxDepth = (1 << 24) - 1;
-        int tintedWritten = 0;
-        int nonTintedWritten = 0;
-        for (int i = 0; i < len; i++) {
-            boolean tinted = (data.depth()[i] & 0x80) != 0;
-            boolean written = wasPixelWritten(baseColour[i], baseDepth[i], checkMode, maxDepth);
-            if (!written) {
-                continue;
-            }
-            if (tinted) {
-                tintedWritten++;
-            } else {
-                nonTintedWritten++;
-            }
+    private static VoxelMesher.LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode) {
+        int written = TextureUtils.getWrittenPixelCount(tex, checkMode);
+        if (written == 0) {
+            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true);
         }
-
-        if (VoxelBridgeLogger.isDebugEnabled(LogModule.LOD_BAKE)) {
-            VoxelBridgeLogger.debug(LogModule.LOD_BAKE, String.format(
-                "[LodGpuBakeService.splitTinted] written tinted=%d nonTinted=%d total=%d",
-                tintedWritten, nonTintedWritten, len));
+        int[] bounds = TextureUtils.computeBounds(tex, checkMode);
+        float depth = TextureUtils.computeDepth(tex, TextureUtils.DEPTH_MODE_AVG, checkMode);
+        if (depth < -0.1f || bounds[0] >= tex.width() || bounds[1] < 0 || bounds[2] >= tex.height() || bounds[3] < 0) {
+            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true);
         }
-
-        // 全部是 tinted：保留原图，不拆 overlay
-        if (tintedWritten > 0 && nonTintedWritten == 0) {
-            BufferedImage baseImg = toImage(data, checkMode);
-            return new BufferedImage[]{baseImg, null};
-        }
-
-        // 没有 tinted：只用原图
-        if (tintedWritten == 0) {
-            BufferedImage baseImg = toImage(data, checkMode);
-            return new BufferedImage[]{baseImg, null};
-        }
-
-        // 部分 tinted：拆分 overlay
-        for (int i = 0; i < len; i++) {
-            boolean tinted = (data.depth()[i] & 0x80) != 0;
-            if (tinted) {
-                overlayColour[i] = baseColour[i];
-                overlayDepth[i] = baseDepth[i];
-                baseColour[i] = 0;
-                baseDepth[i] = maxDepth << 8; // clear from base
-            } else {
-                overlayDepth[i] = maxDepth << 8;
-            }
-        }
-
-        BufferedImage baseImg = toImage(new ColourDepthTextureData(baseColour, baseDepth, data.width(), data.height()), checkMode);
-        BufferedImage overlayImg = toImage(new ColourDepthTextureData(overlayColour, overlayDepth, data.width(), data.height()), checkMode);
-        return new BufferedImage[]{baseImg, overlayImg};
+        int minX = clamp(bounds[0], 0, tex.width() - 1);
+        int maxX = clamp(bounds[1], 0, tex.width() - 1);
+        int minY = clamp(bounds[2], 0, tex.height() - 1);
+        int maxY = clamp(bounds[3], 0, tex.height() - 1);
+        return new VoxelMesher.LodFaceMeta(minX, maxX, minY, maxY, depth, false);
     }
 
-    private static int abgrToArgb(int abgr) {
+    private static int selectCheckMode(BlockState state) {
+        if (state == null) {
+            return TextureUtils.WRITE_CHECK_ALPHA;
+        }
+        if (state.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock) {
+            return TextureUtils.WRITE_CHECK_ALPHA;
+        }
+        net.minecraft.client.renderer.RenderType layer = net.minecraft.client.renderer.ItemBlockRenderTypes.getChunkRenderType(state);
+        if (layer == net.minecraft.client.renderer.RenderType.solid()) {
+            return TextureUtils.WRITE_CHECK_STENCIL;
+        }
+        return TextureUtils.WRITE_CHECK_ALPHA;
+    }
+
+    private static String checkModeName(int checkMode) {
+        if (checkMode == TextureUtils.WRITE_CHECK_STENCIL) {
+            return "STENCIL";
+        }
+        if (checkMode == TextureUtils.WRITE_CHECK_DEPTH) {
+            return "DEPTH";
+        }
+        return "ALPHA";
+    }
+
+    private static boolean isWritten(int colour, int depth, int checkMode) {
+        if (checkMode == TextureUtils.WRITE_CHECK_STENCIL) {
+            return (depth & 0xFF) != 0;
+        }
+        if (checkMode == TextureUtils.WRITE_CHECK_DEPTH) {
+            return (depth >>> 8) != ((1 << 24) - 1);
+        }
+        return ((colour >>> 24) & 0xFF) > 1;
+    }
+
+    private static int toArgb(int abgr) {
         int a = (abgr >>> 24) & 0xFF;
         int b = (abgr >>> 16) & 0xFF;
         int g = (abgr >>> 8) & 0xFF;
@@ -291,230 +261,136 @@ public final class LodGpuBakeService implements AutoCloseable, VoxelMesher.LodOv
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
-    private static int resolveCheckMode(BlockState state) {
-        RenderType layer;
-        if (state.getBlock() instanceof LiquidBlock) {
-            layer = ItemBlockRenderTypes.getRenderLayer(state.getFluidState());
-        } else {
-            if (state.getBlock() instanceof LeavesBlock) {
-                layer = RenderType.solid();
-            } else {
-                layer = ItemBlockRenderTypes.getChunkRenderType(state);
-            }
-        }
-        return layer == RenderType.solid() ? WriteCheckMode.STENCIL : WriteCheckMode.ALPHA;
+    private static BufferedImage createImage(int w, int h, int[] pixels) {
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        img.setRGB(0, 0, w, h, pixels, 0, w);
+        return img;
     }
 
-    private static VoxelMesher.LodFaceMeta computeFaceMeta(ColourDepthTextureData data, int checkMode) {
-        int width = data.width();
-        int height = data.height();
-        int minX = width;
-        int minY = height;
-        int maxX = -1;
-        int maxY = -1;
-        long sumDepth = 0;
-        int count = 0;
-        boolean wroteStencil = false;
+    private static String buildSpriteKey(int blockId, Direction dir, boolean overlay) {
+        String face = dir.getSerializedName();
+        if (overlay) {
+            return SPRITE_PREFIX + "/block_" + blockId + "/" + face + "_overlay";
+        }
+        return SPRITE_PREFIX + "/block_" + blockId + "/" + face;
+    }
 
-        int[] colours = data.colour();
-        int[] depth = data.depth();
-        int maxDepth = (1 << 24) - 1;
-        for (int y = 0; y < height; y++) {
-            int row = y * width;
-            for (int x = 0; x < width; x++) {
-                int idx = row + x;
-                int depthRaw = depth[idx];
-                if (checkMode == WriteCheckMode.STENCIL && (depthRaw & 0xFF) != 0) {
-                    wroteStencil = true;
-                }
-                if (!wasPixelWritten(colours[idx], depthRaw, checkMode, maxDepth)) {
+    private static int clamp(int value, int min, int max) {
+        if (value < min) return min;
+        if (value > max) return max;
+        return value;
+    }
+
+    private static <T> T runOnRenderThread(Supplier<T> task) {
+        if (RenderSystem.isOnRenderThread()) {
+            return task.get();
+        }
+        return Minecraft.getInstance().submit(task).join();
+    }
+
+    private String[] resolveOverlaySprites(int blockId, BlockState state) {
+        if (state == null || ctx == null) {
+            return new String[6];
+        }
+        return runOnRenderThread(() -> {
+            if (!hasOverlayQuads(state)) {
+                return new String[6];
+            }
+            var bake = overlayBakery.bake(state, CpuModelTextureBakery.BakeMode.OVERLAY_ONLY);
+            ColourDepthTextureData[] textures = bake.textures();
+            String[] overlayKeys = new String[6];
+            int checkMode = TextureUtils.WRITE_CHECK_ALPHA;
+            for (Direction dir : Direction.values()) {
+                ColourDepthTextureData tex = textures[dir.get3DDataValue()];
+                overlayKeys[dir.get3DDataValue()] = buildOverlaySprite(blockId, dir, tex, checkMode);
+            }
+            return overlayKeys;
+        });
+    }
+
+    private boolean hasOverlayQuads(BlockState state) {
+        var model = Minecraft.getInstance()
+            .getModelManager()
+            .getBlockModelShaper()
+            .getBlockModel(state);
+        RenderType layer = ItemBlockRenderTypes.getChunkRenderType(state);
+        long seed = 42L;
+        var rand = net.minecraft.util.RandomSource.create(seed);
+
+        for (Direction dir : Direction.values()) {
+            rand.setSeed(seed);
+            if (findOverlaySprite(model.getQuads(state, dir, rand, ModelData.EMPTY, layer)) != null) {
+                return true;
+            }
+            rand.setSeed(seed);
+            if (findOverlaySprite(model.getQuads(state, dir, rand, ModelData.EMPTY, null)) != null) {
+                return true;
+            }
+        }
+
+        rand.setSeed(seed);
+        return findOverlaySprite(model.getQuads(state, null, rand, ModelData.EMPTY, null)) != null;
+    }
+
+    private String buildOverlaySprite(int blockId, Direction dir, ColourDepthTextureData tex, int checkMode) {
+        if (tex == null) {
+            return null;
+        }
+        String key = buildSpriteKey(blockId, dir, true);
+        if (ctx.getCachedSpriteImage(key) != null) {
+            return key;
+        }
+        int w = tex.width();
+        int h = tex.height();
+        int[] overlayPixels = new int[w * h];
+        int[] colours = tex.colour();
+        int[] depths = tex.depth();
+        boolean hasOverlay = false;
+        for (int y = 0; y < h; y++) {
+            int srcRow = y * w;
+            int dstRow = (h - 1 - y) * w;
+            for (int x = 0; x < w; x++) {
+                int srcIdx = srcRow + x;
+                if (!isWritten(colours[srcIdx], depths[srcIdx], checkMode)) {
                     continue;
                 }
-                int yFlipped = height - 1 - y;
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (yFlipped < minY) minY = yFlipped;
-                if (yFlipped > maxY) maxY = yFlipped;
-                sumDepth += (depthRaw >>> 8);
-                count++;
+                int argb = toArgb(colours[srcIdx]);
+                overlayPixels[dstRow + x] = argb;
+                hasOverlay = true;
             }
         }
+        if (!hasOverlay) {
+            return null;
+        }
+        ctx.cacheSpriteImage(key, createImage(w, h, overlayPixels));
+        return key;
+    }
 
-        if (count == 0 && checkMode == WriteCheckMode.STENCIL && !wroteStencil) {
-            for (int y = 0; y < height; y++) {
-                int row = y * width;
-                for (int x = 0; x < width; x++) {
-                    int idx = row + x;
-                    int depth24 = depth[idx] >>> 8;
-                    if (depth24 >= maxDepth) {
-                        continue;
-                    }
-                    int yFlipped = height - 1 - y;
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (yFlipped < minY) minY = yFlipped;
-                    if (yFlipped > maxY) maxY = yFlipped;
-                    sumDepth += depth24;
-                    count++;
-                }
+    private static TextureAtlasSprite findOverlaySprite(List<BakedQuad> quads) {
+        if (quads == null || quads.isEmpty()) {
+            return null;
+        }
+        for (BakedQuad quad : quads) {
+            TextureAtlasSprite sprite = quad.getSprite();
+            if (sprite != null && isOverlaySprite(sprite)) {
+                return sprite;
             }
         }
-
-        if (count == 0) {
-            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true);
-        }
-
-        int avgDepth = (int) (sumDepth / count);
-        float depthOffset = u2fdepth(avgDepth);
-        return new VoxelMesher.LodFaceMeta(minX, maxX, minY, maxY, depthOffset, false);
+        return null;
     }
 
-    private static boolean wasPixelWritten(int colour, int depth, int mode, int maxDepth) {
-        if (mode == WriteCheckMode.STENCIL) {
-            return (depth & 0xFF) != 0;
-        }
-        if (mode == WriteCheckMode.ALPHA) {
-            return ((colour >>> 24) & 0xFF) > 1;
-        }
-        return (depth >>> 8) != maxDepth;
-    }
-
-    private static float u2fdepth(int depth) {
-        float depthF = (float) ((double) depth / ((1 << 24) - 1));
-        depthF *= 2.0f;
-        if (depthF > 1.00001f) {
-            depthF = 1.0f;
-        }
-        return depthF;
-    }
-
-    private boolean shouldDumpDebug(int blockId) {
-        if (!com.voxelbridge.config.ExportRuntimeConfig.isLodBakeDebugEnabled()) {
+    private static boolean isOverlaySprite(TextureAtlasSprite sprite) {
+        if (sprite == null) {
             return false;
         }
-        int target = com.voxelbridge.config.ExportRuntimeConfig.getLodBakeDebugBlockId();
-        return target < 0 || target == blockId;
+        return sprite.contents().name().toString().contains("overlay");
     }
 
-    private void dumpDebug(int blockId, Direction dir, ColourDepthTextureData data, int checkMode, VoxelMesher.LodFaceMeta meta) {
-        try {
-            Path dirPath = debugOutDir.resolve("debug").resolve("lod_bake").resolve("block_" + blockId);
-            Files.createDirectories(dirPath);
-
-            String faceName = dir.getName();
-            BufferedImage raw = toRawImage(data);
-            BufferedImage masked = toImage(data, checkMode);
-            BufferedImage depthImg = toDepthImage(data);
-
-            ImageIO.write(raw, "PNG", dirPath.resolve(faceName + "_raw.png").toFile());
-            ImageIO.write(masked, "PNG", dirPath.resolve(faceName + "_masked.png").toFile());
-            ImageIO.write(depthImg, "PNG", dirPath.resolve(faceName + "_depth.png").toFile());
-
-            Path metaPath = dirPath.resolve(faceName + "_meta.txt");
-            try (BufferedWriter writer = Files.newBufferedWriter(metaPath)) {
-                writer.write("face=" + faceName);
-                writer.newLine();
-                writer.write("checkMode=" + (checkMode == WriteCheckMode.STENCIL ? "stencil" : "alpha"));
-                writer.newLine();
-                if (meta != null) {
-                    writer.write("minX=" + meta.minX + " maxX=" + meta.maxX + " minY=" + meta.minY + " maxY=" + meta.maxY);
-                    writer.newLine();
-                    writer.write("depthOffset=" + meta.depth);
-                    writer.newLine();
-                    writer.write("empty=" + meta.empty);
-                    writer.newLine();
-                }
-            }
-            VoxelBridgeLogger.info(LogModule.LOD_BAKE, "[Bake] wrote " + dirPath.toAbsolutePath());
-        } catch (IOException ignored) {
-        }
+    private static final class FaceBakeData {
+        private final String[] spriteKeys = new String[6];
+        private final String[] overlayKeys = new String[6];
+        private final VoxelMesher.LodFaceMeta[] metas = new VoxelMesher.LodFaceMeta[6];
     }
 
-    private static BufferedImage toRawImage(ColourDepthTextureData data) {
-        int width = data.width();
-        int height = data.height();
-        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        int[] out = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        int[] colours = data.colour();
-        for (int y = 0; y < height; y++) {
-            int flippedY = (height - 1 - y) * width;
-            int row = y * width;
-            for (int x = 0; x < width; x++) {
-                int idx = row + x;
-                out[flippedY + x] = abgrToArgb(colours[idx]);
-            }
-        }
-        return image;
-    }
-
-    private static BufferedImage toDepthImage(ColourDepthTextureData data) {
-        int width = data.width();
-        int height = data.height();
-        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        int[] out = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        int[] depth = data.depth();
-        int maxDepth = (1 << 24) - 1;
-        for (int y = 0; y < height; y++) {
-            int flippedY = (height - 1 - y) * width;
-            int row = y * width;
-            for (int x = 0; x < width; x++) {
-                int idx = row + x;
-                int depth24 = depth[idx] >>> 8;
-                int stencil = depth[idx] & 0xFF;
-                int d = (int) Math.round((depth24 / (double) maxDepth) * 255.0);
-                int a = stencil;
-                int argb = (a << 24) | (d << 16) | (d << 8) | d;
-                out[flippedY + x] = argb;
-            }
-        }
-        return image;
-    }
-
-    @Override
-    public boolean hasTextures(int blockId) {
-        return bakedSpriteKeys.containsKey(blockId);
-    }
-
-    @Override
-    public String getSpriteKey(int blockId, Direction dir) {
-        String[] faces = bakedSpriteKeys.get(blockId);
-        if (faces == null) {
-            return null;
-        }
-        return faces[dir.get3DDataValue()];
-    }
-
-    @Override
-    public String getOverlaySpriteKey(int blockId, Direction dir) {
-        String[] faces = bakedOverlayKeys.get(blockId);
-        if (faces == null) {
-            return null;
-        }
-        return faces[dir.get3DDataValue()];
-    }
-
-    @Override
-    public VoxelMesher.LodFaceMeta getFaceMeta(int blockId, Direction dir) {
-        VoxelMesher.LodFaceMeta[] faces = bakedFaceMeta.get(blockId);
-        if (faces == null) {
-            return null;
-        }
-        return faces[dir.get3DDataValue()];
-    }
-
-    @Override
-    public void close() {
-        Minecraft.getInstance().submit(() -> {
-            modelFactory.free();
-            modelStore.free();
-            bakedSpriteKeys.clear();
-            bakedOverlayKeys.clear();
-            bakedFaceMeta.clear();
-        }).join();
-    }
-
-    private static final class WriteCheckMode {
-        private static final int STENCIL = 1;
-        private static final int ALPHA = 3;
-    }
+    private record FaceEntry(String spriteKey, VoxelMesher.LodFaceMeta meta) {}
 }

@@ -27,8 +27,12 @@ public class ModelBakerySubsystem {
     private final Thread processingThread;
     private volatile boolean isRunning = true;
     public ModelBakerySubsystem(Mapper mapper) {
+        this(mapper, false);
+    }
+
+    public ModelBakerySubsystem(Mapper mapper, boolean useGpuBake) {
         this.mapper = mapper;
-        this.factory = new ModelFactory(mapper, this.storage);
+        this.factory = new ModelFactory(mapper, this.storage, useGpuBake);
         this.processingThread = new Thread(()->{//TODO replace this with something good/integrate it into the async processor so that we just have less threads overall
             while (this.isRunning) {
                 this.factory.processAllThings();

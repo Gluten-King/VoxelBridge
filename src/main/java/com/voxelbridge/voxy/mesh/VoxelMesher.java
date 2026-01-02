@@ -40,6 +40,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.awt.image.BufferedImage;
+import com.mojang.blaze3d.vertex.PoseStack;
+import org.joml.Matrix4f;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
+import org.joml.Vector4f;
 
 public class VoxelMesher {
     public interface LodTextureProvider {
@@ -89,6 +94,15 @@ public class VoxelMesher {
     private static final String LOD_MATERIAL_KEY = "lod";
     private static final String LOD_SPRITE_KEY = "minecraft:block/white_wool";
     private static final long SPRITE_RANDOM_SEED = 42L;
+    private static final boolean DISABLE_LOD_FACE_CROP = false;
+    private static final Matrix4f BAKE_PROJ = new Matrix4f(
+        2f, 0f, 0f, 0f,
+        0f, 2f, 0f, 0f,
+        0f, 0f, -1f, 0f,
+        -1f, -1f, 0f, 1f
+    );
+    private static final Matrix4f[] BAKE_VIEWS = new Matrix4f[6];
+    private static final float[][] FACE_UV_TEMPLATE = new float[6][8];
 
     private final Int2ObjectOpenHashMap<FaceSpriteSet> faceSpriteCache = new Int2ObjectOpenHashMap<>();
     private final Int2ObjectOpenHashMap<List<ModelQuadTemplate>> modelQuadCache = new Int2ObjectOpenHashMap<>();
@@ -165,6 +179,19 @@ public class VoxelMesher {
         this.tintCache.defaultReturnValue(Integer.MIN_VALUE);
         this.fluidPresenceCache.defaultReturnValue((byte) -1);
         this.fluidBlockIdCache.defaultReturnValue(Integer.MIN_VALUE);
+    }
+
+    static {
+        addBakeView(0, -90, 0, 0, 0);
+        addBakeView(1, 90, 0, 0, 0b100);
+        addBakeView(2, 0, 180, 0, 0b001);
+        addBakeView(3, 0, 0, 0, 0);
+        addBakeView(4, 0, 90, 270, 0b100);
+        addBakeView(5, 0, 270, 270, 0);
+
+        for (Direction dir : Direction.values()) {
+            FACE_UV_TEMPLATE[dir.get3DDataValue()] = computeFaceUvTemplate(dir);
+        }
     }
 
     public void meshChunk(int chunkX, int chunkY, int chunkZ, int level) {
@@ -485,6 +512,9 @@ public class VoxelMesher {
                 }
             }
         }
+        if (DISABLE_LOD_FACE_CROP) {
+            faceMeta = null;
+        }
 
         int tintIndex = resolveTintIndex(state, blockId, dir);
         if (tintIndex < 0 && state.getBlock() instanceof LiquidBlock) {
@@ -533,13 +563,6 @@ public class VoxelMesher {
             if (overlaySprite != null) {
                 // overlay 使用白色基底，着色交给顶点色
                 com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, 0xFFFFFF);
-
-                // Only log when overlay is present (rare case)
-                if (com.voxelbridge.util.debug.VoxelBridgeLogger.isDebugEnabled(com.voxelbridge.util.debug.LogModule.LOD_BAKE)) {
-                    com.voxelbridge.util.debug.VoxelBridgeLogger.debug(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                        String.format("[VoxelMesher] blockId=%d dir=%s HAS_OVERLAY overlay=%s tint=%08X",
-                            blockId, dir.getName(), overlaySprite, hasTint ? tintColor : 0xFFFFFF));
-                }
             }
             }
         }
@@ -663,12 +686,12 @@ public class VoxelMesher {
             }
         }
         
-        // Simple UVs (0-1) or per-face bounds from LOD bake
+        float[] uvTemplate = FACE_UV_TEMPLATE[dir.get3DDataValue()];
         uvs = new float[]{
-            u0, v0,
-            u0, v1,
-            u1, v1,
-            u1, v0
+            lerp(u0, u1, uvTemplate[0]), lerp(v0, v1, uvTemplate[1]),
+            lerp(u0, u1, uvTemplate[2]), lerp(v0, v1, uvTemplate[3]),
+            lerp(u0, u1, uvTemplate[4]), lerp(v0, v1, uvTemplate[5]),
+            lerp(u0, u1, uvTemplate[6]), lerp(v0, v1, uvTemplate[7])
         };
 
         sink.addQuad(
@@ -972,6 +995,92 @@ public class VoxelMesher {
         if (v < 0f) return 0f;
         if (v > 1f) return 1f;
         return v;
+    }
+
+    private static void addBakeView(int i, float pitch, float yaw, float rotation, int flip) {
+        var stack = new PoseStack();
+        stack.translate(0.5f, 0.5f, 0.5f);
+        stack.mulPose(makeQuatFromAxisExact(new Vector3f(0, 0, 1), rotation));
+        stack.mulPose(makeQuatFromAxisExact(new Vector3f(1, 0, 0), pitch));
+        stack.mulPose(makeQuatFromAxisExact(new Vector3f(0, 1, 0), yaw));
+        stack.mulPose(new Matrix4f().scale(1 - 2 * (flip & 1), 1 - (flip & 2), 1 - ((flip >> 1) & 2)));
+        stack.translate(-0.5f, -0.5f, -0.5f);
+        BAKE_VIEWS[i] = new Matrix4f(stack.last().pose());
+    }
+
+    private static Quaternionf makeQuatFromAxisExact(Vector3f vec, float angle) {
+        angle = (float) Math.toRadians(angle);
+        float hangle = angle / 2.0f;
+        float sinAngle = (float) Math.sin(hangle);
+        float invVLength = (float) (1 / Math.sqrt(vec.lengthSquared()));
+        return new Quaternionf(vec.x * invVLength * sinAngle,
+            vec.y * invVLength * sinAngle,
+            vec.z * invVLength * sinAngle,
+            Math.cos(hangle));
+    }
+
+    private static float[] computeFaceUvTemplate(Direction dir) {
+        float[][] corners;
+        switch (dir) {
+            case DOWN -> corners = new float[][]{
+                {0f, 0f, 1f},
+                {0f, 0f, 0f},
+                {1f, 0f, 0f},
+                {1f, 0f, 1f}
+            };
+            case UP -> corners = new float[][]{
+                {0f, 1f, 0f},
+                {0f, 1f, 1f},
+                {1f, 1f, 1f},
+                {1f, 1f, 0f}
+            };
+            case NORTH -> corners = new float[][]{
+                {1f, 1f, 0f},
+                {1f, 0f, 0f},
+                {0f, 0f, 0f},
+                {0f, 1f, 0f}
+            };
+            case SOUTH -> corners = new float[][]{
+                {0f, 1f, 1f},
+                {0f, 0f, 1f},
+                {1f, 0f, 1f},
+                {1f, 1f, 1f}
+            };
+            case WEST -> corners = new float[][]{
+                {0f, 1f, 0f},
+                {0f, 0f, 0f},
+                {0f, 0f, 1f},
+                {0f, 1f, 1f}
+            };
+            case EAST -> corners = new float[][]{
+                {1f, 1f, 1f},
+                {1f, 0f, 1f},
+                {1f, 0f, 0f},
+                {1f, 1f, 0f}
+            };
+            default -> corners = new float[][]{
+                {0f, 0f, 0f},
+                {0f, 0f, 0f},
+                {0f, 0f, 0f},
+                {0f, 0f, 0f}
+            };
+        }
+
+        Matrix4f transform = new Matrix4f(BAKE_PROJ).mul(BAKE_VIEWS[dir.get3DDataValue()]);
+        float[] uvTemplate = new float[8];
+        Vector4f tmp = new Vector4f();
+        for (int i = 0; i < 4; i++) {
+            float[] c = corners[i];
+            tmp.set(c[0], c[1], c[2], 1f);
+            transform.transform(tmp);
+            float ndcX = tmp.x / tmp.w;
+            float ndcY = tmp.y / tmp.w;
+            float u = (ndcX + 1f) * 0.5f;
+            float v = 1f - (ndcY + 1f) * 0.5f;
+            uvTemplate[i * 2] = clamp01(u);
+            uvTemplate[i * 2 + 1] = clamp01(v);
+        }
+        return uvTemplate;
     }
 
     private static final class LodTintGetter implements BlockAndTintGetter {

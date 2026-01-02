@@ -8,7 +8,6 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.client.color.block.BlockColors;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import net.minecraft.core.BlockPos;
@@ -60,9 +59,19 @@ public final class CpuModelTextureBakery {
         }
     }
 
+    public enum BakeMode {
+        FULL,
+        BASE_ONLY,
+        OVERLAY_ONLY
+    }
+
     public record BakeResult(ColourDepthTextureData[] textures, boolean isShaded, boolean darkenedTinting) {}
 
     public BakeResult bake(BlockState state) {
+        return bake(state, BakeMode.FULL);
+    }
+
+    public BakeResult bake(BlockState state, BakeMode mode) {
         RenderType layer;
         boolean isBlock = true;
         if (state.getBlock() instanceof LiquidBlock) {
@@ -78,8 +87,10 @@ public final class CpuModelTextureBakery {
         boolean anyShaded = false;
         boolean anyDark = false;
 
+        boolean includeBase = mode != BakeMode.OVERLAY_ONLY;
+        boolean includeOverlay = mode != BakeMode.BASE_ONLY;
+
         if (isBlock) {
-            var blockColors = Minecraft.getInstance().getBlockColors();
             var model = Minecraft.getInstance()
                     .getModelManager()
                     .getBlockModelShaper()
@@ -91,8 +102,12 @@ public final class CpuModelTextureBakery {
             for (Direction dir : new Direction[]{Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null}) {
                 rand.setSeed(seed);
                 for (BakedQuad quad : model.getQuads(state, dir, rand, ModelData.EMPTY, layer)) {
-                    int meta = metaBase | (quad.isTinted() ? 4 : 0);
-                    CpuQuad cq = decodeQuad(quad, meta, state, blockColors);
+                    boolean isOverlay = isOverlaySprite(quad.getSprite());
+                    if (isOverlay ? !includeOverlay : !includeBase) {
+                        continue;
+                    }
+                    int meta = metaBase;
+                    CpuQuad cq = decodeQuad(quad, meta);
                     if (cq == null) continue;
                     quads.add(cq);
                     anyShaded |= cq.shaded;
@@ -107,8 +122,11 @@ public final class CpuModelTextureBakery {
                     if (!isOverlaySprite(quad.getSprite())) {
                         continue;
                     }
-                    int meta = metaBase | (quad.isTinted() ? 4 : 0);
-                    CpuQuad cq = decodeQuad(quad, meta, state, blockColors);
+                    if (!includeOverlay) {
+                        continue;
+                    }
+                    int meta = metaBase;
+                    CpuQuad cq = decodeQuad(quad, meta);
                     if (cq == null) continue;
                     quads.add(cq);
                     anyShaded |= cq.shaded;
@@ -118,7 +136,7 @@ public final class CpuModelTextureBakery {
         } else {
             // 简易流体支持：用缓存的 still/flow 贴图生成满方块 6 面
             FluidSprites sprites = FluidSprites.of(state.getFluidState());
-            int meta = getMetaFromLayer(layer) | 4; // 流体默认带 tint
+            int meta = getMetaFromLayer(layer);
             for (int face = 0; face < 6; face++) {
                 TextureAtlasSprite sprite = (face == Direction.UP.get3DDataValue() || face == Direction.DOWN.get3DDataValue())
                         ? sprites.still : sprites.flow;
@@ -127,7 +145,9 @@ public final class CpuModelTextureBakery {
         }
 
         // overlay 贴图（如 grass_block_side_overlay）放到最后绘制，避免被同深度基底覆盖
-        quads.sort((a, b) -> Boolean.compare(isOverlaySprite(a.sprite), isOverlaySprite(b.sprite)));
+        if (includeOverlay && includeBase) {
+            quads.sort((a, b) -> Boolean.compare(isOverlaySprite(a.sprite), isOverlaySprite(b.sprite)));
+        }
 
         ColourDepthTextureData[] out = new ColourDepthTextureData[6];
         for (int face = 0; face < 6; face++) {
@@ -151,7 +171,7 @@ public final class CpuModelTextureBakery {
 
     private record CpuQuad(float[][] pos, float[][] uv, int meta, TextureAtlasSprite sprite, boolean shaded, boolean darkCutout) {}
 
-    private static CpuQuad decodeQuad(BakedQuad quad, int metadata, BlockState state, BlockColors blockColors) {
+    private static CpuQuad decodeQuad(BakedQuad quad, int metadata) {
         float[][] pos = new float[4][3];
         float[][] uv = new float[4][2];
 
@@ -171,20 +191,6 @@ public final class CpuModelTextureBakery {
         }
         TextureAtlasSprite sprite = quad.getSprite();
         boolean dark = isDarkCutout(sprite);
-        boolean tintFlag = quad.isTinted();
-        // 兜底：如果 BlockColors 对该方块有颜色（哪怕 tintIndex==-1），也认为需要 tint
-        int tintIdx = quad.getTintIndex();
-        int tintCol = blockColors.getColor(state, null, null, tintIdx < 0 ? 0 : tintIdx);
-        if (tintCol != -1) {
-            tintFlag = true;
-        }
-        // overlay 纹理强制允许 tint，这样草方块侧面 overlay 可以被单独拆出并按生物群系着色
-        if (!tintFlag && isOverlaySprite(sprite)) {
-            tintFlag = true;
-        }
-        if (tintFlag) {
-            metadata |= 4; // 标记为 tinted
-        }
         return new CpuQuad(pos, uv, metadata, sprite, quad.isShade(), dark);
     }
 
@@ -328,7 +334,6 @@ public final class CpuModelTextureBakery {
         maxX = Math.min(maxX, SIZE);
         maxY = Math.min(maxY, SIZE);
 
-        boolean tinted = (q.meta & 4) != 0; // 标记 tint，颜色保持原贴图，由后续流程乘以生物群系色
         boolean discard = (q.meta & 1) != 0;
         for (int y = minY; y < maxY; y++) {
             for (int x = minX; x < maxX; x++) {
@@ -358,9 +363,8 @@ public final class CpuModelTextureBakery {
                     if (discard && alpha < 0.001f) {
                         continue;
                     }
-                    int stencil = (prev & 0x7F) + 1;
-                    if (stencil > 0x7F) stencil = 0x7F;
-                    if (tinted) stencil |= 0x80;
+                    int stencil = (prev & 0xFF) + 1;
+                    if (stencil > 0xFF) stencil = 0xFF;
                     depthBuf[idx] = (depth24 << 8) | stencil;
                     colour[idx] = abgr;
                 }

@@ -25,7 +25,7 @@ public enum LogModule {
     ENTITY("entity", "entity.log"),
     GLTF("gltf", "gltf.log"),
     LOD("lod", "lod.log"),
-    LOD_BAKE("lod.bake", "bake.log");
+    BAKE("bake", "bake.log");
 
     private final String loggerName;
     private final String fileName;

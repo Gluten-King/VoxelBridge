@@ -1,18 +1,31 @@
 package com.voxelbridge.voxy.client.core.model.bakery;
 
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.voxelbridge.voxy.common.util.MemoryBuffer;
-import net.minecraft.client.model.geom.builders.UVPair;
-import net.minecraft.client.renderer.block.model.BakedQuad;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
+import com.voxelbridge.voxy.common.util.MemoryBuffer;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import org.lwjgl.system.MemoryUtil;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import static com.voxelbridge.voxy.client.core.model.bakery.BudgetBufferRenderer.VERTEX_FORMAT_SIZE;
 
 public final class ReuseVertexConsumer implements VertexConsumer {
+    private static final Method PACKED_UV_METHOD = resolveMethod(BakedQuad.class, "packedUV", int.class);
+    private static final Method POSITION_METHOD = resolveMethod(BakedQuad.class, "position", int.class);
+    private static final Method UNPACK_U_METHOD = resolveStaticMethod("net.minecraft.client.model.geom.builders.UVPair", "unpackU", long.class);
+    private static final Method UNPACK_V_METHOD = resolveStaticMethod("net.minecraft.client.model.geom.builders.UVPair", "unpackV", long.class);
+    private static final boolean DEBUG_DISABLE_PACKED = true;
+    private static final float UV_EPS = 1.0e-4f;
+    private static final float ATLAS_SPAN_THRESHOLD = 0.5f;
+    private static volatile int atlasWidth = -1;
+    private static volatile int atlasHeight = -1;
+
     private MemoryBuffer buffer = new MemoryBuffer(8192);
     private long ptr;
     private int count;
@@ -20,9 +33,23 @@ public final class ReuseVertexConsumer implements VertexConsumer {
 
     public boolean anyShaded;
     public boolean anyDarkendTex;
+    private float minU;
+    private float maxU;
+    private float minV;
+    private float maxV;
+    private boolean uvInvalid;
+    private int uvCount;
+    private final StringBuilder debugLog = new StringBuilder();
+    private boolean captureUvPoints;
+    private float[] uvPoints = new float[0];
+    private int uvPointCount;
 
     public ReuseVertexConsumer() {
         this.reset();
+    }
+
+    public String getDebugLog() {
+        return debugLog.toString();
     }
 
     public ReuseVertexConsumer setDefaultMeta(int meta) {
@@ -33,7 +60,8 @@ public final class ReuseVertexConsumer implements VertexConsumer {
     @Override
     public ReuseVertexConsumer addVertex(float x, float y, float z) {
         this.ensureCanPut();
-        this.ptr += VERTEX_FORMAT_SIZE; this.count++; //Goto next vertex
+        this.ptr += VERTEX_FORMAT_SIZE;
+        this.count++;
         this.meta(this.defaultMeta);
         MemoryUtil.memPutFloat(this.ptr, x);
         MemoryUtil.memPutFloat(this.ptr + 4, y);
@@ -60,6 +88,22 @@ public final class ReuseVertexConsumer implements VertexConsumer {
     public ReuseVertexConsumer setUv(float u, float v) {
         MemoryUtil.memPutFloat(this.ptr + 16, u);
         MemoryUtil.memPutFloat(this.ptr + 20, v);
+        this.uvCount++;
+        if (captureUvPoints) {
+            ensureUvPointCapacity(this.uvPointCount + 1);
+            int base = this.uvPointCount * 2;
+            this.uvPoints[base] = u;
+            this.uvPoints[base + 1] = v;
+            this.uvPointCount++;
+        }
+        if (!Float.isFinite(u) || !Float.isFinite(v)) {
+            this.uvInvalid = true;
+        } else {
+            if (u < this.minU) this.minU = u;
+            if (u > this.maxU) this.maxU = u;
+            if (v < this.minV) this.minV = v;
+            if (v > this.maxV) this.maxV = v;
+        }
         return this;
     }
 
@@ -78,236 +122,386 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         return this;
     }
 
+    public VertexConsumer setLineWidth(float f) {
+        return this;
+    }
+
     public ReuseVertexConsumer quad(BakedQuad quad, int metadata) {
         this.anyShaded |= quad.isShade();
-        this.anyDarkendTex |= isDarkCutout(quad);
-        if (HAS_NEW_QUAD_API && HAS_UVPAIR) {
-            try {
-                for (int i = 0; i < 4; i++) {
-                    Object pos = POSITION_METHOD.invoke(quad, i);
-                    float x = ((Number) POS_X_METHOD.invoke(pos)).floatValue();
-                    float y = ((Number) POS_Y_METHOD.invoke(pos)).floatValue();
-                    float z = ((Number) POS_Z_METHOD.invoke(pos)).floatValue();
-                    this.addVertex(x, y, z);
+        this.anyDarkendTex |= isDarkCutout(quad.getSprite());
 
-                    Object uvVal = PACKED_UV_METHOD.invoke(quad, i);
-                    long packedUv = (uvVal instanceof Integer)
-                        ? ((Integer) uvVal).longValue()
-                        : (long) uvVal;
-                    this.setUv(unpackU(packedUv), unpackV(packedUv));
-                    this.meta(metadata);
-                }
-                return this;
-            } catch (Exception e) {
-                // Fall back to legacy vertex buffer decoding.
-                com.voxelbridge.util.debug.VoxelBridgeLogger.warn(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                    "[ReuseVC] Reflection API failed, using legacy decoding: " + e.getMessage());
-            }
-        } else {
-            com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] Using legacy vertex decoding (HAS_NEW_QUAD_API=" + HAS_NEW_QUAD_API + ", HAS_UVPAIR=" + HAS_UVPAIR + ")");
+        int meta = metadata;
+
+        if (tryEmitPacked(quad, meta)) {
+            return this;
         }
+
         int[] vertices = quad.getVertices();
-        // Use the actual buffer length to determine stride. Vanilla keeps 4 vertices packed back-to-back.
         if ((vertices.length & 3) != 0) {
-            com.voxelbridge.util.debug.VoxelBridgeLogger.warn(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] Unexpected vertex array length (not divisible by 4): " + vertices.length);
             return this;
         }
         int stride = vertices.length / 4;
         int uvOffset = DefaultVertexFormat.BLOCK.getOffset(VertexFormatElement.UV0) / 4;
         if (uvOffset < 0 || uvOffset + 1 >= stride) {
-            // Fall back to a sane default layout (x,y,z,color,u,v,...). This guards against format changes.
             uvOffset = Math.max(stride - 2, 0);
-            if (com.voxelbridge.config.ExportRuntimeConfig.isLodBakeDebugEnabled()) {
-                com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                    "[ReuseVC] UV offset from DefaultVertexFormat was invalid, fallback uvOffset=" + uvOffset + " stride=" + stride);
-            }
         }
 
-        if (com.voxelbridge.config.ExportRuntimeConfig.isLodBakeDebugEnabled() && this.count == 0) {
-            // Log first quad's vertex data for debugging
-            com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] Legacy decode - stride=" + stride + ", uvOffset=" + uvOffset + ", vertices.length=" + vertices.length);
-            com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] DefaultVertexFormat.BLOCK vertex size: " + DefaultVertexFormat.BLOCK.getVertexSize());
-            com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] Raw vertex buffer (all " + vertices.length + " ints): " + java.util.Arrays.toString(vertices));
-        }
-
+        float[] xs = new float[4];
+        float[] ys = new float[4];
+        float[] zs = new float[4];
+        float[] us = new float[4];
+        float[] vs = new float[4];
+        float rawMinU = Float.POSITIVE_INFINITY;
+        float rawMaxU = Float.NEGATIVE_INFINITY;
+        float rawMinV = Float.POSITIVE_INFINITY;
+        float rawMaxV = Float.NEGATIVE_INFINITY;
+        float posMax = 0.0f;
         for (int i = 0; i < 4; i++) {
             int base = i * stride;
-            float x = Float.intBitsToFloat(vertices[base]);
-            float y = Float.intBitsToFloat(vertices[base + 1]);
-            float z = Float.intBitsToFloat(vertices[base + 2]);
-            this.addVertex(x, y, z);
-            float u = Float.intBitsToFloat(vertices[base + uvOffset]);
-            float v = Float.intBitsToFloat(vertices[base + uvOffset + 1]);
-            this.setUv(u, v);
-
-            if (com.voxelbridge.config.ExportRuntimeConfig.isLodBakeDebugEnabled() && this.count <= 4) {
-                com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                    String.format("[ReuseVC] Vertex %d: raw[%d,%d,%d]=[%d,%d,%d] -> pos=(%.3f,%.3f,%.3f), raw[%d,%d]=[%d,%d] -> uv=(%.3f,%.3f)",
-                        i, base, base+1, base+2, vertices[base], vertices[base+1], vertices[base+2], x, y, z,
-                        base+uvOffset, base+uvOffset+1, vertices[base+uvOffset], vertices[base+uvOffset+1], u, v));
+            xs[i] = Float.intBitsToFloat(vertices[base]);
+            ys[i] = Float.intBitsToFloat(vertices[base + 1]);
+            zs[i] = Float.intBitsToFloat(vertices[base + 2]);
+            us[i] = Float.intBitsToFloat(vertices[base + uvOffset]);
+            vs[i] = Float.intBitsToFloat(vertices[base + uvOffset + 1]);
+            posMax = Math.max(posMax, Math.max(Math.abs(xs[i]), Math.max(Math.abs(ys[i]), Math.abs(zs[i]))));
+            if (us[i] < rawMinU) rawMinU = us[i];
+            if (us[i] > rawMaxU) rawMaxU = us[i];
+            if (vs[i] < rawMinV) rawMinV = vs[i];
+            if (vs[i] > rawMaxV) rawMaxV = vs[i];
+        }
+        if (posMax > 2.0f) {
+            float scale = 1.0f / 16.0f;
+            for (int i = 0; i < 4; i++) {
+                xs[i] *= scale;
+                ys[i] *= scale;
+                zs[i] *= scale;
             }
-
-            this.meta(metadata);
+        }
+        mapUvsIfNeeded(quad.getSprite(), us, vs, rawMinU, rawMaxU, rawMinV, rawMaxV, "verts");
+        for (int i = 0; i < 4; i++) {
+            this.addVertex(xs[i], ys[i], zs[i]);
+            this.setUv(us[i], vs[i]);
+            this.meta(meta);
         }
         return this;
     }
 
-    private static boolean isDarkCutout(BakedQuad quad) {
+    private boolean tryEmitPacked(BakedQuad quad, int meta) {
+        if (DEBUG_DISABLE_PACKED) {
+            return false;
+        }
+        if (PACKED_UV_METHOD == null || POSITION_METHOD == null || UNPACK_U_METHOD == null || UNPACK_V_METHOD == null) {
+            return false;
+        }
         try {
-            var spriteMethod = quad.getClass().getMethod("getSprite");
-            Object sprite = spriteMethod.invoke(quad);
-            if (sprite == null) return false;
-
-            var contentsMethod = sprite.getClass().getMethod("contents");
-            Object contents = contentsMethod.invoke(sprite);
-            if (contents == null) return false;
-
-            Object strategy = null;
-            try {
-                strategy = contents.getClass().getMethod("mipmapStrategy").invoke(contents);
-            } catch (NoSuchMethodException ignored) {
-                try {
-                    strategy = contents.getClass().getField("mipmapStrategy").get(contents);
-                } catch (Exception ignored2) {}
+            float[] xs = new float[4];
+            float[] ys = new float[4];
+            float[] zs = new float[4];
+            float[] us = new float[4];
+            float[] vs = new float[4];
+            float rawMinU = Float.POSITIVE_INFINITY;
+            float rawMaxU = Float.NEGATIVE_INFINITY;
+            float rawMinV = Float.POSITIVE_INFINITY;
+            float rawMaxV = Float.NEGATIVE_INFINITY;
+            for (int i = 0; i < 4; i++) {
+                Object posObj = POSITION_METHOD.invoke(quad, i);
+                float x = readVecComponent(posObj, "x");
+                float y = readVecComponent(posObj, "y");
+                float z = readVecComponent(posObj, "z");
+                long packed = ((Number) PACKED_UV_METHOD.invoke(quad, i)).longValue();
+                float u = ((Number) UNPACK_U_METHOD.invoke(null, packed)).floatValue();
+                float v = ((Number) UNPACK_V_METHOD.invoke(null, packed)).floatValue();
+                xs[i] = x;
+                ys[i] = y;
+                zs[i] = z;
+                us[i] = u;
+                vs[i] = v;
+                if (u < rawMinU) rawMinU = u;
+                if (u > rawMaxU) rawMaxU = u;
+                if (v < rawMinV) rawMinV = v;
+                if (v > rawMaxV) rawMaxV = v;
             }
-            if (strategy == null) return false;
-
-            Object darkCutout = null;
-            Class<?> strategyClass = strategy.getClass();
-            try {
-                darkCutout = Enum.valueOf((Class<Enum>) strategyClass.asSubclass(Enum.class), "DARK_CUTOUT");
-            } catch (Exception ignored) {
-                try {
-                    darkCutout = strategyClass.getField("DARK_CUTOUT").get(null);
-                } catch (Exception ignored2) {}
+            mapUvsIfNeeded(quad.getSprite(), us, vs, rawMinU, rawMaxU, rawMinV, rawMaxV, "packed");
+            for (int i = 0; i < 4; i++) {
+                this.addVertex(xs[i], ys[i], zs[i]);
+                this.setUv(us[i], vs[i]);
+                this.meta(meta);
             }
-            return darkCutout != null && strategy.equals(darkCutout);
+            return true;
         } catch (Exception ignored) {
             return false;
         }
     }
 
-    private static float unpackU(long packed) {
-        if (UVPAIR_UNPACK_U != null) {
+    private void mapUvsIfNeeded(TextureAtlasSprite sprite,
+                                float[] us,
+                                float[] vs,
+                                float rawMinU,
+                                float rawMaxU,
+                                float rawMinV,
+                                float rawMaxV,
+                                String source) {
+        if (sprite == null || us == null || vs == null) {
+            return;
+        }
+        if (!Float.isFinite(rawMinU) || !Float.isFinite(rawMaxU)
+                || !Float.isFinite(rawMinV) || !Float.isFinite(rawMaxV)) {
+            return;
+        }
+
+        AtlasBounds bounds = resolveAtlasBounds(sprite);
+        if (bounds == null) {
+            return;
+        }
+
+        float u0 = bounds.u0();
+        float u1 = bounds.u1();
+        float v0 = bounds.v0();
+        float v1 = bounds.v1();
+
+        boolean alreadyAtlas = withinBounds(rawMinU, rawMaxU, u0, u1)
+                && withinBounds(rawMinV, rawMaxV, v0, v1);
+        if (alreadyAtlas) {
+            return;
+        }
+
+        boolean normalized01 = withinZeroOne(rawMinU, rawMaxU) && withinZeroOne(rawMinV, rawMaxV);
+        if (normalized01) {
+            float spanU = u1 - u0;
+            float spanV = v1 - v0;
+            for (int i = 0; i < 4; i++) {
+                us[i] = u0 + us[i] * spanU;
+                vs[i] = v0 + vs[i] * spanV;
+            }
+            return;
+        }
+
+        for (int i = 0; i < 4; i++) {
+            us[i] = sprite.getU(us[i]);
+            vs[i] = sprite.getV(vs[i]);
+        }
+    }
+
+    private static boolean withinBounds(float min, float max, float bound0, float bound1) {
+        float lo = Math.min(bound0, bound1) - UV_EPS;
+        float hi = Math.max(bound0, bound1) + UV_EPS;
+        return min >= lo && max <= hi;
+    }
+
+    private static boolean withinZeroOne(float min, float max) {
+        return min >= -UV_EPS && max <= 1.0f + UV_EPS;
+    }
+
+    private static AtlasBounds resolveAtlasBounds(TextureAtlasSprite sprite) {
+        float u0a = sprite.getU(0);
+        float u1a = sprite.getU(16);
+        float v0a = sprite.getV(0);
+        float v1a = sprite.getV(16);
+        float u0b = sprite.getU0();
+        float u1b = sprite.getU1();
+        float v0b = sprite.getV0();
+        float v1b = sprite.getV1();
+
+        float spanA = Math.abs(u1a - u0a);
+        float spanB = Math.abs(u1b - u0b);
+        boolean aLikelyAtlas = spanA > 0.0f && spanA <= ATLAS_SPAN_THRESHOLD;
+        boolean bLikelyAtlas = spanB > 0.0f && spanB <= ATLAS_SPAN_THRESHOLD;
+
+        if (aLikelyAtlas && (!bLikelyAtlas || spanA <= spanB)) {
+            return new AtlasBounds(u0a, u1a, v0a, v1a, "getU(0/16)");
+        }
+        if (bLikelyAtlas) {
+            return new AtlasBounds(u0b, u1b, v0b, v1b, "getU0/1");
+        }
+
+        AtlasBounds reflected = resolveAtlasBoundsFromSprite(sprite);
+        if (reflected != null) {
+            return reflected;
+        }
+
+        float spanPick = spanA > 0.0f ? spanA : spanB;
+        boolean useA = spanA > 0.0f && (spanB <= 0.0f || spanA <= spanB);
+        String source = useA ? "getU(0/16)" : "getU0/1";
+        if (spanPick <= 0.0f) {
+            return null;
+        }
+        return new AtlasBounds(useA ? u0a : u0b, useA ? u1a : u1b, useA ? v0a : v0b, useA ? v1a : v1b, source);
+    }
+
+    private static AtlasBounds resolveAtlasBoundsFromSprite(TextureAtlasSprite sprite) {
+        Integer x = readIntProperty(sprite, "getX", "x");
+        Integer y = readIntProperty(sprite, "getY", "y");
+        if (x == null || y == null) {
+            Object contents = invokeOptional(sprite, "contents");
+            if (contents != null) {
+                x = readIntProperty(contents, "getX", "x");
+                y = readIntProperty(contents, "getY", "y");
+            }
+        }
+        int w = sprite.contents().width();
+        int h = sprite.contents().height();
+        ensureAtlasSize();
+        if (x == null || y == null || atlasWidth <= 0 || atlasHeight <= 0 || w <= 0 || h <= 0) {
+            return null;
+        }
+        float u0 = (float) x / atlasWidth;
+        float u1 = (float) (x + w) / atlasWidth;
+        float v0 = (float) y / atlasHeight;
+        float v1 = (float) (y + h) / atlasHeight;
+        return new AtlasBounds(u0, u1, v0, v1, "xy/atlas");
+    }
+
+    private static void ensureAtlasSize() {
+        if (atlasWidth > 0 && atlasHeight > 0) {
+            return;
+        }
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null || mc.getModelManager() == null) {
+                return;
+            }
+            Object atlas = mc.getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            Integer w = readIntProperty(atlas, "getWidth", "width");
+            Integer h = readIntProperty(atlas, "getHeight", "height");
+            if (w != null && w > 0 && h != null && h > 0) {
+                atlasWidth = w;
+                atlasHeight = h;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static Integer readIntProperty(Object obj, String... names) {
+        if (obj == null) {
+            return null;
+        }
+        for (String name : names) {
             try {
-                if (UVPAIR_UV_LONG) {
-                    return ((Number) UVPAIR_UNPACK_U.invoke(null, packed)).floatValue();
+                Field field = obj.getClass().getField(name);
+                Object val = field.get(obj);
+                if (val instanceof Number num) {
+                    return num.intValue();
                 }
-                return ((Number) UVPAIR_UNPACK_U.invoke(null, (int) packed)).floatValue();
+            } catch (Exception ignored) {
+            }
+            try {
+                Method method = obj.getClass().getMethod(name);
+                Object val = method.invoke(obj);
+                if (val instanceof Number num) {
+                    return num.intValue();
+                }
             } catch (Exception ignored) {
             }
         }
-        return Float.intBitsToFloat((int) packed);
+        return null;
     }
 
-    private static float unpackV(long packed) {
-        if (UVPAIR_UNPACK_V != null) {
-            try {
-                if (UVPAIR_UV_LONG) {
-                    return ((Number) UVPAIR_UNPACK_V.invoke(null, packed)).floatValue();
-                }
-                return ((Number) UVPAIR_UNPACK_V.invoke(null, (int) (packed >>> 32))).floatValue();
-            } catch (Exception ignored) {
-            }
+    private static Object invokeOptional(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+            return null;
         }
-        return Float.intBitsToFloat((int) (packed >>> 32));
     }
 
-    private static final Method POSITION_METHOD;
-    private static final Method PACKED_UV_METHOD;
-    private static final Method POS_X_METHOD;
-    private static final Method POS_Y_METHOD;
-    private static final Method POS_Z_METHOD;
-    private static final boolean HAS_NEW_QUAD_API;
-    private static final Method UVPAIR_UNPACK_U;
-    private static final Method UVPAIR_UNPACK_V;
-    private static final boolean UVPAIR_UV_LONG;
-    private static final boolean HAS_UVPAIR;
+    private record AtlasBounds(float u0, float u1, float v0, float v1, String source) {}
 
-    static {
-        Method position = null;
-        Method packedUv = null;
-        Method posX = null;
-        Method posY = null;
-        Method posZ = null;
-        boolean hasNew = false;
-        Method unpackU = null;
-        Method unpackV = null;
-        boolean uvLong = false;
-        boolean hasUvpair = false;
-        try {
-            position = BakedQuad.class.getMethod("position", int.class);
-            packedUv = BakedQuad.class.getMethod("packedUV", int.class);
-            Class<?> posClass = position.getReturnType();
-            posX = posClass.getMethod("x");
-            posY = posClass.getMethod("y");
-            posZ = posClass.getMethod("z");
-            hasNew = true;
-            com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] New BakedQuad API detected successfully");
-        } catch (Exception e) {
-            com.voxelbridge.util.debug.VoxelBridgeLogger.warn(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] Failed to detect new BakedQuad API: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            com.voxelbridge.util.debug.VoxelBridgeLogger.warn(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] BakedQuad methods: " + java.util.Arrays.toString(BakedQuad.class.getMethods()));
+    private static float readVecComponent(Object obj, String name) {
+        if (obj == null) {
+            return 0.0f;
         }
         try {
-            Class<?> uvPairClass = Class.forName("net.minecraft.client.model.geom.builders.UVPair");
-            try {
-                unpackU = uvPairClass.getMethod("unpackU", long.class);
-                unpackV = uvPairClass.getMethod("unpackV", long.class);
-                uvLong = true;
-                hasUvpair = true;
-                com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                    "[ReuseVC] UVPair API detected (long variant)");
-            } catch (NoSuchMethodException ignored) {
-                unpackU = uvPairClass.getMethod("unpackU", int.class);
-                unpackV = uvPairClass.getMethod("unpackV", int.class);
-                uvLong = false;
-                hasUvpair = true;
-                com.voxelbridge.util.debug.VoxelBridgeLogger.info(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                    "[ReuseVC] UVPair API detected (int variant)");
+            Field field = obj.getClass().getField(name);
+            Class<?> type = field.getType();
+            if (type == float.class) {
+                return field.getFloat(obj);
             }
-        } catch (Exception e) {
-            com.voxelbridge.util.debug.VoxelBridgeLogger.warn(com.voxelbridge.util.debug.LogModule.LOD_BAKE,
-                "[ReuseVC] Failed to detect UVPair API: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            if (type == double.class) {
+                return (float) field.getDouble(obj);
+            }
+            Object val = field.get(obj);
+            if (val instanceof Number num) {
+                return num.floatValue();
+            }
+        } catch (Exception ignored) {
         }
-        POSITION_METHOD = position;
-        PACKED_UV_METHOD = packedUv;
-        POS_X_METHOD = posX;
-        POS_Y_METHOD = posY;
-        POS_Z_METHOD = posZ;
-        HAS_NEW_QUAD_API = hasNew;
-        UVPAIR_UNPACK_U = unpackU;
-        UVPAIR_UNPACK_V = unpackV;
-        UVPAIR_UV_LONG = uvLong;
-        HAS_UVPAIR = hasUvpair;
+        try {
+            Method method = obj.getClass().getMethod(name);
+            Object val = method.invoke(obj);
+            if (val instanceof Number num) {
+                return num.floatValue();
+            }
+        } catch (Exception ignored) {
+        }
+        return 0.0f;
+    }
+
+    private static Method resolveMethod(Class<?> type, String name, Class<?>... params) {
+        try {
+            return type.getMethod(name, params);
+        } catch (Exception ignored) {
+            try {
+                Method method = type.getDeclaredMethod(name, params);
+                method.setAccessible(true);
+                return method;
+            } catch (Exception ignored2) {
+                return null;
+            }
+        }
+    }
+
+    private static Method resolveStaticMethod(String className, String name, Class<?>... params) {
+        try {
+            Class<?> cls = Class.forName(className);
+            Method method = cls.getMethod(name, params);
+            method.setAccessible(true);
+            return method;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void ensureCanPut() {
         if ((long) (this.count + 5) * VERTEX_FORMAT_SIZE < this.buffer.size) {
             return;
         }
-        long offset = this.ptr-this.buffer.address;
-        //1.5x the size
-        var newBuffer = new MemoryBuffer((((int)(this.buffer.size*2)+VERTEX_FORMAT_SIZE-1)/VERTEX_FORMAT_SIZE)*VERTEX_FORMAT_SIZE);
+        long offset = this.ptr - this.buffer.address;
+        var newBuffer = new MemoryBuffer((((int) (this.buffer.size * 2) + VERTEX_FORMAT_SIZE - 1)
+                / VERTEX_FORMAT_SIZE) * VERTEX_FORMAT_SIZE);
         this.buffer.cpyTo(newBuffer.address);
         this.buffer.free();
         this.buffer = newBuffer;
         this.ptr = offset + newBuffer.address;
     }
 
+    private void ensureUvPointCapacity(int neededPoints) {
+        int needed = neededPoints * 2;
+        if (this.uvPoints.length >= needed) {
+            return;
+        }
+        int next = Math.max(needed, this.uvPoints.length == 0 ? 128 : this.uvPoints.length * 2);
+        float[] resized = new float[next];
+        if (this.uvPoints.length > 0) {
+            System.arraycopy(this.uvPoints, 0, resized, 0, this.uvPointCount * 2);
+        }
+        this.uvPoints = resized;
+    }
+
     public ReuseVertexConsumer reset() {
         this.anyShaded = false;
         this.anyDarkendTex = false;
-        this.defaultMeta = 0;//RESET THE DEFAULT META
+        this.defaultMeta = 0;
         this.count = 0;
-        this.ptr = this.buffer.address - VERTEX_FORMAT_SIZE;//the thing is first time this gets incremented by FORMAT_STRIDE
+        this.ptr = this.buffer.address - VERTEX_FORMAT_SIZE;
+        this.minU = Float.POSITIVE_INFINITY;
+        this.maxU = Float.NEGATIVE_INFINITY;
+        this.minV = Float.POSITIVE_INFINITY;
+        this.maxV = Float.NEGATIVE_INFINITY;
+        this.uvInvalid = false;
+        this.uvCount = 0;
+        this.debugLog.setLength(0);
+        this.uvPointCount = 0;
         return this;
     }
 
@@ -323,11 +517,83 @@ public final class ReuseVertexConsumer implements VertexConsumer {
     }
 
     public int quadCount() {
-        if (this.count%4 != 0) throw new IllegalStateException();
-        return this.count/4;
+        if (this.count % 4 != 0) throw new IllegalStateException();
+        return this.count / 4;
     }
 
     public long getAddress() {
         return this.buffer.address;
+    }
+
+    public float getMinU() {
+        return this.minU;
+    }
+
+    public float getMaxU() {
+        return this.maxU;
+    }
+
+    public float getMinV() {
+        return this.minV;
+    }
+
+    public float getMaxV() {
+        return this.maxV;
+    }
+
+    public boolean hasInvalidUv() {
+        return this.uvInvalid;
+    }
+
+    public int getUvCount() {
+        return this.uvCount;
+    }
+
+    public void setCaptureUvPoints(boolean capture) {
+        this.captureUvPoints = capture;
+    }
+
+    public int getUvPointCount() {
+        return this.uvPointCount;
+    }
+
+    public float[] copyUvPoints() {
+        if (this.uvPointCount == 0) {
+            return new float[0];
+        }
+        float[] copy = new float[this.uvPointCount * 2];
+        System.arraycopy(this.uvPoints, 0, copy, 0, copy.length);
+        return copy;
+    }
+
+    private static boolean isOverlaySprite(TextureAtlasSprite sprite) {
+        if (sprite == null) {
+            return false;
+        }
+        return sprite.contents().name().toString().contains("overlay");
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static boolean isDarkCutout(TextureAtlasSprite sprite) {
+        try {
+            var contents = sprite.contents();
+            Object strategy = null;
+            try {
+                strategy = contents.getClass().getMethod("mipmapStrategy").invoke(contents);
+            } catch (Exception ignored) {
+                try {
+                    strategy = contents.getClass().getField("mipmapStrategy").get(contents);
+                } catch (Exception ignored2) {}
+            }
+            if (strategy == null) return false;
+            try {
+                Object enumVal = Enum.valueOf((Class<? extends Enum>) strategy.getClass(), "DARK_CUTOUT");
+                return strategy.equals(enumVal);
+            } catch (Exception ignored) {
+                return false;
+            }
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 }
