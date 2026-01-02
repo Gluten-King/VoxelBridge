@@ -16,7 +16,7 @@ import static org.lwjgl.opengl.GL44C.GL_DYNAMIC_STORAGE_BIT;
 import static org.lwjgl.opengl.GL45.*;
 
 public class BudgetBufferRenderer {
-    public static final int VERTEX_FORMAT_SIZE = 24;
+    public static final int VERTEX_FORMAT_SIZE = 28;
 
     private static final Shader bakeryShader = Shader.make()
             .add(ShaderType.VERTEX, "voxy:bakery/position_tex.vsh")
@@ -34,11 +34,12 @@ public class BudgetBufferRenderer {
         indexBuffer = new GlBuffer(byteSize, GL_DYNAMIC_STORAGE_BIT, false);
     }
 
-    private static final int STRIDE = 24;
+    private static final int STRIDE = 28;
     private static final GlVertexArray VA = new GlVertexArray()
             .setStride(STRIDE)
             .setF(0, GL_FLOAT, 4, 0) // pos, metadata
             .setF(1, GL_FLOAT, 2, 4 * 4) // UV
+            .setF(2, GL_UNSIGNED_BYTE, 4, true, 24) // Color
             .bindElementBuffer(indexBuffer.id);
 
     private static GlBuffer immediateBuffer;

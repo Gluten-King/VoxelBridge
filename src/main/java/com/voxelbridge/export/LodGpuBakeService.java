@@ -5,7 +5,6 @@ import com.voxelbridge.voxy.client.core.model.ColourDepthTextureData;
 import com.voxelbridge.voxy.client.core.model.GpuBakeRenderPump;
 import com.voxelbridge.voxy.client.core.model.ModelBakerySubsystem;
 import com.voxelbridge.voxy.client.core.model.TextureUtils;
-import com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery;
 import com.voxelbridge.voxy.common.world.other.Mapper;
 import com.voxelbridge.voxy.mesh.VoxelMesher;
 import com.voxelbridge.util.debug.LogModule;
@@ -14,10 +13,11 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ItemBlockRenderTypes;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.state.BlockState;
+
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
 import java.awt.image.BufferedImage;
@@ -29,19 +29,20 @@ import java.util.function.Supplier;
 public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, AutoCloseable {
     private static final String SPRITE_PREFIX = "voxelbridge:lod/bake";
     private static final String TRANSPARENT_SPRITE = "voxelbridge:transparent";
+    private static final int OVERLAY_OFFSET = 500000;
 
     private final ExportContext ctx;
+    private final Mapper mapper;
     private final ModelBakerySubsystem modelBakery;
     private final ConcurrentHashMap<Integer, FaceBakeData> bakedData = new ConcurrentHashMap<>();
     private final Set<Integer> bakedIds = ConcurrentHashMap.newKeySet();
-    private final CpuModelTextureBakery overlayBakery = new CpuModelTextureBakery();
 
     public LodGpuBakeService(Mapper mapper, ExportContext ctx) {
         this.ctx = ctx;
+        this.mapper = mapper;
         this.modelBakery = runOnRenderThread(() -> new ModelBakerySubsystem(mapper, true));
-        if (this.modelBakery.factory.bakery != null) {
-            this.modelBakery.factory.bakery.setIncludeOverlay(false);
-        }
+        // We now include overlays in the GPU bake (default behavior of ModelTextureBakery)
+        // effectively baking them into the base texture, aligning with Voxy's approach.
         this.modelBakery.factory.setBakeListener(this::handleBakeResult);
         GpuBakeRenderPump.register(this.modelBakery);
     }
@@ -50,10 +51,26 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         if (blockIds == null || blockIds.isEmpty()) {
             return;
         }
+        IntOpenHashSet waitSet = new IntOpenHashSet(blockIds);
+        
         for (int blockId : blockIds) {
             modelBakery.requestBlockBake(blockId);
+            
+            BlockState state = this.mapper.getBlockStateFromBlockId(blockId);
+            boolean hasOverlay = false;
+            for (Direction dir : Direction.values()) {
+                if (hasOverlaySprite(state, dir)) {
+                    hasOverlay = true;
+                    break;
+                }
+            }
+            if (hasOverlay) {
+                int overlayReqId = blockId + OVERLAY_OFFSET;
+                modelBakery.requestBlockBake(overlayReqId);
+                waitSet.add(overlayReqId);
+            }
         }
-        waitForBakes(blockIds);
+        waitForBakes(waitSet);
     }
 
     @Override
@@ -98,12 +115,35 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
     }
 
     private void waitForBakes(IntOpenHashSet blockIds) {
+        long startTime = System.currentTimeMillis();
+        long lastLogTime = startTime;
         while (!allBaked(blockIds)) {
             try {
                 Thread.sleep(5L);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
+            }
+            
+            long now = System.currentTimeMillis();
+            if (now - lastLogTime > 2000) {
+                int total = blockIds.size();
+                int done = 0;
+                StringBuilder missing = new StringBuilder();
+                int missingCount = 0;
+                for (int id : blockIds) {
+                    if (bakedIds.contains(id)) {
+                        done++;
+                    } else {
+                        if (missingCount < 5) {
+                            missing.append(id).append(",");
+                        }
+                        missingCount++;
+                    }
+                }
+                VoxelBridgeLogger.warn(LogModule.BAKE, String.format(
+                    "[Bake] Waiting... Finished: %d/%d. Missing (first 5): %s", done, total, missing.toString()));
+                lastLogTime = now;
             }
         }
     }
@@ -117,27 +157,49 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         return true;
     }
 
-    private void handleBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting) {
+    private void handleBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting, boolean hasBakedTint) {
         int checkMode = selectCheckMode(blockState);
+        boolean isFluid = blockState.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock;
+        boolean isOverlayResult = blockId >= OVERLAY_OFFSET;
+        int realId = isOverlayResult ? blockId - OVERLAY_OFFSET : blockId;
+
         if (VoxelBridgeLogger.isDebugEnabled(LogModule.BAKE)) {
             VoxelBridgeLogger.debug(LogModule.BAKE, String.format(
-                "[Bake] blockId=%d state=%s check=%s darkened=%s",
-                blockId, blockState, checkModeName(checkMode), darkenedTinting));
+                "[Bake] reqId=%d realId=%d state=%s check=%s darkened=%s bakedTint=%s overlay=%s",
+                blockId, realId, blockState, checkModeName(checkMode), darkenedTinting, hasBakedTint, isOverlayResult));
         }
-        String[] overlaySprites = resolveOverlaySprites(blockId, blockState);
-        FaceBakeData data = new FaceBakeData();
+        
+        FaceBakeData data = bakedData.computeIfAbsent(realId, k -> new FaceBakeData());
+        
         for (Direction dir : Direction.values()) {
             int face = dir.get3DDataValue();
-            FaceEntry entry = bakeFace(blockId, dir, textureData[face], checkMode);
-            data.spriteKeys[face] = entry.spriteKey();
-            data.overlayKeys[face] = overlaySprites[face];
-            data.metas[face] = entry.meta();
+            
+            boolean faceHasBakedTint = hasBakedTint;
+            if (!isFluid && hasBakedTint) {
+                // If not fluid, refine based on whether this specific face has an overlay
+                faceHasBakedTint = hasOverlaySprite(blockState, dir);
+            }
+            
+            // For overlay pass, we only care if it actually has overlay data
+            if (isOverlayResult) {
+                // Overlay Pass
+                FaceEntry entry = bakeFace(blockId, dir, textureData[face], checkMode, faceHasBakedTint);
+                // Only set if we actually got a sprite (not transparent)
+                if (!TRANSPARENT_SPRITE.equals(entry.spriteKey)) {
+                    data.overlayKeys[face] = entry.spriteKey;
+                }
+            } else {
+                // Base Pass
+                FaceEntry entry = bakeFace(blockId, dir, textureData[face], checkMode, faceHasBakedTint);
+                data.spriteKeys[face] = entry.spriteKey;
+                data.metas[face] = entry.meta();
+            }
         }
-        bakedData.put(blockId, data);
+        // Mark the REQUEST ID as baked
         bakedIds.add(blockId);
     }
 
-    private FaceEntry bakeFace(int blockId, Direction dir, ColourDepthTextureData tex, int checkMode) {
+    private FaceEntry bakeFace(int blockId, Direction dir, ColourDepthTextureData tex, int checkMode, boolean hasBakedTint) {
         int w = tex.width();
         int h = tex.height();
         int[] basePixels = new int[w * h];
@@ -164,7 +226,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
             }
         }
 
-        VoxelMesher.LodFaceMeta meta = buildFaceMeta(tex, checkMode);
+        VoxelMesher.LodFaceMeta meta = buildFaceMeta(tex, checkMode, hasBakedTint);
 
         String baseKey;
         if (hasBase) {
@@ -202,21 +264,21 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         return new FaceEntry(baseKey, meta);
     }
 
-    private static VoxelMesher.LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode) {
+    private static VoxelMesher.LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode, boolean hasBakedTint) {
         int written = TextureUtils.getWrittenPixelCount(tex, checkMode);
         if (written == 0) {
-            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true);
+            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
         }
         int[] bounds = TextureUtils.computeBounds(tex, checkMode);
         float depth = TextureUtils.computeDepth(tex, TextureUtils.DEPTH_MODE_AVG, checkMode);
         if (depth < -0.1f || bounds[0] >= tex.width() || bounds[1] < 0 || bounds[2] >= tex.height() || bounds[3] < 0) {
-            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true);
+            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
         }
         int minX = clamp(bounds[0], 0, tex.width() - 1);
         int maxX = clamp(bounds[1], 0, tex.width() - 1);
         int minY = clamp(bounds[2], 0, tex.height() - 1);
         int maxY = clamp(bounds[3], 0, tex.height() - 1);
-        return new VoxelMesher.LodFaceMeta(minX, maxX, minY, maxY, depth, false);
+        return new VoxelMesher.LodFaceMeta(minX, maxX, minY, maxY, depth, false, hasBakedTint);
     }
 
     private static int selectCheckMode(BlockState state) {
@@ -288,95 +350,37 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         return Minecraft.getInstance().submit(task).join();
     }
 
-    private String[] resolveOverlaySprites(int blockId, BlockState state) {
-        if (state == null || ctx == null) {
-            return new String[6];
-        }
-        return runOnRenderThread(() -> {
-            if (!hasOverlayQuads(state)) {
-                return new String[6];
-            }
-            var bake = overlayBakery.bake(state, CpuModelTextureBakery.BakeMode.OVERLAY_ONLY);
-            ColourDepthTextureData[] textures = bake.textures();
-            String[] overlayKeys = new String[6];
-            int checkMode = TextureUtils.WRITE_CHECK_ALPHA;
-            for (Direction dir : Direction.values()) {
-                ColourDepthTextureData tex = textures[dir.get3DDataValue()];
-                overlayKeys[dir.get3DDataValue()] = buildOverlaySprite(blockId, dir, tex, checkMode);
-            }
-            return overlayKeys;
-        });
-    }
-
-    private boolean hasOverlayQuads(BlockState state) {
+    private static boolean hasOverlaySprite(BlockState state, Direction dir) {
         var model = Minecraft.getInstance()
             .getModelManager()
             .getBlockModelShaper()
             .getBlockModel(state);
-        RenderType layer = ItemBlockRenderTypes.getChunkRenderType(state);
+        
         long seed = 42L;
         var rand = net.minecraft.util.RandomSource.create(seed);
-
-        for (Direction dir : Direction.values()) {
-            rand.setSeed(seed);
-            if (findOverlaySprite(model.getQuads(state, dir, rand, ModelData.EMPTY, layer)) != null) {
-                return true;
-            }
-            rand.setSeed(seed);
-            if (findOverlaySprite(model.getQuads(state, dir, rand, ModelData.EMPTY, null)) != null) {
-                return true;
-            }
+        
+        // Check main layer
+        RenderType layer = ItemBlockRenderTypes.getChunkRenderType(state);
+        if (checkQuadsForOverlay(model.getQuads(state, dir, rand, ModelData.EMPTY, layer))) {
+            return true;
         }
-
+        
+        // Check "null" layer (usually where overlays are)
         rand.setSeed(seed);
-        return findOverlaySprite(model.getQuads(state, null, rand, ModelData.EMPTY, null)) != null;
+        if (checkQuadsForOverlay(model.getQuads(state, dir, rand, ModelData.EMPTY, null))) {
+            return true;
+        }
+        
+        return false;
     }
 
-    private String buildOverlaySprite(int blockId, Direction dir, ColourDepthTextureData tex, int checkMode) {
-        if (tex == null) {
-            return null;
-        }
-        String key = buildSpriteKey(blockId, dir, true);
-        if (ctx.getCachedSpriteImage(key) != null) {
-            return key;
-        }
-        int w = tex.width();
-        int h = tex.height();
-        int[] overlayPixels = new int[w * h];
-        int[] colours = tex.colour();
-        int[] depths = tex.depth();
-        boolean hasOverlay = false;
-        for (int y = 0; y < h; y++) {
-            int srcRow = y * w;
-            int dstRow = (h - 1 - y) * w;
-            for (int x = 0; x < w; x++) {
-                int srcIdx = srcRow + x;
-                if (!isWritten(colours[srcIdx], depths[srcIdx], checkMode)) {
-                    continue;
-                }
-                int argb = toArgb(colours[srcIdx]);
-                overlayPixels[dstRow + x] = argb;
-                hasOverlay = true;
-            }
-        }
-        if (!hasOverlay) {
-            return null;
-        }
-        ctx.cacheSpriteImage(key, createImage(w, h, overlayPixels));
-        return key;
-    }
-
-    private static TextureAtlasSprite findOverlaySprite(List<BakedQuad> quads) {
-        if (quads == null || quads.isEmpty()) {
-            return null;
-        }
+    private static boolean checkQuadsForOverlay(List<BakedQuad> quads) {
         for (BakedQuad quad : quads) {
-            TextureAtlasSprite sprite = quad.getSprite();
-            if (sprite != null && isOverlaySprite(sprite)) {
-                return sprite;
+            if (isOverlaySprite(quad.getSprite())) {
+                return true;
             }
         }
-        return null;
+        return false;
     }
 
     private static boolean isOverlaySprite(TextureAtlasSprite sprite) {

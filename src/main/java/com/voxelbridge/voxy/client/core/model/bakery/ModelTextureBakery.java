@@ -5,6 +5,7 @@ import com.voxelbridge.voxy.client.core.gl.GlDebug;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.renderer.ItemBlockRenderTypes;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.AbstractTexture;
@@ -43,12 +44,17 @@ public class ModelTextureBakery {
     public record UvStats(float minU, float maxU, float minV, float maxV, int count, boolean invalid, String debugLog,
                           float[] points, int pointCount) {}
 
+    public enum BakeMode {
+        ALL, BASE_ONLY, OVERLAY_ONLY
+    }
+
     private final GlViewCapture capture;
     private final ReuseVertexConsumer vc = new ReuseVertexConsumer();
 
     private final int width;
     private final int height;
     private boolean includeOverlay = true;
+    private BakeMode bakeMode = BakeMode.ALL;
     private float lastMinU = Float.NaN;
     private float lastMaxU = Float.NaN;
     private float lastMinV = Float.NaN;
@@ -70,6 +76,10 @@ public class ModelTextureBakery {
         this.includeOverlay = includeOverlay;
     }
 
+    public void setBakeMode(BakeMode mode) {
+        this.bakeMode = mode;
+    }
+
     public static int getMetaFromLayer(RenderType layer) {
         boolean hasDiscard = isCutout(layer) || isTranslucent(layer) || isTripwire(layer);
         boolean isMipped = isSolid(layer) || isTranslucent(layer) || isTripwire(layer);
@@ -88,7 +98,61 @@ public class ModelTextureBakery {
         this.vc.setCaptureUvPoints(capture);
     }
 
-    private void bakeBlockModel(BlockState state, RenderType layer) {
+    public boolean hasOverlay(BlockState state) {
+        if (!includeOverlay) return false;
+        var model = Minecraft.getInstance().getModelManager().getBlockModelShaper().getBlockModel(state);
+        RandomSource rand = RandomSource.create(42L);
+        long seed = 42L;
+        // Check standard quads
+        for (Direction direction : new Direction[]{Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null}) {
+            rand.setSeed(seed);
+            // Check base layer
+            var quads = model.getQuads(state, direction, rand, ModelData.EMPTY, ItemBlockRenderTypes.getChunkRenderType(state));
+            for (var quad : quads) {
+                if (isOverlaySprite(quad.getSprite())) return true;
+            }
+            rand.setSeed(seed);
+            // Check fallback/overlay layer
+            quads = model.getQuads(state, direction, rand, ModelData.EMPTY, null);
+            for (var quad : quads) {
+                if (isOverlaySprite(quad.getSprite())) return true;
+            }
+        }
+        return false;
+    }
+
+    private BlockAndTintGetter makeTintGetter(BlockState state) {
+        return new BlockAndTintGetter() {
+            @Override
+            public float getShade(Direction direction, boolean shaded) { return 0; }
+            @Override
+            public LevelLightEngine getLightEngine() { return null; }
+            @Override
+            public int getBrightness(LightLayer type, BlockPos pos) { return 0; }
+            @Override
+            public int getBlockTint(BlockPos pos, ColorResolver colorResolver) {
+                // Return Plains color as default for baked tint
+                var biome = Minecraft.getInstance().level.registryAccess()
+                    .registryOrThrow(net.minecraft.core.registries.Registries.BIOME)
+                    .getHolderOrThrow(net.minecraft.world.level.biome.Biomes.PLAINS)
+                    .value();
+                return colorResolver.getColor(biome, pos.getX(), pos.getZ());
+            }
+            @Nullable
+            @Override
+            public BlockEntity getBlockEntity(BlockPos pos) { return null; }
+            @Override
+            public BlockState getBlockState(BlockPos pos) { return state; }
+            @Override
+            public FluidState getFluidState(BlockPos pos) { return state.getFluidState(); }
+            @Override
+            public int getHeight() { return 0; }
+            @Override
+            public int getMinBuildHeight() { return 0; }
+        };
+    }
+
+    private void bakeBlockModel(BlockState state, RenderType layer, boolean bakeTint, BlockColors blockColors) {
         if (state.getRenderShape() == RenderShape.INVISIBLE) {
             return;
         }
@@ -100,18 +164,33 @@ public class ModelTextureBakery {
         int metaBase = getMetaFromLayer(layer);
         RandomSource rand = RandomSource.create(42L);
         long seed = 42L;
-        for (Direction direction : new Direction[]{Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null}) {
-            rand.setSeed(seed);
-            var quads = model.getQuads(state, direction, rand, ModelData.EMPTY, layer);
-            for (var quad : quads) {
-                if (!includeOverlay && isOverlaySprite(quad.getSprite())) {
-                    continue;
+        
+        BlockAndTintGetter tintGetter = bakeTint ? makeTintGetter(state) : null;
+
+        // Pass 1: Base Layer
+        if (bakeMode == BakeMode.ALL || bakeMode == BakeMode.BASE_ONLY) {
+            for (Direction direction : new Direction[]{Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null}) {
+                rand.setSeed(seed);
+                var quads = model.getQuads(state, direction, rand, ModelData.EMPTY, layer);
+                for (var quad : quads) {
+                    if (!includeOverlay && isOverlaySprite(quad.getSprite())) {
+                        continue;
+                    }
+                    // If separating overlays, ensure we don't accidentally render overlay quads in base pass if they leaked here
+                    if (bakeMode == BakeMode.BASE_ONLY && isOverlaySprite(quad.getSprite())) {
+                        continue;
+                    }
+
+                    // Base layer: Always use White (no baked tint).
+                    this.vc.setColor(0xFFFFFFFF);
+                    this.vc.quad(quad, metaBase);
                 }
-                this.vc.quad(quad, metaBase);
             }
         }
 
-        if (includeOverlay) {
+        // Pass 2: Overlay
+        boolean doOverlay = (includeOverlay && bakeMode == BakeMode.ALL) || bakeMode == BakeMode.OVERLAY_ONLY;
+        if (doOverlay) {
             rand.setSeed(seed);
             for (Direction direction : new Direction[]{Direction.DOWN, Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST, null}) {
                 rand.setSeed(seed);
@@ -119,6 +198,17 @@ public class ModelTextureBakery {
                 for (var quad : quads) {
                     if (!isOverlaySprite(quad.getSprite())) {
                         continue;
+                    }
+                    
+                    if (bakeTint) {
+                        int color = 0xFFFFFFFF;
+                        if (quad.isTinted()) {
+                            color = blockColors.getColor(state, tintGetter, BlockPos.ZERO, quad.getTintIndex());
+                            color |= 0xFF000000;
+                        }
+                        this.vc.setColor(color);
+                    } else {
+                        this.vc.setColor(0xFFFFFFFF);
                     }
                     this.vc.quad(quad, metaBase);
                 }
@@ -271,6 +361,16 @@ public class ModelTextureBakery {
                 VoxelBridgeLogger.warn(LogModule.BAKE, "[Bake] Block atlas texture id is 0; UV sampling will be invalid.");
             }
 
+            // Determine if we should bake tint (color) into the texture.
+            // If we are splitting passes (BASE/OVERLAY only), we DO NOT bake tint, 
+            // because we want the runtime mesher to apply the correct biome color.
+            // Exception: Fluids always bake tint.
+            boolean isSplitPass = bakeMode != BakeMode.ALL;
+            boolean bakeTint = !isSplitPass && ((isBlock && hasOverlay(state)) || !isBlock);
+            
+            this.vc.setApplyTint(bakeTint);
+            BlockColors blockColors = Minecraft.getInstance().getBlockColors();
+
             boolean isAnyShaded = false;
             boolean isAnyDarkend = false;
             float minU = Float.POSITIVE_INFINITY;
@@ -283,7 +383,7 @@ public class ModelTextureBakery {
             try {
                 if (isBlock) {
                     this.vc.reset();
-                    this.bakeBlockModel(state, layer);
+                    this.bakeBlockModel(state, layer, bakeTint, blockColors);
                     isAnyShaded |= this.vc.anyShaded;
                     isAnyDarkend |= this.vc.anyDarkendTex;
                     if (!this.vc.isEmpty()) {
@@ -408,7 +508,7 @@ public class ModelTextureBakery {
                 this.lastUvPointCount = 0;
             }
 
-            return (isAnyShaded ? 1 : 0) | (isAnyDarkend ? 2 : 0);
+            return (isAnyShaded ? 1 : 0) | (isAnyDarkend ? 2 : 0) | (bakeTint ? 4 : 0);
         } finally {
             GlDebug.popGroup();
         }

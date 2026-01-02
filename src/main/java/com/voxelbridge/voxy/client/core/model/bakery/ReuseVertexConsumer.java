@@ -66,6 +66,7 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         MemoryUtil.memPutFloat(this.ptr, x);
         MemoryUtil.memPutFloat(this.ptr + 4, y);
         MemoryUtil.memPutFloat(this.ptr + 8, z);
+        MemoryUtil.memPutInt(this.ptr + 24, this.tintColor);
         return this;
     }
 
@@ -74,13 +75,34 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         return this;
     }
 
+    private int tintColor = 0xFFFFFFFF;
+    private boolean applyTint = false;
+
+    public void setApplyTint(boolean apply) {
+        this.applyTint = apply;
+    }
+
+    public void setTintColor(int color) {
+        this.tintColor = color;
+    }
+
     @Override
     public ReuseVertexConsumer setColor(int red, int green, int blue, int alpha) {
+        // Update tintColor based on the RGBA values provided by the renderer (e.g. LiquidRenderer)
+        // Fix: Use ABGR packing (Little Endian -> R G B A in memory) to match OpenGL expectations
+        this.tintColor = ((alpha & 0xFF) << 24) | ((blue & 0xFF) << 16) | ((green & 0xFF) << 8) | (red & 0xFF);
         return this;
     }
 
     @Override
-    public VertexConsumer setColor(int i) {
+    public VertexConsumer setColor(int color) {
+        // Input color is 0xAARRGGBB (ARGB)
+        // We need 0xAABBGGRR (ABGR) for OpenGL to read R G B A from memory (Little Endian)
+        int a = color & 0xFF000000;
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+        this.tintColor = a | (b << 16) | (g << 8) | r;
         return this;
     }
 

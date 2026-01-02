@@ -67,14 +67,20 @@ public class VoxelMesher {
         public final int maxY;
         public final float depth;
         public final boolean empty;
+        public final boolean hasBakedTint;
 
         public LodFaceMeta(int minX, int maxX, int minY, int maxY, float depth, boolean empty) {
+            this(minX, maxX, minY, maxY, depth, empty, false);
+        }
+
+        public LodFaceMeta(int minX, int maxX, int minY, int maxY, float depth, boolean empty, boolean hasBakedTint) {
             this.minX = minX;
             this.maxX = maxX;
             this.minY = minY;
             this.maxY = maxY;
             this.depth = depth;
             this.empty = empty;
+            this.hasBakedTint = hasBakedTint;
         }
     }
     private final WorldEngine worldEngine;
@@ -522,6 +528,11 @@ public class VoxelMesher {
         }
         int tintColor = resolveTintColor(blockId, state, biomeId, tintIndex);
         boolean hasTint = tintColor != -1;
+
+        if (faceMeta != null && faceMeta.hasBakedTint) {
+            hasTint = false;
+        }
+
         float[] baseColors = resolveColors(tintColor, hasTint);
         float[] overlayColors = baseColors;
 

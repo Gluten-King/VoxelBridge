@@ -62,6 +62,7 @@ import static org.lwjgl.opengl.GL11.*;
 public class ModelFactory {
     public static final int MODEL_TEXTURE_SIZE = 16;
     public static final int LAYERS = Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE);
+    public static final int OVERLAY_OFFSET = 500000;
 
     //TODO: replace the fluid BlockState with a client model id integer of the fluidState, requires looking up
     // the fluid state in the mipper
@@ -82,7 +83,7 @@ public class ModelFactory {
     private final boolean useGpuBake;
     private final com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery cpuBakery;
     public interface BakeListener {
-        void onBaked(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting);
+        void onBaked(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting, boolean hasBakedTint);
     }
 
     private BakeListener bakeListener;
@@ -176,6 +177,7 @@ public class ModelFactory {
 
         public boolean isShaded;
         public boolean hasDarkenedTextures;
+        public boolean hasBakedTint;
 
         public RawBakeResult(int blockId, BlockState blockState, MemoryBuffer rawData) {
             this.blockId = blockId;
@@ -215,7 +217,10 @@ public class ModelFactory {
             return false;
         }
 
-        var blockState = this.mapper.getBlockStateFromBlockId(blockId);
+        boolean isOverlayReq = blockId >= OVERLAY_OFFSET;
+        int realId = isOverlayReq ? blockId - OVERLAY_OFFSET : blockId;
+
+        var blockState = this.mapper.getBlockStateFromBlockId(realId);
 
         //Before we enqueue the baking of this blockstate, we must check if it has a fluid state associated with it
         // if it does, we must ensure that it is (effectivly) baked BEFORE we bake this blockstate
@@ -235,17 +240,25 @@ public class ModelFactory {
         }
 
         if (this.useGpuBake) {
+            boolean hasOverlay = this.bakery.hasOverlay(blockState);
+            com.voxelbridge.voxy.client.core.model.bakery.ModelTextureBakery.BakeMode mode = com.voxelbridge.voxy.client.core.model.bakery.ModelTextureBakery.BakeMode.ALL;
+            if (hasOverlay) {
+                mode = isOverlayReq ? com.voxelbridge.voxy.client.core.model.bakery.ModelTextureBakery.BakeMode.OVERLAY_ONLY : com.voxelbridge.voxy.client.core.model.bakery.ModelTextureBakery.BakeMode.BASE_ONLY;
+            }
+            this.bakery.setBakeMode(mode);
+
             RawBakeResult result = new RawBakeResult(blockId, blockState);
             int allocation = this.downstream.download(MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE * 2 * 4 * 6,
                     ptr -> this.rawBakeResults.add(result.cpyBuf(ptr)));
             int flags = this.bakery.renderToStream(blockState, this.downstream.getBufferId(), allocation);
             result.hasDarkenedTextures = (flags & 2) != 0;
             result.isShaded = (flags & 1) != 0;
+            result.hasBakedTint = (flags & 4) != 0;
             return true;
         }
 
         var bake = this.cpuBakery.bake(blockState);
-        var bakeResult = this.processTextureBakeResult(blockId, blockState, bake.textures(), bake.isShaded(), bake.darkenedTinting());
+        var bakeResult = this.processTextureBakeResult(blockId, blockState, bake.textures(), bake.isShaded(), bake.darkenedTinting(), false);
         if (bakeResult != null) {
             this.uploadResults.add(bakeResult);
         }
@@ -272,7 +285,7 @@ public class ModelFactory {
         }
         result.rawData.free();
         var bakeResult = this.processTextureBakeResult(result.blockId, result.blockState, textureData,
-                result.isShaded, result.hasDarkenedTextures);
+                result.isShaded, result.hasDarkenedTextures, result.hasBakedTint);
         if (bakeResult != null) {
             this.uploadResults.add(bakeResult);
         }
@@ -367,7 +380,7 @@ public class ModelFactory {
         }
     }
 
-    private ModelBakeResultUpload processTextureBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean isShaded, boolean darkenedTinting) {
+    private ModelBakeResultUpload processTextureBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean isShaded, boolean darkenedTinting, boolean hasBakedTint) {
         if (this.idMappings[blockId] != -1) {
             //This should be impossible to reach as it means that multiple bakes for the same blockId happened and where inflight at the same time!
             throw new IllegalStateException("Block id already added: " + blockId + " for state: " + blockState);
@@ -381,7 +394,7 @@ public class ModelFactory {
         this.blockStatesInFlightLock.unlock();
 
         if (this.bakeListener != null) {
-            this.bakeListener.onBaked(blockId, blockState, textureData, darkenedTinting);
+            this.bakeListener.onBaked(blockId, blockState, textureData, darkenedTinting, hasBakedTint);
         }
 
         //TODO: add thing for `blockState.hasEmissiveLighting()` and `blockState.getLuminance()`

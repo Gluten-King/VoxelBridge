@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @SuppressWarnings("removal")
 @EventBusSubscriber(modid = VoxelBridge.MODID, bus = EventBusSubscriber.Bus.GAME, value = Dist.CLIENT)
 public final class GpuBakeRenderPump {
-    private static final long DEFAULT_BUDGET_NANOS = 1_000_000L;
+    private static final long DEFAULT_BUDGET_NANOS = 50_000_000L;
     private static final Set<ModelBakerySubsystem> ACTIVE = ConcurrentHashMap.newKeySet();
 
     private GpuBakeRenderPump() {}
