@@ -81,7 +81,6 @@ public class ModelFactory {
     private final RawDownloadStream downstream;
     private final ConcurrentLinkedDeque<RawBakeResult> rawBakeResults = new ConcurrentLinkedDeque<>();
     private final boolean useGpuBake;
-    private final com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery cpuBakery;
     public interface BakeListener {
         void onBaked(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting, boolean hasBakedTint);
     }
@@ -150,7 +149,6 @@ public class ModelFactory {
         this.useGpuBake = useGpuBake;
         this.bakery = useGpuBake ? new ModelTextureBakery(MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE) : null;
         this.downstream = useGpuBake ? new RawDownloadStream(8 * 1024 * 1024) : null;
-        this.cpuBakery = new com.voxelbridge.voxy.client.core.model.bakery.CpuModelTextureBakery();
 
         this.metadataCache = new long[1<<16];
         this.fluidStateLUT = new int[1<<16];
@@ -257,12 +255,8 @@ public class ModelFactory {
             return true;
         }
 
-        var bake = this.cpuBakery.bake(blockState);
-        var bakeResult = this.processTextureBakeResult(blockId, blockState, bake.textures(), bake.isShaded(), bake.darkenedTinting(), false);
-        if (bakeResult != null) {
-            this.uploadResults.add(bakeResult);
-        }
-        return true;
+        // CPU bake path removed - GPU bake is now required
+        throw new IllegalStateException("GPU bake is required but useGpuBake is false");
     }
 
     private boolean processModelResult() {

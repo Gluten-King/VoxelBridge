@@ -18,6 +18,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.ItemBlockRenderTypes;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -192,8 +194,9 @@ public class VoxelMesher {
         addBakeView(1, 90, 0, 0, 0b100);
         addBakeView(2, 0, 180, 0, 0b001);
         addBakeView(3, 0, 0, 0, 0);
-        addBakeView(4, 0, 90, 270, 0b100);
-        addBakeView(5, 0, 270, 270, 0);
+        // Keep WEST/EAST unrolled (rotation=0) to match bakery view orientation
+        addBakeView(4, 0, 90, 0, 0b100);
+        addBakeView(5, 0, 270, 0, 0);
 
         for (Direction dir : Direction.values()) {
             FACE_UV_TEMPLATE[dir.get3DDataValue()] = computeFaceUvTemplate(dir);
@@ -347,7 +350,7 @@ public class VoxelMesher {
             if (neighborState.getRenderShape() == RenderShape.INVISIBLE) {
                 return true;
             }
-            return !neighborState.canOcclude();
+            return !isLodOccluding(neighborState);
         }
 
         int neighborIdx = WorldSection.getIndex(nx, ny, nz);
@@ -363,7 +366,7 @@ public class VoxelMesher {
         if (neighborState.getRenderShape() == RenderShape.INVISIBLE) {
             return true;
         }
-        return !neighborState.canOcclude();
+        return !isLodOccluding(neighborState);
     }
 
     private void emitFluidFaces(long[] data,
@@ -474,6 +477,15 @@ public class VoxelMesher {
             return false;
         }
         return blockHasFluid(Mapper.getBlockId(id));
+    }
+
+    private static boolean isLodOccluding(BlockState state) {
+        // Only treat SOLID layer as occluding; all other layers (cutout/cutoutMipped/translucent/tripwire) are non-occluding in LOD
+        RenderType layer = ItemBlockRenderTypes.getChunkRenderType(state);
+        if (layer != RenderType.solid()) {
+            return false;
+        }
+        return state.canOcclude();
     }
 
     private boolean blockHasFluid(int blockId) {
@@ -595,16 +607,37 @@ public class VoxelMesher {
             return;
         }
 
+        // For UP/DOWN faces: u0/u1 map to X, v0/v1 map to Z, depth affects Y
+        // For NORTH/SOUTH faces: u0/u1 map to X, v0/v1 map to Y, depth affects Z
+        // For EAST/WEST faces: u0/u1 map to Z, v0/v1 map to Y, depth affects X
+
         float u0 = 0f;
         float u1 = 1f;
         float v0 = 0f;
         float v1 = 1f;
         float depthOffset = 0f;
+
+        // UV coords for texture sampling - V is flipped because the saved image is Y-flipped
+        float uvU0 = 0f;
+        float uvU1 = 1f;
+        float uvV0 = 0f;
+        float uvV1 = 1f;
+
         if (faceMeta != null) {
+            // Geometry cropping uses OpenGL texture coords (Y=0 at bottom, matches world Y)
             u0 = faceMeta.minX / 16.0f;
             u1 = (faceMeta.maxX + 1) / 16.0f;
             v0 = faceMeta.minY / 16.0f;
             v1 = (faceMeta.maxY + 1) / 16.0f;
+
+            // UV sampling uses image coords (Y=0 at top, because image is Y-flipped when saved)
+            // Flip V: if original minY=0,maxY=7 (bottom half in OpenGL),
+            // after image flip it's at top half, so UV should be flipped
+            uvU0 = u0;
+            uvU1 = u1;
+            uvV0 = 1.0f - v1;  // Flip: original maxY becomes UV minV
+            uvV1 = 1.0f - v0;  // Flip: original minY becomes UV maxV
+
             depthOffset = clamp01(faceMeta.depth);
             if ((dir.get3DDataValue() & 1) == 1) {
                 depthOffset = 1.0f - depthOffset;
@@ -699,10 +732,10 @@ public class VoxelMesher {
         
         float[] uvTemplate = FACE_UV_TEMPLATE[dir.get3DDataValue()];
         uvs = new float[]{
-            lerp(u0, u1, uvTemplate[0]), lerp(v0, v1, uvTemplate[1]),
-            lerp(u0, u1, uvTemplate[2]), lerp(v0, v1, uvTemplate[3]),
-            lerp(u0, u1, uvTemplate[4]), lerp(v0, v1, uvTemplate[5]),
-            lerp(u0, u1, uvTemplate[6]), lerp(v0, v1, uvTemplate[7])
+            lerp(uvU0, uvU1, uvTemplate[0]), lerp(uvV0, uvV1, uvTemplate[1]),
+            lerp(uvU0, uvU1, uvTemplate[2]), lerp(uvV0, uvV1, uvTemplate[3]),
+            lerp(uvU0, uvU1, uvTemplate[4]), lerp(uvV0, uvV1, uvTemplate[5]),
+            lerp(uvU0, uvU1, uvTemplate[6]), lerp(uvV0, uvV1, uvTemplate[7])
         };
 
         sink.addQuad(

@@ -422,19 +422,48 @@ public final class VoxelBridgeCommands {
             }
         }));
 
-        root.then(Commands.literal("bakedebug").executes(ctx -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level == null) {
-                ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No world loaded."));
-                return 0;
-            }
-            CommandSourceStack source = ctx.getSource();
-            source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake debug started (ids 0-50)."));
-            Thread worker = new Thread(() -> runBakeDebug(source), "VoxelBridge-BakeDebug");
-            worker.setDaemon(true);
-            worker.start();
-            return 1;
-        }));
+        root.then(Commands.literal("bakedebug")
+                .executes(ctx -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc.level == null) {
+                        ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No world loaded."));
+                        return 0;
+                    }
+                    CommandSourceStack source = ctx.getSource();
+                    source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake debug started (ids 0-50)."));
+                    Thread worker = new Thread(() -> runBakeDebug(source, BAKE_DEBUG_MIN_ID, BAKE_DEBUG_MAX_ID), "VoxelBridge-BakeDebug");
+                    worker.setDaemon(true);
+                    worker.start();
+                    return 1;
+                })
+                .then(Commands.argument("id", IntegerArgumentType.integer(0, 100000)).executes(ctx -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc.level == null) {
+                        ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No world loaded."));
+                        return 0;
+                    }
+                    int id = IntegerArgumentType.getInteger(ctx, "id");
+                    CommandSourceStack source = ctx.getSource();
+                    source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake debug started (id " + id + ")."));
+                    Thread worker = new Thread(() -> runBakeDebug(source, id, id), "VoxelBridge-BakeDebug");
+                    worker.setDaemon(true);
+                    worker.start();
+                    return 1;
+                }).then(Commands.argument("maxId", IntegerArgumentType.integer(0, 100000)).executes(ctx -> {
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc.level == null) {
+                        ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No world loaded."));
+                        return 0;
+                    }
+                    int minId = IntegerArgumentType.getInteger(ctx, "id");
+                    int maxId = IntegerArgumentType.getInteger(ctx, "maxId");
+                    CommandSourceStack source = ctx.getSource();
+                    source.sendSystemMessage(Component.literal("a[VoxelBridge] Bake debug started (ids " + minId + "-" + maxId + ")."));
+                    Thread worker = new Thread(() -> runBakeDebug(source, minId, maxId), "VoxelBridge-BakeDebug");
+                    worker.setDaemon(true);
+                    worker.start();
+                    return 1;
+                }))));
 
         root.then(Commands.literal("simplebakedebug").executes(ctx -> {
             Minecraft mc = Minecraft.getInstance();
@@ -515,6 +544,22 @@ public final class VoxelBridgeCommands {
             return 1;
         }));
 
+        // Query block state id - useful for finding ids for bakedebug
+        root.then(Commands.literal("blockid").executes(ctx -> {
+            Minecraft mc = Minecraft.getInstance();
+            BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
+            if (hit == null) {
+                ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No block targeted."));
+                return 0;
+            }
+            BlockState state = mc.level.getBlockState(hit);
+            int id = Block.BLOCK_STATE_REGISTRY.getId(state);
+            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] Block at " + hit + ":"));
+            ctx.getSource().sendSystemMessage(Component.literal("e  State: f" + state));
+            ctx.getSource().sendSystemMessage(Component.literal("e  ID: f" + id));
+            return 1;
+        }));
+
         // Register the literal once and reuse the returned node for the "vb" shortcut.
         CommandNode<CommandSourceStack> rootNode = event.getDispatcher().register(root);
         event.getDispatcher().register(Commands.literal("vb").redirect(rootNode));
@@ -531,7 +576,7 @@ public final class VoxelBridgeCommands {
         return 1;
     }
 
-    private static void runBakeDebug(CommandSourceStack source) {
+    private static void runBakeDebug(CommandSourceStack source, int requestedMinId, int requestedMaxId) {
         Minecraft mc = Minecraft.getInstance();
         Path outDir;
         Path debugDir;
@@ -549,10 +594,10 @@ public final class VoxelBridgeCommands {
 
         MemorySectionStorage storage = new MemorySectionStorage();
         Mapper mapper = new Mapper(storage);
-        ensureMapperSize(mapper, BAKE_DEBUG_MAX_ID + 1);
+        ensureMapperSize(mapper, requestedMaxId + 1);
 
-        int availableMaxId = Math.min(BAKE_DEBUG_MAX_ID, mapper.getBlockStateCount() - 1);
-        if (availableMaxId < BAKE_DEBUG_MIN_ID) {
+        int availableMaxId = Math.min(requestedMaxId, mapper.getBlockStateCount() - 1);
+        if (availableMaxId < requestedMinId) {
             mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Bake debug aborted: no mapped block states.")));
             return;
         }
@@ -560,7 +605,7 @@ public final class VoxelBridgeCommands {
         GpuBakeDebugService debugService = null;
         try {
             debugService = mc.submit(() -> new GpuBakeDebugService(BAKE_DEBUG_SIZE)).join();
-            writeBakeDebugOutput(debugDir, mapper, debugService, mc, availableMaxId);
+            writeBakeDebugOutput(debugDir, mapper, debugService, mc, requestedMinId, availableMaxId);
         } catch (Exception e) {
             mc.execute(() -> source.sendSystemMessage(Component.literal("c[VoxelBridge] Bake debug failed: " + e.getMessage())));
             return;
@@ -594,11 +639,12 @@ public final class VoxelBridgeCommands {
                                              Mapper mapper,
                                              GpuBakeDebugService debugService,
                                              Minecraft mc,
+                                             int minId,
                                              int maxId) throws Exception {
         Path indexFile = debugDir.resolve("index.txt");
         AtlasDebugOverlay overlay = AtlasDebugOverlay.tryCreate(mc, debugDir);
         try (BufferedWriter writer = Files.newBufferedWriter(indexFile, StandardCharsets.UTF_8)) {
-            for (int id = BAKE_DEBUG_MIN_ID; id <= maxId; id++) {
+            for (int id = minId; id <= maxId; id++) {
                 BlockState state = mapper.getBlockStateFromBlockId(id);
                 GpuBakeDebugService.BakeResult result = mc.submit(() -> debugService.bake(state)).join();
                 ColourDepthTextureData[] textures = result.textures();

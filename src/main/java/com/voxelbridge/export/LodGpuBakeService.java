@@ -21,15 +21,22 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import javax.imageio.ImageIO;
 
 public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, AutoCloseable {
     private static final String SPRITE_PREFIX = "voxelbridge:lod/bake";
     private static final String TRANSPARENT_SPRITE = "voxelbridge:transparent";
     private static final int OVERLAY_OFFSET = 500000;
+
+    // Debug flag: set to true to save bake debug images to disk
+    private static final boolean BAKE_DEBUG = true;
+    private static final File DEBUG_DIR = new File("bake_debug");
 
     private final ExportContext ctx;
     private final Mapper mapper;
@@ -203,6 +210,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         int w = tex.width();
         int h = tex.height();
         int[] basePixels = new int[w * h];
+        int[] rawPixels = new int[w * h];  // For debug: unflipped version
 
         int[] colours = tex.colour();
         int[] depths = tex.depth();
@@ -221,12 +229,18 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
                 int argb = toArgb(colours[srcIdx]);
                 int dstIdx = dstRow + x;
                 basePixels[dstIdx] = argb;
+                rawPixels[srcIdx] = argb;  // Debug: keep original position
                 hasBase = true;
                 baseCount++;
             }
         }
 
-        VoxelMesher.LodFaceMeta meta = buildFaceMeta(tex, checkMode, hasBakedTint);
+        VoxelMesher.LodFaceMeta meta = buildFaceMeta(tex, checkMode, hasBakedTint, blockId, dir);
+
+        // Debug: save bake result images (use /voxelbridge bakedebug command instead)
+        // if (BAKE_DEBUG && hasBase) {
+        //     saveBakeDebugImages(blockId, dir, w, h, rawPixels, basePixels, meta);
+        // }
 
         String baseKey;
         if (hasBase) {
@@ -264,7 +278,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         return new FaceEntry(baseKey, meta);
     }
 
-    private static VoxelMesher.LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode, boolean hasBakedTint) {
+    private static VoxelMesher.LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode, boolean hasBakedTint, int blockId, Direction dir) {
         int written = TextureUtils.getWrittenPixelCount(tex, checkMode);
         if (written == 0) {
             return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
@@ -274,10 +288,27 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         if (depth < -0.1f || bounds[0] >= tex.width() || bounds[1] < 0 || bounds[2] >= tex.height() || bounds[3] < 0) {
             return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
         }
+
+        // bounds[0..3] = [minX, maxX, minY, maxY] in OpenGL texture coords (Y=0 at bottom)
+        // These bounds directly correspond to world-space geometry cropping:
+        // - For UP/DOWN faces: minX/maxX -> world X, minY/maxY -> world Z
+        // - For NORTH/SOUTH faces: minX/maxX -> world X, minY/maxY -> world Y
+        // - For EAST/WEST faces: minX/maxX -> world Z, minY/maxY -> world Y
+        //
+        // The image file is Y-flipped separately in bakeFace(), but the geometry bounds
+        // should remain in OpenGL coords since that matches world-space orientation.
         int minX = clamp(bounds[0], 0, tex.width() - 1);
         int maxX = clamp(bounds[1], 0, tex.width() - 1);
         int minY = clamp(bounds[2], 0, tex.height() - 1);
         int maxY = clamp(bounds[3], 0, tex.height() - 1);
+
+        if (VoxelBridgeLogger.isDebugEnabled(LogModule.BAKE)) {
+            VoxelBridgeLogger.debug(LogModule.BAKE, String.format(
+                "[FaceMeta] blockId=%d dir=%s bounds=[%d,%d,%d,%d] depth=%.4f written=%d",
+                blockId, dir.getSerializedName(),
+                minX, maxX, minY, maxY, depth, written));
+        }
+
         return new VoxelMesher.LodFaceMeta(minX, maxX, minY, maxY, depth, false, hasBakedTint);
     }
 

@@ -334,7 +334,7 @@ public class ModelTextureBakery {
             glEnable(GL_STENCIL_TEST);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);
-            glDisable(GL_CULL_FACE);
+            glEnable(GL_CULL_FACE);
             if (isTranslucent(layer)) {
                 glEnablei(GL_BLEND, 0);
                 glDisablei(GL_BLEND, 1);
@@ -600,8 +600,9 @@ public class ModelTextureBakery {
         addView(1, 90, 0, 0, 0b100);
         addView(2, 0, 180, 0, 0b001);
         addView(3, 0, 0, 0, 0);
-        addView(4, 0, 90, 270, 0b100);
-        addView(5, 0, 270, 270, 0);
+        // Keep WEST/EAST unrolled (rotation=0) to avoid side faces being "stood up"
+        addView(4, 0, 90, 0, 0b100);
+        addView(5, 0, 270, 0, 0);
     }
 
     private static void addView(int i, float pitch, float yaw, float rotation, int flip) {
