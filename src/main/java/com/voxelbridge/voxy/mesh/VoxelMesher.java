@@ -134,12 +134,14 @@ public class VoxelMesher {
     private static final class FaceSpriteSet {
         private final String[] faces;
         private final int[] tintIndices;
+        private final int[] baseTintIndices;
         private final String fallback;
 
-        private FaceSpriteSet(String fallback, String[] faces, int[] tintIndices) {
+        private FaceSpriteSet(String fallback, String[] faces, int[] tintIndices, int[] baseTintIndices) {
             this.fallback = fallback;
             this.faces = faces;
             this.tintIndices = tintIndices;
+            this.baseTintIndices = baseTintIndices;
         }
     }
 
@@ -807,46 +809,53 @@ public class VoxelMesher {
             hasTint = false;
         }
 
-        float[] baseColors = resolveColors(tintColor, hasTint);
-        float[] overlayColors = baseColors;
+        int baseTintColor = -1;
+        int overlayTintColor = -1;
+        // int baseTintIndex = resolveBaseTintIndex(state, blockId, dir); // 不再依赖不可靠的索引
 
+        if (overlaySprite != null) {
+            // 终极策略：基于方块类型的特例判定
+            // 草方块侧面是唯一且确定的必须染 Overlay 的情况。
+            boolean isGrassBlock = state.getBlock() == Blocks.GRASS_BLOCK;
+            boolean isOverlayType = isOverlaySprite(overlaySprite);
+
+            if ((isGrassBlock && dir.getAxis().isHorizontal()) || isOverlayType) {
+                // 情况1：草方块侧面 或 标准 Overlay -> Tint 给 Overlay
+                baseTintColor = -1;
+                overlayTintColor = tintColor;
+            } else {
+                // 情况2：其他所有情况（包括 Mod 树叶） -> Tint 给 Base
+                baseTintColor = tintColor;
+                overlayTintColor = -1;
+            }
+        } else {
+            // 无 Overlay：直接使用 tint
+            baseTintColor = tintColor;
+        }
+
+        float[] baseColors = WHITE_COLORS;
+        float[] overlayColors = WHITE_COLORS;
         String combinedSprite = null;
+
         if (overlaySprite != null && exportContext != null) {
-            combinedSprite = buildCombinedOverlaySprite(exportContext, spriteName, overlaySprite, tintColor);
+            // 有 Overlay：强制合并烘焙，顶点色保持纯白
+            combinedSprite = buildLayeredTintedSprite(exportContext, spriteName, baseTintColor, overlaySprite, overlayTintColor);
             if (combinedSprite != null) {
                 spriteName = combinedSprite;
-                overlaySprite = null;
-                hasTint = false;
+                overlaySprite = null; // 合并完成，移除 overlay 引用
                 baseColors = WHITE_COLORS;
-                overlayColors = WHITE_COLORS;
+            } else {
+                // 合并失败兜底：使用顶点色
+                baseColors = resolveColors(baseTintColor, baseTintColor != -1);
+                overlayColors = resolveColors(overlayTintColor, overlayTintColor != -1);
             }
-        }
-
-        // 无 overlay 或合成失败但需要 base tint：尝试将 base tint 烘入贴图，LOD 顶点色置白
-        if (overlaySprite == null && hasTint && exportContext != null) {
-            String tinted = buildTintedSprite(exportContext, spriteName, tintColor);
-            if (tinted != null) {
-                spriteName = tinted;
-                hasTint = false;
-                baseColors = WHITE_COLORS;
-                overlayColors = WHITE_COLORS;
-            }
-        } else if (overlaySprite != null) {
-            // overlay 未合成的情况：保持分层，但避免 base 被错误染色
-            if (hasTint) {
-                baseColors = WHITE_COLORS;
-                overlayColors = resolveColors(tintColor, true);
+        } else {
+            // 无 Overlay：直接写入顶点色（不烘焙），复用原纹理
+            if (baseTintColor != -1) {
+                baseColors = resolveColors(baseTintColor, true);
             } else {
                 baseColors = WHITE_COLORS;
-                overlayColors = WHITE_COLORS;
             }
-        }
-
-        // 如果 overlay 已完成预合成/预着色，避免顶点色二次染色
-        if (combinedSprite != null) {
-            hasTint = false;
-            baseColors = WHITE_COLORS;
-            overlayColors = WHITE_COLORS;
         }
 
         // Register tinted sprites to atlas for proper UV remapping
@@ -856,17 +865,18 @@ public class VoxelMesher {
             } else {
             // Overlay sprites must always be registered as tinted, even if tintColor is -1
             // This allows grass_block_side_overlay and similar textures to be properly separated
-            boolean isBaseTinted = hasTint;
-            boolean isOverlay = overlaySprite != null && isOverlaySprite(overlaySprite);
+            boolean isBaseTinted = baseTintColor != -1;
+            boolean isOverlay = overlaySprite != null && overlayTintColor != -1;
             boolean isBaseSpriteOverlay = isOverlaySprite(spriteName);
 
             if (isBaseTinted || isBaseSpriteOverlay) {
-                int colorToRegister = (overlaySprite != null) ? 0xFFFFFF : (isBaseTinted ? tintColor : 0xFFFFFF);
+                int colorToRegister = (overlaySprite != null) ? 0xFFFFFF : (isBaseTinted ? baseTintColor : 0xFFFFFF);
                 com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, colorToRegister);
             }
 
             if (overlaySprite != null) {
-                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, 0xFFFFFF);
+                int overlayRegColor = overlayTintColor != -1 ? overlayTintColor : 0xFFFFFF;
+                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, overlayRegColor);
             }
             }
         }
@@ -1222,8 +1232,10 @@ public class VoxelMesher {
             String fallback = particle.contents().name().toString();
             String[] faces = new String[6];
             int[] tintIndices = new int[6];
-            for (int i = 0; i < tintIndices.length; i++) {
+            int[] baseTintIndices = new int[6];
+            for (int i = 0; i < 6; i++) {
                 tintIndices[i] = -1;
+                baseTintIndices[i] = -1;
             }
             for (Direction dir : Direction.values()) {
                 RandomSource rand = RandomSource.create(SPRITE_RANDOM_SEED);
@@ -1232,6 +1244,7 @@ public class VoxelMesher {
                     TextureAtlasSprite sprite = quads.get(0).getSprite();
                     faces[dir.ordinal()] = sprite.contents().name().toString();
                     tintIndices[dir.ordinal()] = pickTintIndex(quads);
+                    baseTintIndices[dir.ordinal()] = quads.get(0).getTintIndex();
                 } else {
                     faces[dir.ordinal()] = fallback;
                 }
@@ -1250,16 +1263,18 @@ public class VoxelMesher {
                     TextureAtlasSprite sprite = general.get(0).getSprite();
                     String spriteName = sprite.contents().name().toString();
                     int tintIdx = pickTintIndex(general);
+                    int baseTintIdx = general.get(0).getTintIndex();
                     for (Direction dir : Direction.values()) {
                         int idx = dir.ordinal();
                         if (faces[idx] == null || faces[idx].equals(fallback)) {
                             faces[idx] = spriteName;
                             tintIndices[idx] = tintIdx;
+                            baseTintIndices[idx] = baseTintIdx;
                         }
                     }
                 }
             }
-            return new FaceSpriteSet(fallback, faces, tintIndices);
+            return new FaceSpriteSet(fallback, faces, tintIndices, baseTintIndices);
         }).join();
     }
 
@@ -1271,6 +1286,15 @@ public class VoxelMesher {
             }
         }
         return -1;
+    }
+
+    private int resolveBaseTintIndex(BlockState state, int blockId, Direction dir) {
+        FaceSpriteSet cached = faceSpriteCache.get(blockId);
+        if (cached == null) {
+            cached = buildFaceSprites(state);
+            faceSpriteCache.put(blockId, cached);
+        }
+        return cached.baseTintIndices[dir.ordinal()];
     }
 
     private int resolveTintColor(int blockId, BlockState state, int biomeId, int tintIndex) {
@@ -1548,6 +1572,80 @@ public class VoxelMesher {
             int br = (baseArgb >>> 16) & 0xFF;
             int bg = (baseArgb >>> 8) & 0xFF;
             int bb = baseArgb & 0xFF;
+
+            int inv = 255 - oa;
+            int outA = oa + (ba * inv) / 255;
+            int outR = (or * oa + br * inv) / 255;
+            int outG = (og * oa + bg * inv) / 255;
+            int outB = (ob * oa + bb * inv) / 255;
+
+            outPixels[i] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
+        }
+
+        out.setRGB(0, 0, w, h, outPixels, 0, w);
+        ctx.cacheSpriteImage(combinedKey, out);
+        return combinedKey;
+    }
+
+    private static String buildLayeredTintedSprite(ExportContext ctx, String baseKey, int baseTint, String overlayKey, int overlayTint) {
+        if (ctx == null || baseKey == null || overlayKey == null) {
+            return null;
+        }
+        int baseColor = baseTint == -1 ? 0xFFFFFF : (baseTint & 0xFFFFFF);
+        int overlayColor = overlayTint == -1 ? 0xFFFFFF : (overlayTint & 0xFFFFFF);
+        String combinedKey = baseKey + "|layer|" + String.format("%06X", baseColor) + "|overlay|" + overlayKey + "|overlayTint|" + String.format("%06X", overlayColor);
+        if (ctx.getCachedSpriteImage(combinedKey) != null) {
+            return combinedKey;
+        }
+        BufferedImage base = ctx.getCachedSpriteImage(baseKey);
+        BufferedImage overlay = ctx.getCachedSpriteImage(overlayKey);
+        if (base == null || overlay == null) {
+            return null;
+        }
+        int w = base.getWidth();
+        int h = base.getHeight();
+        if (overlay.getWidth() != w || overlay.getHeight() != h) {
+            return null;
+        }
+
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        int[] basePixels = base.getRGB(0, 0, w, h, null, 0, w);
+        int[] overlayPixels = overlay.getRGB(0, 0, w, h, null, 0, w);
+        int[] outPixels = new int[basePixels.length];
+
+        int brMul = (baseColor >> 16) & 0xFF;
+        int bgMul = (baseColor >> 8) & 0xFF;
+        int bbMul = baseColor & 0xFF;
+
+        int orMul = (overlayColor >> 16) & 0xFF;
+        int ogMul = (overlayColor >> 8) & 0xFF;
+        int obMul = overlayColor & 0xFF;
+
+        for (int i = 0; i < basePixels.length; i++) {
+            int baseArgb = basePixels[i];
+            int ba = (baseArgb >>> 24) & 0xFF;
+            int br = (baseArgb >>> 16) & 0xFF;
+            int bg = (baseArgb >>> 8) & 0xFF;
+            int bb = baseArgb & 0xFF;
+
+            br = (br * brMul) / 255;
+            bg = (bg * bgMul) / 255;
+            bb = (bb * bbMul) / 255;
+
+            int overArgb = overlayPixels[i];
+            int oa = (overArgb >>> 24) & 0xFF;
+            int or = (overArgb >>> 16) & 0xFF;
+            int og = (overArgb >>> 8) & 0xFF;
+            int ob = overArgb & 0xFF;
+
+            or = (or * orMul) / 255;
+            og = (og * ogMul) / 255;
+            ob = (ob * obMul) / 255;
+
+            if (oa == 0) {
+                outPixels[i] = (ba << 24) | (br << 16) | (bg << 8) | bb;
+                continue;
+            }
 
             int inv = 255 - oa;
             int outA = oa + (ba * inv) / 255;
