@@ -18,18 +18,19 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.ItemBlockRenderTypes;
-import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.LiquidBlock;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.biome.Biome;
@@ -120,6 +121,7 @@ public class VoxelMesher {
     private final Int2ByteOpenHashMap fluidPresenceCache = new Int2ByteOpenHashMap();
     private final Int2IntOpenHashMap fluidBlockIdCache = new Int2IntOpenHashMap();
     private static final float[] WHITE_COLORS = GeometryUtil.whiteColor();
+    private static final BlockState AIR_STATE = Blocks.AIR.defaultBlockState();
 
     private static final class MeshStats {
         int nonAirBlocks;
@@ -135,6 +137,137 @@ public class VoxelMesher {
             this.fallback = fallback;
             this.faces = faces;
             this.tintIndices = tintIndices;
+        }
+    }
+
+    private static final class LodBlockGetter implements BlockGetter {
+        private final Mapper mapper;
+        private final int baseX;
+        private final int baseY;
+        private final int baseZ;
+        private final int minBuildHeight;
+        private final int height;
+        private final long[] data;
+        private final long[] negX;
+        private final long[] posX;
+        private final long[] negY;
+        private final long[] posY;
+        private final long[] negZ;
+        private final long[] posZ;
+
+        private LodBlockGetter(Mapper mapper,
+                               int baseX,
+                               int baseY,
+                               int baseZ,
+                               long[] data,
+                               long[] negX,
+                               long[] posX,
+                               long[] negY,
+                               long[] posY,
+                               long[] negZ,
+                               long[] posZ) {
+            this.mapper = mapper;
+            this.baseX = baseX;
+            this.baseY = baseY;
+            this.baseZ = baseZ;
+            this.minBuildHeight = baseY;
+            this.height = 32;
+            this.data = data;
+            this.negX = negX;
+            this.posX = posX;
+            this.negY = negY;
+            this.posY = posY;
+            this.negZ = negZ;
+            this.posZ = posZ;
+        }
+
+        @Override
+        public BlockState getBlockState(BlockPos pos) {
+            return resolveState(pos.getX(), pos.getY(), pos.getZ());
+        }
+
+        private BlockState resolveState(int x, int y, int z) {
+            int lx = x - baseX;
+            int ly = y - baseY;
+            int lz = z - baseZ;
+
+            long[] source = data;
+            int sx = lx;
+            int sy = ly;
+            int sz = lz;
+            int offsetCount = 0;
+
+            if (lx < 0) {
+                source = negX;
+                sx = lx + 32;
+                offsetCount++;
+            } else if (lx >= 32) {
+                source = posX;
+                sx = lx - 32;
+                offsetCount++;
+            }
+
+            if (ly < 0) {
+                if (offsetCount > 0) {
+                    return AIR_STATE;
+                }
+                source = negY;
+                sy = ly + 32;
+                offsetCount++;
+            } else if (ly >= 32) {
+                if (offsetCount > 0) {
+                    return AIR_STATE;
+                }
+                source = posY;
+                sy = ly - 32;
+                offsetCount++;
+            }
+
+            if (lz < 0) {
+                if (offsetCount > 0) {
+                    return AIR_STATE;
+                }
+                source = negZ;
+                sz = lz + 32;
+                offsetCount++;
+            } else if (lz >= 32) {
+                if (offsetCount > 0) {
+                    return AIR_STATE;
+                }
+                source = posZ;
+                sz = lz - 32;
+                offsetCount++;
+            }
+
+            if (source == null || sx < 0 || sx >= 32 || sy < 0 || sy >= 32 || sz < 0 || sz >= 32) {
+                return AIR_STATE;
+            }
+
+            long id = source[WorldSection.getIndex(sx, sy, sz)];
+            if (Mapper.isAir(id)) {
+                return AIR_STATE;
+            }
+            return mapper.getBlockStateFromBlockId(Mapper.getBlockId(id));
+        }
+
+        @Override
+        public BlockEntity getBlockEntity(BlockPos pos) {
+            return null;
+        }
+
+        @Override
+        public FluidState getFluidState(BlockPos pos) {
+            return getBlockState(pos).getFluidState();
+        }
+
+        @Override
+        public int getHeight() {
+            return height;
+        }
+
+        @Override
+        public int getMinBuildHeight() {
+            return minBuildHeight;
         }
     }
 
@@ -228,6 +361,13 @@ public class VoxelMesher {
             long[] dataNegZ = negZ != null ? negZ.copyData() : null;
             long[] dataPosZ = posZ != null ? posZ.copyData() : null;
             MeshStats stats = new MeshStats();
+            int originX = chunkX * 32;
+            int originY = chunkY * 32;
+            int originZ = chunkZ * 32;
+            LodBlockGetter blockGetter = new LodBlockGetter(mapper, originX, originY, originZ,
+                data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ);
+            BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+            BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
             
             // Standard loop over 32x32x32 section
             for (int y = 0; y < 32; y++) {
@@ -238,6 +378,7 @@ public class VoxelMesher {
                         
                         if (Mapper.isAir(blockIdLong)) continue;
                         stats.nonAirBlocks++;
+                        pos.set(originX + x, originY + y, originZ + z);
 
                         int blockId = Mapper.getBlockId(blockIdLong);
                         int biomeId = Mapper.getBiomeId(blockIdLong);
@@ -245,31 +386,30 @@ public class VoxelMesher {
                         if (state.getBlock() instanceof LiquidBlock) {
                             continue;
                         }
-                        // Simple Culling: Check neighbors
-                        // TODO: Check neighbors across section boundaries (requires acquiring neighbor sections)
-                        // For now, we only cull internal to the section. Boundary faces will be generated.
+                        // 使用 LodBlockGetter + Block.shouldRenderFace 进行可见性剔除，
+                        // 支持跨 section 邻居（若邻居缺失则视为空气）。
                         
                         if (shouldUseModelQuads(state, blockId)) {
                             emitModelQuads(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, scale, stats);
                             continue;
                         }
 
-                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.UP, state)) {
+                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.UP, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
                         }
-                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.DOWN, state)) {
+                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.DOWN, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
                         }
-                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.NORTH, state)) {
+                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.NORTH, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
                         }
-                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.SOUTH, state)) {
+                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.SOUTH, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
                         }
-                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.WEST, state)) {
+                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.WEST, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
                         }
-                        if (shouldRenderFace(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ, x, y, z, Direction.EAST, state)) {
+                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.EAST, state)) {
                             emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
                         }
                     }
@@ -292,81 +432,13 @@ public class VoxelMesher {
         }
     }
 
-    private boolean shouldRenderFace(long[] data,
-                                     long[] negX,
-                                     long[] posX,
-                                     long[] negY,
-                                     long[] posY,
-                                     long[] negZ,
-                                     long[] posZ,
-                                     int x, int y, int z, Direction dir, BlockState state) {
-        int nx = x + dir.getStepX();
-        int ny = y + dir.getStepY();
-        int nz = z + dir.getStepZ();
-
-        // If out of bounds of this section, render it (conservative approach)
-        // If neighbor section exists, check it for occlusion.
-        if (nx < 0 || nx >= 32 || ny < 0 || ny >= 32 || nz < 0 || nz >= 32) {
-            long[] neighbor = null;
-            int lx = x;
-            int ly = y;
-            int lz = z;
-            switch (dir) {
-                case WEST -> {
-                    neighbor = negX;
-                    lx = 31;
-                }
-                case EAST -> {
-                    neighbor = posX;
-                    lx = 0;
-                }
-                case DOWN -> {
-                    neighbor = negY;
-                    ly = 31;
-                }
-                case UP -> {
-                    neighbor = posY;
-                    ly = 0;
-                }
-                case NORTH -> {
-                    neighbor = negZ;
-                    lz = 31;
-                }
-                case SOUTH -> {
-                    neighbor = posZ;
-                    lz = 0;
-                }
-            }
-            if (neighbor == null) {
-                return true;
-            }
-            int neighborIdx = WorldSection.getIndex(lx, ly, lz);
-            long neighborId = neighbor[neighborIdx];
-            if (Mapper.isAir(neighborId)) return true;
-            BlockState neighborState = mapper.getBlockStateFromBlockId(Mapper.getBlockId(neighborId));
-            if (state.skipRendering(neighborState, dir)) {
-                return false;
-            }
-            if (neighborState.getRenderShape() == RenderShape.INVISIBLE) {
-                return true;
-            }
-            return !isLodOccluding(neighborState);
-        }
-
-        int neighborIdx = WorldSection.getIndex(nx, ny, nz);
-        long neighborId = data[neighborIdx];
-        
-        // If neighbor is air, we must render
-        if (Mapper.isAir(neighborId)) return true;
-
-        BlockState neighborState = mapper.getBlockStateFromBlockId(Mapper.getBlockId(neighborId));
-        if (state.skipRendering(neighborState, dir)) {
-            return false;
-        }
-        if (neighborState.getRenderShape() == RenderShape.INVISIBLE) {
-            return true;
-        }
-        return !isLodOccluding(neighborState);
+    private boolean shouldRenderFace(LodBlockGetter blockGetter,
+                                     BlockPos.MutableBlockPos pos,
+                                     BlockPos.MutableBlockPos neighborPos,
+                                     Direction dir,
+                                     BlockState state) {
+        neighborPos.setWithOffset(pos, dir);
+        return Block.shouldRenderFace(state, blockGetter, pos, dir, neighborPos);
     }
 
     private void emitFluidFaces(long[] data,
@@ -477,15 +549,6 @@ public class VoxelMesher {
             return false;
         }
         return blockHasFluid(Mapper.getBlockId(id));
-    }
-
-    private static boolean isLodOccluding(BlockState state) {
-        // Only treat SOLID layer as occluding; all other layers (cutout/cutoutMipped/translucent/tripwire) are non-occluding in LOD
-        RenderType layer = ItemBlockRenderTypes.getChunkRenderType(state);
-        if (layer != RenderType.solid()) {
-            return false;
-        }
-        return state.canOcclude();
     }
 
     private boolean blockHasFluid(int blockId) {
@@ -702,8 +765,15 @@ public class VoxelMesher {
                 };
             }
             case WEST -> {
-                float zz0 = lerp(z0, z1, u0);
-                float zz1 = lerp(z0, z1, u1);
+                // 东西面：LOD 烘焙的 X 方向与世界 Z 方向存在镜像，需要反转几何的 u->z 映射（UV 不变）
+                float gu0 = u0;
+                float gu1 = u1;
+                if (faceMeta != null) {
+                    gu0 = 1.0f - u1;
+                    gu1 = 1.0f - u0;
+                }
+                float zz0 = lerp(z0, z1, gu0);
+                float zz1 = lerp(z0, z1, gu1);
                 float yy0 = lerp(y0, y1, v0);
                 float yy1 = lerp(y0, y1, v1);
                 float xx = faceMeta != null ? (baseX + depthOffset * scale) : x0;
@@ -715,8 +785,14 @@ public class VoxelMesher {
                 };
             }
             case EAST -> {
-                float zz0 = lerp(z0, z1, u0);
-                float zz1 = lerp(z0, z1, u1);
+                float gu0 = u0;
+                float gu1 = u1;
+                if (faceMeta != null) {
+                    gu0 = 1.0f - u1;
+                    gu1 = 1.0f - u0;
+                }
+                float zz0 = lerp(z0, z1, gu0);
+                float zz1 = lerp(z0, z1, gu1);
                 float yy0 = lerp(y0, y1, v0);
                 float yy1 = lerp(y0, y1, v1);
                 float xx = faceMeta != null ? (baseX + depthOffset * scale) : x1;
@@ -729,6 +805,7 @@ public class VoxelMesher {
                 };
             }
         }
+
         
         float[] uvTemplate = FACE_UV_TEMPLATE[dir.get3DDataValue()];
         uvs = new float[]{
