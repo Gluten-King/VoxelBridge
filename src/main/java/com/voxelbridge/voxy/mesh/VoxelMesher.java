@@ -42,6 +42,7 @@ import net.neoforged.neoforge.client.model.data.ModelData;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Arrays;
 import java.awt.image.BufferedImage;
 import com.mojang.blaze3d.vertex.PoseStack;
 import org.joml.Matrix4f;
@@ -92,6 +93,8 @@ public class VoxelMesher {
     private final LodTextureProvider lodTextureProvider;
     private final com.voxelbridge.export.ExportContext exportContext;
     private final RandomSource random = RandomSource.create();
+    // 流体掩码：索引 y*32+z，每个 int 的 32bit 对应 x 轴是否含流体（水logged 也算）
+    private final int[] fluidMasks = new int[32 * 32];
     private final BlockColors blockColors;
     private final net.minecraft.core.Registry<Biome> biomeRegistry;
     private final Biome defaultBiome;
@@ -361,6 +364,7 @@ public class VoxelMesher {
             long[] dataNegZ = negZ != null ? negZ.copyData() : null;
             long[] dataPosZ = posZ != null ? posZ.copyData() : null;
             MeshStats stats = new MeshStats();
+            Arrays.fill(this.fluidMasks, 0);
             int originX = chunkX * 32;
             int originY = chunkY * 32;
             int originZ = chunkZ * 32;
@@ -383,6 +387,11 @@ public class VoxelMesher {
                         int blockId = Mapper.getBlockId(blockIdLong);
                         int biomeId = Mapper.getBiomeId(blockIdLong);
                         BlockState state = mapper.getBlockStateFromBlockId(blockId);
+                        // 记录流体掩码（含 waterlogged）
+                        if (!state.getFluidState().isEmpty()) {
+                            int mIdx = y * 32 + z;
+                            fluidMasks[mIdx] |= (1 << x);
+                        }
                         if (state.getBlock() instanceof LiquidBlock) {
                             continue;
                         }
@@ -415,11 +424,12 @@ public class VoxelMesher {
                     }
                 }
             }
+            emitFluidFaces(blockGetter, pos, neighborPos,
+                data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ,
+                chunkX, chunkY, chunkZ, scale, stats);
             VoxelBridgeLogger.info(LogModule.LOD, String.format(
                 "[LOD] mesh section lvl=%d pos=[%d,%d,%d] nonAir=%d faces=%d",
                 level, chunkX, chunkY, chunkZ, stats.nonAirBlocks, stats.faces));
-            emitFluidFaces(data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ,
-                chunkX, chunkY, chunkZ, scale, stats);
 
         } finally {
             if (negX != null) negX.release();
@@ -441,7 +451,10 @@ public class VoxelMesher {
         return Block.shouldRenderFace(state, blockGetter, pos, dir, neighborPos);
     }
 
-    private void emitFluidFaces(long[] data,
+    private void emitFluidFaces(LodBlockGetter blockGetter,
+                                BlockPos.MutableBlockPos pos,
+                                BlockPos.MutableBlockPos neighborPos,
+                                long[] data,
                                 long[] negX,
                                 long[] posX,
                                 long[] negY,
@@ -453,93 +466,188 @@ public class VoxelMesher {
                                 int chunkZ,
                                 int scale,
                                 MeshStats stats) {
+        buildFluidMasks(data);
+        int originX = chunkX * 32;
+        int originY = chunkY * 32;
+        int originZ = chunkZ * 32;
+
+        // X 轴界面（东西面）
         for (int y = 0; y < 32; y++) {
             for (int z = 0; z < 32; z++) {
-                for (int x = 0; x < 32; x++) {
-                    int index = WorldSection.getIndex(x, y, z);
-                    long blockIdLong = data[index];
-                    if (Mapper.isAir(blockIdLong)) continue;
-                    int blockId = Mapper.getBlockId(blockIdLong);
-                    if (!blockHasFluid(blockId)) continue;
+                int mask = fluidMasks[y * 32 + z];
+                if (mask == 0) continue;
+                // East：当前有流体且右侧无流体
+                int eastMask = mask & ~(mask << 1);
+                while (eastMask != 0) {
+                    int x = Integer.numberOfTrailingZeros(eastMask);
+                    eastMask &= eastMask - 1;
+                    if (x == 31 && hasFluidNeighbor(negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.EAST)) {
+                        continue;
+                    }
+                    emitFluidFaceIfVisible(blockGetter, pos, neighborPos, data, negX, posX, negY, posY, negZ, posZ,
+                        originX, originY, originZ, chunkX, chunkY, chunkZ,
+                        x, y, z, Direction.EAST, scale, stats);
+                }
+                // West：当前有流体且左侧无流体
+                int westMask = mask & ~(mask >>> 1);
+                while (westMask != 0) {
+                    int x = Integer.numberOfTrailingZeros(westMask);
+                    westMask &= westMask - 1;
+                    if (x == 0 && hasFluidNeighbor(negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.WEST)) {
+                        continue;
+                    }
+                    emitFluidFaceIfVisible(blockGetter, pos, neighborPos, data, negX, posX, negY, posY, negZ, posZ,
+                        originX, originY, originZ, chunkX, chunkY, chunkZ,
+                        x, y, z, Direction.WEST, scale, stats);
+                }
+            }
+        }
 
-                    BlockState state = mapper.getBlockStateFromBlockId(blockId);
-                    FluidState fluidState = state.getFluidState();
-                    if (fluidState.isEmpty()) continue;
+        // Y 轴界面（上下）
+        for (int y = 0; y < 32; y++) {
+            int prevY = y == 0 ? -1 : y - 1;
+            int nextY = y == 31 ? -1 : y + 1;
+            for (int z = 0; z < 32; z++) {
+                int currMask = fluidMasks[y * 32 + z];
+                if (currMask == 0) continue;
+                int prevMask = prevY >= 0 ? fluidMasks[prevY * 32 + z] : 0;
+                int nextMask = nextY >= 0 ? fluidMasks[nextY * 32 + z] : 0;
 
-                    BlockState fluidBlock = state.getBlock() instanceof LiquidBlock
-                        ? state
-                        : fluidState.createLegacyBlock();
-                    int fluidBlockId = state.getBlock() instanceof LiquidBlock
-                        ? blockId
-                        : resolveFluidBlockId(blockId, fluidBlock);
-                    if (fluidBlockId <= 0) continue;
+                // Up：当前有流体且上层无流体
+                int upMask = currMask & ~nextMask;
+                while (upMask != 0) {
+                    int x = Integer.numberOfTrailingZeros(upMask);
+                    upMask &= upMask - 1;
+                    if (y == 31 && hasFluidNeighbor(negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.UP)) {
+                        continue;
+                    }
+                    emitFluidFaceIfVisible(blockGetter, pos, neighborPos, data, negX, posX, negY, posY, negZ, posZ,
+                        originX, originY, originZ, chunkX, chunkY, chunkZ,
+                        x, y, z, Direction.UP, scale, stats);
+                }
+                // Down：当前有流体且下层无流体
+                int downMask = currMask & ~prevMask;
+                while (downMask != 0) {
+                    int x = Integer.numberOfTrailingZeros(downMask);
+                    downMask &= downMask - 1;
+                    if (y == 0 && hasFluidNeighbor(negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.DOWN)) {
+                        continue;
+                    }
+                    emitFluidFaceIfVisible(blockGetter, pos, neighborPos, data, negX, posX, negY, posY, negZ, posZ,
+                        originX, originY, originZ, chunkX, chunkY, chunkZ,
+                        x, y, z, Direction.DOWN, scale, stats);
+                }
+            }
+        }
 
-                    int biomeId = Mapper.getBiomeId(blockIdLong);
+        // Z 轴界面（南北）
+        for (int z = 0; z < 32; z++) {
+            int prevZ = z == 0 ? -1 : z - 1;
+            int nextZ = z == 31 ? -1 : z + 1;
+            for (int y = 0; y < 32; y++) {
+                int currMask = fluidMasks[y * 32 + z];
+                if (currMask == 0) continue;
+                int prevMask = prevZ >= 0 ? fluidMasks[y * 32 + prevZ] : 0;
+                int nextMask = nextZ >= 0 ? fluidMasks[y * 32 + nextZ] : 0;
 
-                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.UP)) {
-                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
+                // South：当前有流体且 +Z 无流体
+                int southMask = currMask & ~nextMask;
+                while (southMask != 0) {
+                    int x = Integer.numberOfTrailingZeros(southMask);
+                    southMask &= southMask - 1;
+                    if (z == 31 && hasFluidNeighbor(negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.SOUTH)) {
+                        continue;
                     }
-                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.DOWN)) {
-                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
+                    emitFluidFaceIfVisible(blockGetter, pos, neighborPos, data, negX, posX, negY, posY, negZ, posZ,
+                        originX, originY, originZ, chunkX, chunkY, chunkZ,
+                        x, y, z, Direction.SOUTH, scale, stats);
+                }
+                // North：当前有流体且 -Z 无流体
+                int northMask = currMask & ~prevMask;
+                while (northMask != 0) {
+                    int x = Integer.numberOfTrailingZeros(northMask);
+                    northMask &= northMask - 1;
+                    if (z == 0 && hasFluidNeighbor(negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.NORTH)) {
+                        continue;
                     }
-                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.NORTH)) {
-                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
-                    }
-                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.SOUTH)) {
-                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
-                    }
-                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.WEST)) {
-                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
-                    }
-                    if (shouldRenderFluidFace(data, negX, posX, negY, posY, negZ, posZ, x, y, z, Direction.EAST)) {
-                        emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
-                    }
+                    emitFluidFaceIfVisible(blockGetter, pos, neighborPos, data, negX, posX, negY, posY, negZ, posZ,
+                        originX, originY, originZ, chunkX, chunkY, chunkZ,
+                        x, y, z, Direction.NORTH, scale, stats);
                 }
             }
         }
     }
 
-    private boolean shouldRenderFluidFace(long[] data,
-                                          long[] negX,
-                                          long[] posX,
-                                          long[] negY,
-                                          long[] posY,
-                                          long[] negZ,
-                                          long[] posZ,
-                                          int x, int y, int z, Direction dir) {
-        int nx = x + dir.getStepX();
-        int ny = y + dir.getStepY();
-        int nz = z + dir.getStepZ();
-        return !hasFluidAt(data, negX, posX, negY, posY, negZ, posZ, nx, ny, nz);
+    private void buildFluidMasks(long[] data) {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                int mask = 0;
+                for (int x = 0; x < 32; x++) {
+                    int idx = WorldSection.getIndex(x, y, z);
+                    long id = data[idx];
+                    if (Mapper.isAir(id)) continue;
+                    int blockId = Mapper.getBlockId(id);
+                    if (blockHasFluid(blockId)) {
+                        mask |= (1 << x);
+                    }
+                }
+                fluidMasks[y * 32 + z] = mask;
+            }
+        }
     }
 
-    private boolean hasFluidAt(long[] data,
-                               long[] negX,
-                               long[] posX,
-                               long[] negY,
-                               long[] posY,
-                               long[] negZ,
-                               long[] posZ,
-                               int x, int y, int z) {
-        if (x < 0) {
-            return negX != null && hasFluidAt(negX, 31, y, z);
+    private void emitFluidFaceIfVisible(LodBlockGetter blockGetter,
+                                        BlockPos.MutableBlockPos pos,
+                                        BlockPos.MutableBlockPos neighborPos,
+                                        long[] data,
+                                        long[] negX,
+                                        long[] posX,
+                                        long[] negY,
+                                        long[] posY,
+                                        long[] negZ,
+                                        long[] posZ,
+                                        int originX,
+                                        int originY,
+                                        int originZ,
+                                        int chunkX,
+                                        int chunkY,
+                                        int chunkZ,
+                                        int x,
+                                        int y,
+                                        int z,
+                                        Direction dir,
+                                        int scale,
+                                        MeshStats stats) {
+        // 跨 section 边界先查邻居流体，避免重复面
+        if (!isBoundaryFaceVisible(negX, posX, negY, posY, negZ, posZ, x, y, z, dir)) {
+            return;
         }
-        if (x >= 32) {
-            return posX != null && hasFluidAt(posX, 0, y, z);
+
+        int idx = WorldSection.getIndex(x, y, z);
+        long id = data[idx];
+        if (Mapper.isAir(id)) {
+            return;
         }
-        if (y < 0) {
-            return negY != null && hasFluidAt(negY, x, 31, z);
+        int blockId = Mapper.getBlockId(id);
+        BlockState state = mapper.getBlockStateFromBlockId(blockId);
+        FluidState fluidState = state.getFluidState();
+        if (fluidState.isEmpty()) {
+            return;
         }
-        if (y >= 32) {
-            return posY != null && hasFluidAt(posY, x, 0, z);
+        BlockState fluidBlock = state.getBlock() instanceof LiquidBlock
+            ? state
+            : fluidState.createLegacyBlock();
+        int fluidBlockId = state.getBlock() instanceof LiquidBlock
+            ? blockId
+            : resolveFluidBlockId(blockId, fluidBlock);
+        if (fluidBlockId <= 0) {
+            return;
         }
-        if (z < 0) {
-            return negZ != null && hasFluidAt(negZ, x, y, 31);
+        int biomeId = Mapper.getBiomeId(id);
+        pos.set(originX + x, originY + y, originZ + z);
+        if (shouldRenderFluidFace(blockGetter, pos, neighborPos, dir, fluidBlock)) {
+            emitFace(fluidBlock, fluidBlockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, dir, scale, stats);
         }
-        if (z >= 32) {
-            return posZ != null && hasFluidAt(posZ, x, y, 0);
-        }
-        return hasFluidAt(data, x, y, z);
     }
 
     private boolean hasFluidAt(long[] data, int x, int y, int z) {
@@ -549,6 +657,92 @@ public class VoxelMesher {
             return false;
         }
         return blockHasFluid(Mapper.getBlockId(id));
+    }
+
+    private boolean hasFluidNeighbor(long[] negX, long[] posX, long[] negY, long[] posY, long[] negZ, long[] posZ,
+                                     int x, int y, int z, Direction dir) {
+        int nx = x + dir.getStepX();
+        int ny = y + dir.getStepY();
+        int nz = z + dir.getStepZ();
+        if (nx < 0) {
+            return negX != null && hasFluidAt(negX, 31, y, z);
+        }
+        if (nx >= 32) {
+            return posX != null && hasFluidAt(posX, 0, y, z);
+        }
+        if (ny < 0) {
+            return negY != null && hasFluidAt(negY, x, 31, z);
+        }
+        if (ny >= 32) {
+            return posY != null && hasFluidAt(posY, x, 0, z);
+        }
+        if (nz < 0) {
+            return negZ != null && hasFluidAt(negZ, x, y, 31);
+        }
+        if (nz >= 32) {
+            return posZ != null && hasFluidAt(posZ, x, y, 0);
+        }
+        return false;
+    }
+
+    private boolean isBoundaryFaceVisible(long[] negX, long[] posX, long[] negY, long[] posY, long[] negZ, long[] posZ,
+                                          int x, int y, int z, Direction dir) {
+        // 内部界面在掩码阶段已处理；这里只处理跨 section 边界的流体遮挡
+        int nx = x + dir.getStepX();
+        int ny = y + dir.getStepY();
+        int nz = z + dir.getStepZ();
+        long[] neighbor = null;
+        int lx = nx;
+        int ly = ny;
+        int lz = nz;
+        if (nx < 0) {
+            neighbor = negX;
+            lx = 31;
+        } else if (nx >= 32) {
+            neighbor = posX;
+            lx = 0;
+        } else if (ny < 0) {
+            neighbor = negY;
+            ly = 31;
+        } else if (ny >= 32) {
+            neighbor = posY;
+            ly = 0;
+        } else if (nz < 0) {
+            neighbor = negZ;
+            lz = 31;
+        } else if (nz >= 32) {
+            neighbor = posZ;
+            lz = 0;
+        }
+        if (neighbor == null) {
+            return true; // 缺邻居，保守生成
+        }
+        long nid = neighbor[WorldSection.getIndex(lx, ly, lz)];
+        if (Mapper.isAir(nid)) {
+            return true;
+        }
+        return !blockHasFluid(Mapper.getBlockId(nid));
+    }
+
+    private boolean shouldRenderFluidFace(LodBlockGetter blockGetter,
+                                          BlockPos.MutableBlockPos pos,
+                                          BlockPos.MutableBlockPos neighborPos,
+                                          Direction dir,
+                                          BlockState fluidBlock) {
+        neighborPos.setWithOffset(pos, dir);
+        BlockState neighborState = blockGetter.getBlockState(neighborPos);
+
+        // 邻居含流体（纯流体或 waterlogged）直接剔除
+        if (!neighborState.getFluidState().isEmpty()) {
+            return false;
+        }
+
+        // 邻居为可遮挡的实心块，也不渲染流体面，避免水下与方块接触处重复
+        if (neighborState.canOcclude()) {
+            return false;
+        }
+
+        return true;
     }
 
     private boolean blockHasFluid(int blockId) {
@@ -580,18 +774,23 @@ public class VoxelMesher {
         String spriteName;
         LodFaceMeta faceMeta = null;
         String overlaySprite = null;
+        boolean disableLodTexture = state.getBlock() instanceof LiquidBlock; // 流体使用原版贴图，避免 LOD 纹理导致的发黑
         if (FORCE_LOD_MATERIAL) {
             materialKey = LOD_MATERIAL_KEY;
             spriteName = LOD_SPRITE_KEY;
         } else {
-            spriteName = resolveSpriteKey(state, blockId, dir);
-            materialKey = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
-            if (hasLodTextures(blockId) && lodTextureProvider instanceof LodFaceProvider faceProvider) {
-                faceMeta = faceProvider.getFaceMeta(blockId, dir);
-                if (lodTextureProvider instanceof LodOverlayProvider overlayProvider) {
-                    overlaySprite = overlayProvider.getOverlaySpriteKey(blockId, dir);
+            if (disableLodTexture) {
+                spriteName = resolveSpriteKeyVanilla(state, blockId, dir); // 不使用 LOD bake 结果
+            } else {
+                spriteName = resolveSpriteKey(state, blockId, dir);
+                if (hasLodTextures(blockId) && lodTextureProvider instanceof LodFaceProvider faceProvider) {
+                    faceMeta = faceProvider.getFaceMeta(blockId, dir);
+                    if (lodTextureProvider instanceof LodOverlayProvider overlayProvider) {
+                        overlaySprite = overlayProvider.getOverlaySpriteKey(blockId, dir);
+                    }
                 }
             }
+            materialKey = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
         }
         if (DISABLE_LOD_FACE_CROP) {
             faceMeta = null;
@@ -620,14 +819,34 @@ public class VoxelMesher {
                 hasTint = false;
                 baseColors = WHITE_COLORS;
                 overlayColors = WHITE_COLORS;
-            } else {
-                // overlay 单独着色，基底保持白色避免整面染色
+            }
+        }
+
+        // 无 overlay 或合成失败但需要 base tint：尝试将 base tint 烘入贴图，LOD 顶点色置白
+        if (overlaySprite == null && hasTint && exportContext != null) {
+            String tinted = buildTintedSprite(exportContext, spriteName, tintColor);
+            if (tinted != null) {
+                spriteName = tinted;
+                hasTint = false;
                 baseColors = WHITE_COLORS;
-                overlayColors = resolveColors(tintColor, hasTint);
+                overlayColors = WHITE_COLORS;
             }
         } else if (overlaySprite != null) {
+            // overlay 未合成的情况：保持分层，但避免 base 被错误染色
+            if (hasTint) {
+                baseColors = WHITE_COLORS;
+                overlayColors = resolveColors(tintColor, true);
+            } else {
+                baseColors = WHITE_COLORS;
+                overlayColors = WHITE_COLORS;
+            }
+        }
+
+        // 如果 overlay 已完成预合成/预着色，避免顶点色二次染色
+        if (combinedSprite != null) {
+            hasTint = false;
             baseColors = WHITE_COLORS;
-            overlayColors = resolveColors(tintColor, hasTint);
+            overlayColors = WHITE_COLORS;
         }
 
         // Register tinted sprites to atlas for proper UV remapping
@@ -647,7 +866,6 @@ public class VoxelMesher {
             }
 
             if (overlaySprite != null) {
-                // overlay 使用白色基底，着色交给顶点色
                 com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, 0xFFFFFF);
             }
             }
@@ -964,6 +1182,17 @@ public class VoxelMesher {
                 return spriteKey;
             }
         }
+        FaceSpriteSet cached = faceSpriteCache.get(blockId);
+        if (cached == null) {
+            cached = buildFaceSprites(state);
+            faceSpriteCache.put(blockId, cached);
+        }
+        String sprite = cached.faces[dir.ordinal()];
+        return sprite != null ? sprite : cached.fallback;
+    }
+
+    // 不走 LOD 贴图的原版 sprite 解析，用于流体等特殊情况
+    private String resolveSpriteKeyVanilla(BlockState state, int blockId, Direction dir) {
         FaceSpriteSet cached = faceSpriteCache.get(blockId);
         if (cached == null) {
             cached = buildFaceSprites(state);
@@ -1332,6 +1561,48 @@ public class VoxelMesher {
         out.setRGB(0, 0, w, h, outPixels, 0, w);
         ctx.cacheSpriteImage(combinedKey, out);
         return combinedKey;
+    }
+
+    private static String buildTintedSprite(ExportContext ctx, String baseKey, int tintColor) {
+        if (ctx == null || baseKey == null || tintColor == -1) {
+            return null;
+        }
+        int color = tintColor & 0xFFFFFF;
+        String tintedKey = baseKey + "|tint|" + String.format("%06X", color);
+        if (ctx.getCachedSpriteImage(tintedKey) != null) {
+            return tintedKey;
+        }
+        BufferedImage base = ctx.getCachedSpriteImage(baseKey);
+        if (base == null) {
+            return null;
+        }
+        int w = base.getWidth();
+        int h = base.getHeight();
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        int[] pixels = base.getRGB(0, 0, w, h, null, 0, w);
+        int[] outPixels = new int[pixels.length];
+
+        int rMul = (color >> 16) & 0xFF;
+        int gMul = (color >> 8) & 0xFF;
+        int bMul = color & 0xFF;
+
+        for (int i = 0; i < pixels.length; i++) {
+            int argb = pixels[i];
+            int a = (argb >>> 24) & 0xFF;
+            int r = (argb >>> 16) & 0xFF;
+            int g = (argb >>> 8) & 0xFF;
+            int b = argb & 0xFF;
+
+            r = (r * rMul) / 255;
+            g = (g * gMul) / 255;
+            b = (b * bMul) / 255;
+
+            outPixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+        out.setRGB(0, 0, w, h, outPixels, 0, w);
+        ctx.cacheSpriteImage(tintedKey, out);
+        return tintedKey;
     }
 
     // Removed emitDebugQuad
