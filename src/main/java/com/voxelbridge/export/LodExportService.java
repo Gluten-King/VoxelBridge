@@ -47,6 +47,14 @@ public final class LodExportService {
         TextureAtlasManager.initializeReservedSlots(ctx);
         ColorMapManager.initializeReservedSlots(ctx);
 
+        // [Fix] Enforce Individual Atlas Mode if Greedy Meshing is enabled to prevent UV stretching/artifacts
+        // Greedy meshing produces UVs > 1.0 which are incompatible with atlas remapping.
+        ExportRuntimeConfig.AtlasMode previousAtlasMode = ExportRuntimeConfig.getAtlasMode();
+        if (ExportRuntimeConfig.isLodGreedyMeshingEnabled() && previousAtlasMode != ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+            VoxelBridgeLogger.info(LogModule.LOD, "[LOD] Greedy meshing enabled: Temporarily forcing AtlasMode.INDIVIDUAL to prevent UV artifacts");
+            ExportRuntimeConfig.setAtlasMode(ExportRuntimeConfig.AtlasMode.INDIVIDUAL);
+        }
+
         // Resolve correct dimension path (overworld/nether/end)
         Path regionDir;
         if (level.dimension() == Level.OVERWORLD) {
@@ -60,6 +68,10 @@ public final class LodExportService {
                     .resolve("region");
         }
         if (!Files.isDirectory(regionDir)) {
+            // Restore config if early exit
+            if (ExportRuntimeConfig.isLodGreedyMeshingEnabled()) {
+                ExportRuntimeConfig.setAtlasMode(previousAtlasMode);
+            }
             throw new IllegalStateException("Region directory not found: " + regionDir);
         }
         VoxelBridgeLogger.info(LogModule.LOD, "[LOD] exportRegion start, regionDir=" + regionDir);
@@ -110,6 +122,9 @@ public final class LodExportService {
             sink.write(request);
         } finally {
             ctx.clearTextureState();
+            if (ExportRuntimeConfig.isLodGreedyMeshingEnabled()) {
+                ExportRuntimeConfig.setAtlasMode(previousAtlasMode);
+            }
         }
 
         VoxelBridgeLogger.info(LogModule.LOD, "[LOD] exportRegion done, output=" + outputPath);

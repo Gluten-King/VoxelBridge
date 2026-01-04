@@ -26,18 +26,14 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.BlockGetter;
-import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
-import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.material.FluidState;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
@@ -46,6 +42,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Arrays;
 import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
 import java.awt.image.BufferedImage;
 import com.mojang.blaze3d.vertex.PoseStack;
 import org.joml.Matrix4f;
@@ -65,30 +63,6 @@ public class VoxelMesher {
 
     public interface LodOverlayProvider extends LodFaceProvider {
         String getOverlaySpriteKey(int blockId, Direction dir);
-    }
-
-    public static final class LodFaceMeta {
-        public final int minX;
-        public final int maxX;
-        public final int minY;
-        public final int maxY;
-        public final float depth;
-        public final boolean empty;
-        public final boolean hasBakedTint;
-
-        public LodFaceMeta(int minX, int maxX, int minY, int maxY, float depth, boolean empty) {
-            this(minX, maxX, minY, maxY, depth, empty, false);
-        }
-
-        public LodFaceMeta(int minX, int maxX, int minY, int maxY, float depth, boolean empty, boolean hasBakedTint) {
-            this.minX = minX;
-            this.maxX = maxX;
-            this.minY = minY;
-            this.maxY = maxY;
-            this.depth = depth;
-            this.empty = empty;
-            this.hasBakedTint = hasBakedTint;
-        }
     }
     private final WorldEngine worldEngine;
     private final Mapper mapper;
@@ -126,6 +100,7 @@ public class VoxelMesher {
     private final Long2IntOpenHashMap tintCache = new Long2IntOpenHashMap();
     private final Int2ByteOpenHashMap fluidPresenceCache = new Int2ByteOpenHashMap();
     private final Int2IntOpenHashMap fluidBlockIdCache = new Int2IntOpenHashMap();
+    private boolean forceIndividualAtlas = false;
     // Cross-LOD caches
     private final Int2ByteOpenHashMap occlusionCache = new Int2ByteOpenHashMap();
     private final long[][] fineNeighborSnapshots = new long[24][];
@@ -151,137 +126,6 @@ public class VoxelMesher {
             this.faces = faces;
             this.tintIndices = tintIndices;
             this.baseTintIndices = baseTintIndices;
-        }
-    }
-
-    private static final class LodBlockGetter implements BlockGetter {
-        private final Mapper mapper;
-        private final int baseX;
-        private final int baseY;
-        private final int baseZ;
-        private final int minBuildHeight;
-        private final int height;
-        private final long[] data;
-        private final long[] negX;
-        private final long[] posX;
-        private final long[] negY;
-        private final long[] posY;
-        private final long[] negZ;
-        private final long[] posZ;
-
-        private LodBlockGetter(Mapper mapper,
-                               int baseX,
-                               int baseY,
-                               int baseZ,
-                               long[] data,
-                               long[] negX,
-                               long[] posX,
-                               long[] negY,
-                               long[] posY,
-                               long[] negZ,
-                               long[] posZ) {
-            this.mapper = mapper;
-            this.baseX = baseX;
-            this.baseY = baseY;
-            this.baseZ = baseZ;
-            this.minBuildHeight = baseY;
-            this.height = 32;
-            this.data = data;
-            this.negX = negX;
-            this.posX = posX;
-            this.negY = negY;
-            this.posY = posY;
-            this.negZ = negZ;
-            this.posZ = posZ;
-        }
-
-        @Override
-        public BlockState getBlockState(BlockPos pos) {
-            return resolveState(pos.getX(), pos.getY(), pos.getZ());
-        }
-
-        private BlockState resolveState(int x, int y, int z) {
-            int lx = x - baseX;
-            int ly = y - baseY;
-            int lz = z - baseZ;
-
-            long[] source = data;
-            int sx = lx;
-            int sy = ly;
-            int sz = lz;
-            int offsetCount = 0;
-
-            if (lx < 0) {
-                source = negX;
-                sx = lx + 32;
-                offsetCount++;
-            } else if (lx >= 32) {
-                source = posX;
-                sx = lx - 32;
-                offsetCount++;
-            }
-
-            if (ly < 0) {
-                if (offsetCount > 0) {
-                    return AIR_STATE;
-                }
-                source = negY;
-                sy = ly + 32;
-                offsetCount++;
-            } else if (ly >= 32) {
-                if (offsetCount > 0) {
-                    return AIR_STATE;
-                }
-                source = posY;
-                sy = ly - 32;
-                offsetCount++;
-            }
-
-            if (lz < 0) {
-                if (offsetCount > 0) {
-                    return AIR_STATE;
-                }
-                source = negZ;
-                sz = lz + 32;
-                offsetCount++;
-            } else if (lz >= 32) {
-                if (offsetCount > 0) {
-                    return AIR_STATE;
-                }
-                source = posZ;
-                sz = lz - 32;
-                offsetCount++;
-            }
-
-            if (source == null || sx < 0 || sx >= 32 || sy < 0 || sy >= 32 || sz < 0 || sz >= 32) {
-                return AIR_STATE;
-            }
-
-            long id = source[WorldSection.getIndex(sx, sy, sz)];
-            if (Mapper.isAir(id)) {
-                return AIR_STATE;
-            }
-            return mapper.getBlockStateFromBlockId(Mapper.getBlockId(id));
-        }
-
-        @Override
-        public BlockEntity getBlockEntity(BlockPos pos) {
-            return null;
-        }
-
-        @Override
-        public FluidState getFluidState(BlockPos pos) {
-            return getBlockState(pos).getFluidState();
-        }
-
-        @Override
-        public int getHeight() {
-            return height;
-        }
-
-        @Override
-        public int getMinBuildHeight() {
-            return minBuildHeight;
         }
     }
 
@@ -353,6 +197,11 @@ public class VoxelMesher {
 
     public void setSectionsToMesh(Set<Long> sectionsToMesh) {
         this.sectionsToMesh = sectionsToMesh;
+    }
+
+    private boolean isIndividualAtlasMode() {
+        return exportContext != null
+            && (forceIndividualAtlas || ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL);
     }
 
     // --- Cross-LOD helpers ---
@@ -511,6 +360,9 @@ public class VoxelMesher {
     }
 
     public void meshChunk(int chunkX, int chunkY, int chunkZ, int level) {
+        boolean greedyEnabled = ExportRuntimeConfig.isLodGreedyMeshingEnabled();
+        boolean prevForceIndividual = this.forceIndividualAtlas;
+        this.forceIndividualAtlas = greedyEnabled || ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL;
         int scale = 1 << level;
 
         WorldSection section = worldEngine.acquire(level, chunkX, chunkY, chunkZ);
@@ -546,14 +398,26 @@ public class VoxelMesher {
             if (level > 0) {
                 snapshotFineNeighbors(chunkX, chunkY, chunkZ, level - 1);
             }
-            
+            int[][] greedyFaceIds = null;
+            List<GreedyFacePayload>[] greedyPayloads = null;
+            Map<GreedyFaceKey, Integer>[] greedyPayloadMaps = null;
+            if (greedyEnabled) {
+                greedyFaceIds = new int[6][32 * 32 * 32];
+                greedyPayloads = new List[6];
+                greedyPayloadMaps = new Map[6];
+                for (int i = 0; i < 6; i++) {
+                    greedyPayloads[i] = new ArrayList<>();
+                    greedyPayloadMaps[i] = new HashMap<>();
+                }
+            }
+
             // Standard loop over 32x32x32 section
             for (int y = 0; y < 32; y++) {
                 for (int z = 0; z < 32; z++) {
                     for (int x = 0; x < 32; x++) {
                         int index = WorldSection.getIndex(x, y, z);
                         long blockIdLong = data[index];
-                        
+
                         if (Mapper.isAir(blockIdLong)) continue;
                         stats.nonAirBlocks++;
                         pos.set(originX + x, originY + y, originZ + z);
@@ -571,7 +435,7 @@ public class VoxelMesher {
                         }
                         // 使用 LodBlockGetter + Block.shouldRenderFace 进行可见性剔除，
                         // 支持跨 section 邻居（若邻居缺失则视为空气）。
-                        
+
                         if (shouldUseModelQuads(state, blockId)) {
                             emitModelQuads(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, scale, stats);
                             continue;
@@ -579,30 +443,57 @@ public class VoxelMesher {
 
                         int upDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.UP, state, level, chunkX, chunkY, chunkZ, x, y, z);
                         if (upDecision != FACE_DECISION_SKIP) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, upDecision, stats);
+                            boolean queued = greedyEnabled && upDecision == FACE_DECISION_FULL &&
+                                tryQueueGreedyFace(Direction.UP, state, blockId, biomeId, x, y, z, greedyFaceIds, greedyPayloads, greedyPayloadMaps);
+                            if (!queued) {
+                                emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, upDecision, stats);
+                            }
                         }
                         int downDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.DOWN, state, level, chunkX, chunkY, chunkZ, x, y, z);
                         if (downDecision != FACE_DECISION_SKIP) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, downDecision, stats);
+                            boolean queued = greedyEnabled && downDecision == FACE_DECISION_FULL &&
+                                tryQueueGreedyFace(Direction.DOWN, state, blockId, biomeId, x, y, z, greedyFaceIds, greedyPayloads, greedyPayloadMaps);
+                            if (!queued) {
+                                emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, downDecision, stats);
+                            }
                         }
                         int northDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.NORTH, state, level, chunkX, chunkY, chunkZ, x, y, z);
                         if (northDecision != FACE_DECISION_SKIP) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, northDecision, stats);
+                            boolean queued = greedyEnabled && northDecision == FACE_DECISION_FULL &&
+                                tryQueueGreedyFace(Direction.NORTH, state, blockId, biomeId, x, y, z, greedyFaceIds, greedyPayloads, greedyPayloadMaps);
+                            if (!queued) {
+                                emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, northDecision, stats);
+                            }
                         }
                         int southDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.SOUTH, state, level, chunkX, chunkY, chunkZ, x, y, z);
                         if (southDecision != FACE_DECISION_SKIP) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, southDecision, stats);
+                            boolean queued = greedyEnabled && southDecision == FACE_DECISION_FULL &&
+                                tryQueueGreedyFace(Direction.SOUTH, state, blockId, biomeId, x, y, z, greedyFaceIds, greedyPayloads, greedyPayloadMaps);
+                            if (!queued) {
+                                emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, southDecision, stats);
+                            }
                         }
                         int westDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.WEST, state, level, chunkX, chunkY, chunkZ, x, y, z);
                         if (westDecision != FACE_DECISION_SKIP) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, westDecision, stats);
+                            boolean queued = greedyEnabled && westDecision == FACE_DECISION_FULL &&
+                                tryQueueGreedyFace(Direction.WEST, state, blockId, biomeId, x, y, z, greedyFaceIds, greedyPayloads, greedyPayloadMaps);
+                            if (!queued) {
+                                emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, westDecision, stats);
+                            }
                         }
                         int eastDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.EAST, state, level, chunkX, chunkY, chunkZ, x, y, z);
                         if (eastDecision != FACE_DECISION_SKIP) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, eastDecision, stats);
+                            boolean queued = greedyEnabled && eastDecision == FACE_DECISION_FULL &&
+                                tryQueueGreedyFace(Direction.EAST, state, blockId, biomeId, x, y, z, greedyFaceIds, greedyPayloads, greedyPayloadMaps);
+                            if (!queued) {
+                                emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, eastDecision, stats);
+                            }
                         }
                     }
                 }
+            }
+            if (greedyEnabled) {
+                emitGreedyFaces(greedyFaceIds, greedyPayloads, chunkX, chunkY, chunkZ, scale, stats);
             }
             emitFluidFaces(blockGetter, pos, neighborPos,
                 data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ,
@@ -612,6 +503,7 @@ public class VoxelMesher {
                 level, chunkX, chunkY, chunkZ, stats.nonAirBlocks, stats.faces));
 
         } finally {
+            this.forceIndividualAtlas = prevForceIndividual;
             releaseFineNeighbors();
             occlusionCache.clear();
             if (negX != null) negX.release();
@@ -621,6 +513,534 @@ public class VoxelMesher {
             if (negZ != null) negZ.release();
             if (posZ != null) posZ.release();
             section.release();
+        }
+    }
+
+    private boolean tryQueueGreedyFace(Direction dir,
+                                       BlockState state,
+                                       int blockId,
+                                       int biomeId,
+                                       int localX,
+                                       int localY,
+                                       int localZ,
+                                       int[][] greedyFaceIds,
+                                       List<GreedyFacePayload>[] greedyPayloads,
+                                       Map<GreedyFaceKey, Integer>[] greedyPayloadMaps) {
+        GreedyFacePayload payload = buildGreedyPayload(state, blockId, biomeId, dir);
+        if (payload == null) {
+            return false;
+        }
+        GreedyFaceKey key = payload.key;
+        Map<GreedyFaceKey, Integer> map = greedyPayloadMaps[dir.ordinal()];
+        Integer id = map.get(key);
+        if (id == null) {
+            List<GreedyFacePayload> list = greedyPayloads[dir.ordinal()];
+            list.add(payload);
+            id = list.size();
+            map.put(key, id);
+        }
+        int idx = greedyGridIndex(dir, localX, localY, localZ);
+        greedyFaceIds[dir.ordinal()][idx] = id;
+        return true;
+    }
+
+    private GreedyFacePayload buildGreedyPayload(BlockState state, int blockId, int biomeId, Direction dir) {
+        if (state.getRenderShape() == RenderShape.INVISIBLE && !(state.getBlock() instanceof LiquidBlock)) {
+            return null;
+        }
+        String materialKey;
+        String spriteName;
+        LodFaceMeta faceMeta = null;
+        String overlaySprite = null;
+        boolean disableLodTexture = state.getBlock() instanceof LiquidBlock;
+        if (FORCE_LOD_MATERIAL) {
+            materialKey = LOD_MATERIAL_KEY;
+            spriteName = LOD_SPRITE_KEY;
+        } else {
+            if (disableLodTexture) {
+                spriteName = resolveSpriteKeyVanilla(state, blockId, dir);
+            } else {
+                spriteName = resolveSpriteKey(state, blockId, dir);
+                if (hasLodTextures(blockId) && lodTextureProvider instanceof LodFaceProvider faceProvider) {
+                    faceMeta = faceProvider.getFaceMeta(blockId, dir);
+                    if (lodTextureProvider instanceof LodOverlayProvider overlayProvider) {
+                        overlaySprite = overlayProvider.getOverlaySpriteKey(blockId, dir);
+                    }
+                }
+            }
+            materialKey = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+        }
+        if (faceMeta != null) {
+            // 仅当裁剪覆盖整块时才允许贪婪合并，否则保留原路径以避免 UV 失真
+            boolean fullFace = faceMeta.empty == false
+                && faceMeta.minX == 0 && faceMeta.maxX == 15
+                && faceMeta.minY == 0 && faceMeta.maxY == 15;
+            if (!fullFace) {
+                return null;
+            }
+        }
+
+        int tintIndex = resolveTintIndex(state, blockId, dir);
+        if (tintIndex < 0 && state.getBlock() instanceof LiquidBlock) {
+            tintIndex = 0;
+        }
+        int tintColor = resolveTintColor(blockId, state, biomeId, tintIndex);
+        boolean hasTint = tintColor != -1;
+
+        int baseTintColor;
+        int overlayTintColor;
+
+        if (overlaySprite != null) {
+            boolean isGrassBlock = state.getBlock() == Blocks.GRASS_BLOCK;
+            boolean isOverlayType = isOverlaySprite(overlaySprite);
+
+            if ((isGrassBlock && dir.getAxis().isHorizontal()) || isOverlayType) {
+                baseTintColor = -1;
+                overlayTintColor = tintColor;
+            } else {
+                baseTintColor = tintColor;
+                overlayTintColor = -1;
+            }
+        } else {
+            baseTintColor = tintColor;
+            overlayTintColor = -1;
+        }
+
+        float[] baseColors = WHITE_COLORS;
+        float[] overlayColors = WHITE_COLORS;
+        String combinedSprite = null;
+
+        if (overlaySprite != null && exportContext != null) {
+            combinedSprite = buildLayeredTintedSprite(exportContext, spriteName, baseTintColor, overlaySprite, overlayTintColor);
+            if (combinedSprite != null) {
+                spriteName = combinedSprite;
+                overlaySprite = null;
+                baseColors = WHITE_COLORS;
+            } else {
+                baseColors = resolveColors(baseTintColor, baseTintColor != -1);
+                overlayColors = resolveColors(overlayTintColor, overlayTintColor != -1);
+            }
+        } else {
+            if (hasTint) {
+                baseColors = resolveColors(baseTintColor, true);
+            } else {
+                baseColors = WHITE_COLORS;
+            }
+        }
+
+        if (exportContext != null) {
+            if (combinedSprite != null) {
+                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, 0xFFFFFF);
+            } else {
+                boolean isBaseTinted = baseTintColor != -1;
+                boolean isOverlay = overlaySprite != null && overlayTintColor != -1;
+                boolean isBaseSpriteOverlay = isOverlaySprite(spriteName);
+
+                if (isBaseTinted || isBaseSpriteOverlay) {
+                    int colorToRegister = (overlaySprite != null) ? 0xFFFFFF : (isBaseTinted ? baseTintColor : 0xFFFFFF);
+                    com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, colorToRegister);
+                }
+
+                if (overlaySprite != null) {
+                    int overlayRegColor = overlayTintColor != -1 ? overlayTintColor : 0xFFFFFF;
+                    com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, overlayRegColor);
+                }
+            }
+        }
+
+        boolean individualMode = isIndividualAtlasMode();
+        if (individualMode) {
+            materialKey = overlaySprite != null ? (spriteName + "+ov+" + overlaySprite) : spriteName;
+        }
+
+        // Default full-face UVs; tiling spans are computed in emitGreedyQuad.
+        float u0 = 0f;
+        float u1 = 1f;
+        float v0 = 0f;
+        float v1 = 1f;
+        float uvU0 = 0f;
+        float uvU1 = 1f;
+        float uvV0 = 0f;
+        float uvV1 = 1f;
+
+        return new GreedyFacePayload(
+            new GreedyFaceKey(blockId, materialKey, spriteName, overlaySprite, baseTintColor, overlayTintColor),
+            baseColors,
+            overlayColors,
+            u0, u1, v0, v1,
+            uvU0, uvU1, uvV0, uvV1
+        );
+    }
+
+    private void emitGreedyFaces(int[][] faceIds,
+                                 List<GreedyFacePayload>[] payloads,
+                                 int chunkX,
+                                 int chunkY,
+                                 int chunkZ,
+                                 int scale,
+                                 MeshStats stats) {
+        for (Direction dir : Direction.values()) {
+            int dirIdx = dir.ordinal();
+            int[] grid = faceIds[dirIdx];
+            List<GreedyFacePayload> plist = payloads[dirIdx];
+            if (grid == null || plist == null || plist.isEmpty()) {
+                continue;
+            }
+            GreedyLayerMesher mesher = new GreedyLayerMesher(dir, plist, chunkX, chunkY, chunkZ, scale, stats);
+            for (int layer = 0; layer < 32; layer++) {
+                mesher.setLayer(layer);
+                for (int v = 0; v < 32; v++) {
+                    int rowBase = (layer * 32 + v) * 32;
+                    for (int u = 0; u < 32; u++) {
+                        mesher.putNext(grid[rowBase + u]);
+                    }
+                    mesher.endRow();
+                }
+                mesher.finishLayer();
+            }
+        }
+    }
+
+    private static int greedyGridIndex(Direction dir, int localX, int localY, int localZ) {
+        int layer;
+        int u;
+        int v;
+        switch (dir) {
+            case DOWN, UP -> {
+                layer = localY;
+                u = localX;
+                v = localZ;
+            }
+            case NORTH, SOUTH -> {
+                layer = localZ;
+                u = localX;
+                v = localY;
+            }
+            case WEST, EAST -> {
+                layer = localX;
+                u = localZ;
+                v = localY;
+            }
+            default -> throw new IllegalStateException("Unexpected value: " + dir);
+        }
+        return (layer * 32 + v) * 32 + u;
+    }
+
+    private final class GreedyLayerMesher extends ScanMesher2D {
+        private final Direction dir;
+        private final List<GreedyFacePayload> payloads;
+        private final int chunkX;
+        private final int chunkY;
+        private final int chunkZ;
+        private final int scale;
+        private final MeshStats stats;
+        private int layer;
+
+        private GreedyLayerMesher(Direction dir, List<GreedyFacePayload> payloads, int chunkX, int chunkY, int chunkZ, int scale, MeshStats stats) {
+            this.dir = dir;
+            this.payloads = payloads;
+            this.chunkX = chunkX;
+            this.chunkY = chunkY;
+            this.chunkZ = chunkZ;
+            this.scale = scale;
+            this.stats = stats;
+        }
+
+        private void setLayer(int layer) {
+            this.layer = layer;
+        }
+
+        private void finishLayer() {
+            this.finish();
+        }
+
+        @Override
+        protected void emitQuad(int x, int z, int length, int width, long data) {
+            if (data == 0) {
+                return;
+            }
+            GreedyFacePayload payload = this.payloads.get((int) data - 1);
+            int startU = x - (length - 1);
+            int startV = z - (width - 1);
+            emitGreedyQuad(payload, this.dir, this.layer, startU, startV, length, width, this.chunkX, this.chunkY, this.chunkZ, this.scale, this.stats);
+        }
+    }
+
+    private void emitGreedyQuad(GreedyFacePayload payload,
+                                Direction dir,
+                                int layer,
+                                int startU,
+                                int startV,
+                                int length,
+                                int width,
+                                int chunkX,
+                                int chunkY,
+                                int chunkZ,
+                                int scale,
+                                MeshStats stats) {
+        // 对贪婪合并的面，UV 按方块重复而非拉伸，保持与非贪婪一致的平铺密度
+        float u0 = 0f;
+        float u1 = 1f;
+        float v0 = 0f;
+        float v1 = 1f;
+        float uvU0 = startU;
+        float uvU1 = startU + length;
+        float uvV0 = startV;
+        float uvV1 = startV + width;
+
+        int localX;
+        int localY;
+        int localZ;
+        switch (dir) {
+            case DOWN, UP -> {
+                localX = startU;
+                localY = layer;
+                localZ = startV;
+            }
+            case NORTH, SOUTH -> {
+                localX = startU;
+                localY = startV;
+                localZ = layer;
+            }
+            case WEST, EAST -> {
+                localX = layer;
+                localY = startV;
+                localZ = startU;
+            }
+            default -> throw new IllegalStateException("Unexpected value: " + dir);
+        }
+
+        float baseX = (float) ((chunkX * 32 + localX) * scale + offsetX);
+        float baseY = (float) ((chunkY * 32 + localY) * scale + offsetY);
+        float baseZ = (float) ((chunkZ * 32 + localZ) * scale + offsetZ);
+
+        float x1;
+        float y1;
+        float z1;
+        switch (dir) {
+            case DOWN, UP -> {
+                x1 = baseX + length * scale;
+                y1 = baseY + scale;
+                z1 = baseZ + width * scale;
+            }
+            case NORTH, SOUTH -> {
+                x1 = baseX + length * scale;
+                y1 = baseY + width * scale;
+                z1 = baseZ + scale;
+            }
+            case WEST, EAST -> {
+                x1 = baseX + scale;
+                y1 = baseY + width * scale;
+                z1 = baseZ + length * scale;
+            }
+            default -> throw new IllegalStateException("Unexpected value: " + dir);
+        }
+
+        float[] positions;
+        float[] normals = new float[]{dir.getStepX(), dir.getStepY(), dir.getStepZ()};
+
+        switch (dir) {
+            case DOWN -> {
+                float xx0 = lerp(baseX, x1, u0);
+                float xx1 = lerp(baseX, x1, u1);
+                float zz0 = lerp(baseZ, z1, v0);
+                float zz1 = lerp(baseZ, z1, v1);
+                float yy = baseY;
+                positions = new float[]{
+                    xx0, yy, zz1,
+                    xx0, yy, zz0,
+                    xx1, yy, zz0,
+                    xx1, yy, zz1
+                };
+            }
+            case UP -> {
+                float xx0 = lerp(baseX, x1, u0);
+                float xx1 = lerp(baseX, x1, u1);
+                float zz0 = lerp(baseZ, z1, v0);
+                float zz1 = lerp(baseZ, z1, v1);
+                float yy = baseY + scale;
+                positions = new float[]{
+                    xx0, yy, zz0,
+                    xx0, yy, zz1,
+                    xx1, yy, zz1,
+                    xx1, yy, zz0
+                };
+            }
+            case NORTH -> {
+                float xx0 = lerp(baseX, x1, u0);
+                float xx1 = lerp(baseX, x1, u1);
+                float yy0 = lerp(baseY, y1, v0);
+                float yy1 = lerp(baseY, y1, v1);
+                float zz = baseZ;
+                positions = new float[]{
+                    xx1, yy1, zz,
+                    xx1, yy0, zz,
+                    xx0, yy0, zz,
+                    xx0, yy1, zz
+                };
+            }
+            case SOUTH -> {
+                float xx0 = lerp(baseX, x1, u0);
+                float xx1 = lerp(baseX, x1, u1);
+                float yy0 = lerp(baseY, y1, v0);
+                float yy1 = lerp(baseY, y1, v1);
+                float zz = baseZ + scale;
+                positions = new float[]{
+                    xx0, yy1, zz,
+                    xx0, yy0, zz,
+                    xx1, yy0, zz,
+                    xx1, yy1, zz
+                };
+            }
+            case WEST -> {
+                float zz0 = lerp(baseZ, z1, u0);
+                float zz1 = lerp(baseZ, z1, u1);
+                float yy0 = lerp(baseY, y1, v0);
+                float yy1 = lerp(baseY, y1, v1);
+                float xx = baseX;
+                positions = new float[]{
+                    xx, yy1, zz0,
+                    xx, yy0, zz0,
+                    xx, yy0, zz1,
+                    xx, yy1, zz1
+                };
+            }
+            case EAST -> {
+                float zz0 = lerp(baseZ, z1, u0);
+                float zz1 = lerp(baseZ, z1, u1);
+                float yy0 = lerp(baseY, y1, v0);
+                float yy1 = lerp(baseY, y1, v1);
+                float xx = baseX + scale;
+                positions = new float[]{
+                    xx, yy1, zz1,
+                    xx, yy0, zz1,
+                    xx, yy0, zz0,
+                    xx, yy1, zz0
+                };
+            }
+            default -> positions = new float[12];
+        }
+
+        float[] uvTemplate = FACE_UV_TEMPLATE[dir.get3DDataValue()];
+        float[] uvs = new float[]{
+            lerp(uvU0, uvU1, uvTemplate[0]), lerp(uvV0, uvV1, uvTemplate[1]),
+            lerp(uvU0, uvU1, uvTemplate[2]), lerp(uvV0, uvV1, uvTemplate[3]),
+            lerp(uvU0, uvU1, uvTemplate[4]), lerp(uvV0, uvV1, uvTemplate[5]),
+            lerp(uvU0, uvU1, uvTemplate[6]), lerp(uvV0, uvV1, uvTemplate[7])
+        };
+
+        sink.addQuad(
+            payload.key.materialKey,
+            payload.key.spriteName,
+            null,
+            positions,
+            uvs,
+            null,
+            normals,
+            payload.baseColors,
+            false
+        );
+
+        if (payload.key.overlaySprite != null) {
+            float eps = 0.001f * scale;
+            float[] overlayPos = positions.clone();
+            for (int i = 0; i < 4; i++) {
+                int p = i * 3;
+                overlayPos[p] += normals[0] * eps;
+                overlayPos[p + 1] += normals[1] * eps;
+                overlayPos[p + 2] += normals[2] * eps;
+            }
+            sink.addQuad(
+                payload.key.materialKey,
+                payload.key.overlaySprite,
+                null,
+                overlayPos,
+                uvs,
+                null,
+                normals,
+                payload.overlayColors,
+                false
+            );
+        }
+        stats.faces++;
+    }
+
+    private static final class GreedyFaceKey {
+        private final int blockId;
+        private final String materialKey;
+        private final String spriteName;
+        private final String overlaySprite;
+        private final int baseTintColor;
+        private final int overlayTintColor;
+
+        private GreedyFaceKey(int blockId, String materialKey, String spriteName, String overlaySprite, int baseTintColor, int overlayTintColor) {
+            this.blockId = blockId;
+            this.materialKey = materialKey;
+            this.spriteName = spriteName;
+            this.overlaySprite = overlaySprite;
+            this.baseTintColor = baseTintColor;
+            this.overlayTintColor = overlayTintColor;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof GreedyFaceKey key)) return false;
+            if (blockId != key.blockId) return false;
+            if (baseTintColor != key.baseTintColor) return false;
+            if (overlayTintColor != key.overlayTintColor) return false;
+            if (!materialKey.equals(key.materialKey)) return false;
+            if (!spriteName.equals(key.spriteName)) return false;
+            return overlaySprite != null ? overlaySprite.equals(key.overlaySprite) : key.overlaySprite == null;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = blockId;
+            result = 31 * result + materialKey.hashCode();
+            result = 31 * result + spriteName.hashCode();
+            result = 31 * result + (overlaySprite != null ? overlaySprite.hashCode() : 0);
+            result = 31 * result + baseTintColor;
+            result = 31 * result + overlayTintColor;
+            return result;
+        }
+    }
+
+    private static final class GreedyFacePayload {
+        private final GreedyFaceKey key;
+        private final float[] baseColors;
+        private final float[] overlayColors;
+        private final float u0;
+        private final float u1;
+        private final float v0;
+        private final float v1;
+        private final float uvU0;
+        private final float uvU1;
+        private final float uvV0;
+        private final float uvV1;
+
+        private GreedyFacePayload(GreedyFaceKey key,
+                                  float[] baseColors,
+                                  float[] overlayColors,
+                                  float u0,
+                                  float u1,
+                                  float v0,
+                                  float v1,
+                                  float uvU0,
+                                  float uvU1,
+                                  float uvV0,
+                                  float uvV1) {
+            this.key = key;
+            this.baseColors = baseColors;
+            this.overlayColors = overlayColors;
+            this.u0 = u0;
+            this.u1 = u1;
+            this.v0 = v0;
+            this.v1 = v1;
+            this.uvU0 = uvU0;
+            this.uvU1 = uvU1;
+            this.uvV0 = uvV0;
+            this.uvV1 = uvV1;
         }
     }
 
@@ -1129,8 +1549,7 @@ public class VoxelMesher {
         float uvV0 = 0f;
         float uvV1 = 1f;
 
-        boolean individualMode = exportContext != null
-            && ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL;
+        boolean individualMode = isIndividualAtlasMode();
 
         if (faceMeta != null) {
             u0 = faceMeta.minX / 16.0f;
@@ -1449,7 +1868,7 @@ public class VoxelMesher {
             }
 
             String matKey = materialKey;
-            if (exportContext != null && ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+            if (exportContext != null && isIndividualAtlasMode()) {
                 matKey = spriteKey;
             }
 
@@ -1843,61 +2262,6 @@ public class VoxelMesher {
             uvTemplate[i * 2 + 1] = clamp01(v);
         }
         return uvTemplate;
-    }
-
-    private static final class LodTintGetter implements BlockAndTintGetter {
-        private final BlockState state;
-        private final Biome biome;
-
-        private LodTintGetter(BlockState state, Biome biome) {
-            this.state = state;
-            this.biome = biome;
-        }
-
-        @Override
-        public float getShade(Direction direction, boolean shaded) {
-            return 0;
-        }
-
-        @Override
-        public int getBrightness(LightLayer type, BlockPos pos) {
-            return 0;
-        }
-
-        @Override
-        public LevelLightEngine getLightEngine() {
-            return null;
-        }
-
-        @Override
-        public int getBlockTint(BlockPos pos, net.minecraft.world.level.ColorResolver colorResolver) {
-            return colorResolver.getColor(biome, 0, 0);
-        }
-
-        @Override
-        public BlockEntity getBlockEntity(BlockPos pos) {
-            return null;
-        }
-
-        @Override
-        public BlockState getBlockState(BlockPos pos) {
-            return state;
-        }
-
-        @Override
-        public FluidState getFluidState(BlockPos pos) {
-            return state.getFluidState();
-        }
-
-        @Override
-        public int getHeight() {
-            return 0;
-        }
-
-        @Override
-        public int getMinBuildHeight() {
-            return 0;
-        }
     }
 
     /**

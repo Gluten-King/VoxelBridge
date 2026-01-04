@@ -326,6 +326,25 @@ public final class VoxelBridgeCommands {
                     ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD export -> OFF (full detail only)"));
                     return 1;
                 }))
+                .then(Commands.literal("greedy")
+                    .executes(ctx -> {
+                        boolean on = ExportRuntimeConfig.isLodGreedyMeshingEnabled();
+                        ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] LOD greedy meshing is currently f" + (on ? "on" : "off")));
+                        ctx.getSource().sendSystemMessage(Component.literal("7   Usage: /voxelbridge lod greedy <on|off>"));
+                        ctx.getSource().sendSystemMessage(Component.literal("7   开启后：强制贪婪合并 + 纹理走 INDIVIDUAL"));
+                        return 1;
+                    })
+                    .then(Commands.literal("on").executes(ctx -> {
+                        ExportRuntimeConfig.setLodGreedyMeshingEnabled(true);
+                        ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD greedy meshing -> ON (强制 INDIVIDUAL atlas)"));
+                        return 1;
+                    }))
+                    .then(Commands.literal("off").executes(ctx -> {
+                        ExportRuntimeConfig.setLodGreedyMeshingEnabled(false);
+                        ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] LOD greedy meshing -> OFF"));
+                        return 1;
+                    }))
+                )
                 .then(Commands.literal("radius")
                     .executes(ctx -> {
                         ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Current LOD fine radius: f" + ExportRuntimeConfig.getLodFineChunkRadius() + " chunks"));

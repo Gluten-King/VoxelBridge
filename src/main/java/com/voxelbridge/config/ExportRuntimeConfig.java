@@ -90,6 +90,8 @@ public final class ExportRuntimeConfig {
     private static boolean lodEnabled = true;
     // Radius in chunks for the finest detail level (LOD 0).
     private static int lodFineChunkRadius = 8;
+    // Greedy LOD meshing toggle (when true, force greedy merge + individual textures).
+    private static boolean lodGreedyMeshingEnabled = false;
 
     public static AtlasMode getAtlasMode() {
         return atlasMode;
@@ -195,6 +197,17 @@ public final class ExportRuntimeConfig {
 
     public static void setLodEnabled(boolean enabled) {
         lodEnabled = enabled;
+    }
+
+    public static boolean isLodGreedyMeshingEnabled() {
+        return lodGreedyMeshingEnabled;
+    }
+
+    public static void setLodGreedyMeshingEnabled(boolean enabled) {
+        lodGreedyMeshingEnabled = enabled;
+        if (enabled) {
+            atlasMode = AtlasMode.INDIVIDUAL;
+        }
     }
 
     public static int getLodFineChunkRadius() {

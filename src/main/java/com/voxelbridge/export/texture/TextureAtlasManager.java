@@ -891,7 +891,17 @@ public final class TextureAtlasManager {
     }
 
     private static String safe(String spriteKey) {
-        return spriteKey.replace(':', '_').replace('/', '_');
+        // Windows 禁止 \ / : * ? " < > |，统一替换为下划线
+        return spriteKey
+            .replace('\\', '_')
+            .replace('/', '_')
+            .replace(':', '_')
+            .replace('*', '_')
+            .replace('?', '_')
+            .replace('"', '_')
+            .replace('<', '_')
+            .replace('>', '_')
+            .replace('|', '_');
     }
 
     private static boolean isBlockEntitySprite(String spriteKey) {

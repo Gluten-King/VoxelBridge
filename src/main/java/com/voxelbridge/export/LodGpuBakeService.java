@@ -7,6 +7,7 @@ import com.voxelbridge.voxy.client.core.model.ModelBakerySubsystem;
 import com.voxelbridge.voxy.client.core.model.TextureUtils;
 import com.voxelbridge.voxy.common.world.other.Mapper;
 import com.voxelbridge.voxy.mesh.VoxelMesher;
+import com.voxelbridge.voxy.mesh.LodFaceMeta;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
@@ -116,7 +117,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
     }
 
     @Override
-    public VoxelMesher.LodFaceMeta getFaceMeta(int blockId, Direction dir) {
+    public LodFaceMeta getFaceMeta(int blockId, Direction dir) {
         FaceBakeData data = bakedData.get(blockId);
         if (data == null) {
             return null;
@@ -274,7 +275,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
             }
         }
 
-        VoxelMesher.LodFaceMeta meta = buildFaceMeta(tex, checkMode, hasBakedTint, blockId, dir);
+        LodFaceMeta meta = buildFaceMeta(tex, checkMode, hasBakedTint, blockId, dir);
 
         // Debug: save bake result images (use /voxelbridge bakedebug command instead)
         // if (BAKE_DEBUG && hasBase) {
@@ -317,15 +318,15 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         return new FaceEntry(baseKey, meta);
     }
 
-    private static VoxelMesher.LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode, boolean hasBakedTint, int blockId, Direction dir) {
+    private static LodFaceMeta buildFaceMeta(ColourDepthTextureData tex, int checkMode, boolean hasBakedTint, int blockId, Direction dir) {
         int written = TextureUtils.getWrittenPixelCount(tex, checkMode);
         if (written == 0) {
-            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
+            return new LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
         }
         int[] bounds = TextureUtils.computeBounds(tex, checkMode);
         float depth = TextureUtils.computeDepth(tex, TextureUtils.DEPTH_MODE_AVG, checkMode);
         if (depth < -0.1f || bounds[0] >= tex.width() || bounds[1] < 0 || bounds[2] >= tex.height() || bounds[3] < 0) {
-            return new VoxelMesher.LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
+            return new LodFaceMeta(0, 0, 0, 0, 0f, true, hasBakedTint);
         }
 
         // bounds[0..3] = [minX, maxX, minY, maxY] in OpenGL texture coords (Y=0 at bottom)
@@ -348,7 +349,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
                 minX, maxX, minY, maxY, depth, written));
         }
 
-        return new VoxelMesher.LodFaceMeta(minX, maxX, minY, maxY, depth, false, hasBakedTint);
+        return new LodFaceMeta(minX, maxX, minY, maxY, depth, false, hasBakedTint);
     }
 
     private static int selectCheckMode(BlockState state) {
@@ -463,8 +464,8 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
     private static final class FaceBakeData {
         private final String[] spriteKeys = new String[6];
         private final String[] overlayKeys = new String[6];
-        private final VoxelMesher.LodFaceMeta[] metas = new VoxelMesher.LodFaceMeta[6];
+        private final LodFaceMeta[] metas = new LodFaceMeta[6];
     }
 
-    private record FaceEntry(String spriteKey, VoxelMesher.LodFaceMeta meta) {}
+    private record FaceEntry(String spriteKey, LodFaceMeta meta) {}
 }
