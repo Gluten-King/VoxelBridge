@@ -309,11 +309,11 @@ public final class StreamingRegionSampler {
 
             // OPTIMIZATION: Use ChunkSection API for faster block state access (1.3-1.8x speedup)
             // Reduces 98,304 method calls per chunk by accessing palette directly
-            int minSectionY = level.getMinSection();
-            int maxSectionY = level.getMaxSection();
-            int worldMinY = level.getMinBuildHeight();
+            int minSectionY = level.getMinSectionY();
+            int maxSectionY = level.getMaxSectionY();
+            int worldMinY = level.getMinY();
 
-            // getMaxSection() is exclusive; iterate while < maxSectionY to avoid AIOOB on the last index
+            // getMaxSectionY() is exclusive; iterate while < maxSectionY to avoid AIOOB on the last index
             for (int sectionIndex = minSectionY; sectionIndex < maxSectionY; sectionIndex++) {
                 // Get section (16x16x16 block region)
                 LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(sectionIndex));
@@ -457,9 +457,9 @@ public final class StreamingRegionSampler {
 
             // OPTIMIZATION: Use ChunkSection API for faster block state access
             // This mirrors the fast path in exportChunk
-            int minSectionY = level.getMinSection();
-            int maxSectionY = level.getMaxSection();
-            int worldMinY = level.getMinBuildHeight();
+            int minSectionY = level.getMinSectionY();
+            int maxSectionY = level.getMaxSectionY();
+            int worldMinY = level.getMinY();
 
             for (int sectionIndex = minSectionY; sectionIndex < maxSectionY; sectionIndex++) {
                 LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(sectionIndex));

@@ -10,17 +10,14 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import com.voxelbridge.modhandler.ModHandlerRegistry;
-import com.voxelbridge.modhandler.frapi.FabricApiHelper;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.export.util.geometry.VertexExtractor;
-import net.fabricmc.fabric.api.renderer.v1.model.FabricBakedModel;
-import net.fabricmc.fabric.api.renderer.v1.model.SpriteFinder;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.block.model.BlockModelPart;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -34,8 +31,8 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.neoforge.client.extensions.IBakedModelExtension;
-import net.neoforged.neoforge.client.model.data.ModelData;
+import net.neoforged.neoforge.client.extensions.BlockStateModelExtension;
+import net.neoforged.neoforge.model.data.ModelData;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -43,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.lang.reflect.Method;
 
 /**
  * Simplified block geometry exporter.
@@ -54,7 +52,6 @@ public final class BlockExporter {
     private final SceneSink blockEntitySceneSink;
     private final Level level;
     private final ClientChunkCache chunkCache;
-    private final SpriteFinder spriteFinder;
     private final boolean vanillaRandomTransformEnabled;
     private final BlockEntityRenderBatch blockEntityBatch;
 
@@ -70,6 +67,7 @@ public final class BlockExporter {
 
     private final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
     private volatile boolean missingNeighborDetected = false;
+    private static volatile Method blockModelPartQuadsMethod;
 
     public BlockExporter(ExportContext ctx, SceneSink sceneSink, Level level) {
         this(ctx, sceneSink, level, null, sceneSink);
@@ -85,7 +83,6 @@ public final class BlockExporter {
         this.blockEntitySceneSink = blockEntitySceneSink != null ? blockEntitySceneSink : sceneSink;
         this.level = level;
         this.chunkCache = (level instanceof ClientLevel cl) ? cl.getChunkSource() : null;
-        this.spriteFinder = SpriteFinder.get(ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS));
         this.vanillaRandomTransformEnabled = ctx.isVanillaRandomTransformEnabled();
         this.blockEntityBatch = blockEntityBatch;
     }
@@ -127,7 +124,7 @@ public final class BlockExporter {
         if (state.isAir()) return;
 
         // Vanilla random offset (grass, fern, etc.)
-        Vec3 randomOffset = vanillaRandomTransformEnabled ? state.getOffset(level, pos) : Vec3.ZERO;
+        Vec3 randomOffset = vanillaRandomTransformEnabled ? state.getOffset(pos) : Vec3.ZERO;
 
         // Export fluid
         FluidState fluidState = state.getFluidState();
@@ -153,11 +150,11 @@ public final class BlockExporter {
         if (state.getRenderShape() == RenderShape.INVISIBLE) return;
 
         // Get block model
-        BakedModel model = ctx.getMc().getModelManager().getBlockModelShaper().getBlockModel(state);
+        BlockStateModel model = ctx.getMc().getModelManager().getBlockModelShaper().getBlockModel(state);
         if (model == null) return;
 
         // Occlusion culling for opaque blocks
-        boolean isTransparent = !state.isSolidRender(level, pos);
+        boolean isTransparent = !state.isSolidRender();
         if (!isTransparent && isFullyOccluded(pos)) return;
 
         // Get model data (for CTM/connected textures)
@@ -185,9 +182,9 @@ public final class BlockExporter {
 
         // PASS 1b: Detect and cache overlays
         for (BakedQuad quad : quads) {
-            if (quad == null || quad.getSprite() == null) continue;
+            if (quad == null || quad.sprite() == null) continue;
 
-            String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
+            String spriteKey = SpriteKeyResolver.resolve(quad.sprite());
 
             // Check vanilla overlay
             if (OverlayManager.isVanillaOverlay(spriteKey)) {
@@ -209,10 +206,10 @@ public final class BlockExporter {
         for (BakedQuad quad : quads) {
             if (quad == null) continue;
 
-            Direction dir = quad.getDirection();
+            Direction dir = quad.direction();
 
             // Skip if processed as overlay
-            String spriteKey = SpriteKeyResolver.resolve(quad.getSprite());
+            String spriteKey = SpriteKeyResolver.resolve(quad.sprite());
             if (overlayManager.isProcessedOverlay(spriteKey)) {
                 continue;
             }
@@ -241,9 +238,9 @@ public final class BlockExporter {
 
         for (int i = 0; i < quads.size(); i++) {
             BakedQuad quad = quads.get(i);
-            if (quad == null || quad.getSprite() == null) continue;
+            if (quad == null || quad.sprite() == null) continue;
 
-            var sprite = quad.getSprite();
+            var sprite = quad.sprite();
             String spriteKey = SpriteKeyResolver.resolve(sprite);
             var vertexData = VertexExtractor.extractFromQuad(quad, pos, sprite, offsetX, offsetY, offsetZ, randomOffset);
             long posHash = computePositionHash(vertexData.positions());
@@ -354,49 +351,77 @@ public final class BlockExporter {
     /**
      * Gets model data for CTM/connected textures support.
      */
-    private ModelData getModelData(BakedModel model, BlockState state, BlockPos pos) {
-        ModelData modelData = ModelData.EMPTY;
+    private ModelData getModelData(BlockStateModel model, BlockState state, BlockPos pos) {
         try {
-            modelData = level.getModelData(pos);
-        } catch (Throwable ignored) {}
-
-        try {
-            if (model instanceof IBakedModelExtension extension) {
-                modelData = extension.getModelData(level, pos, state, modelData);
-            }
-        } catch (Throwable ignored) {}
-
-        return modelData;
+            return level.getModelData(pos);
+        } catch (Throwable ignored) {
+            return ModelData.EMPTY;
+        }
     }
 
     /**
      * Gets quads from model, using Fabric API for CTM models.
      */
-    private List<BakedQuad> getQuads(BakedModel model, BlockState state, ModelData data, BlockPos pos) {
+    private List<BakedQuad> getQuads(BlockStateModel model, BlockState state, ModelData data, BlockPos pos) {
         List<BakedQuad> quads = new ArrayList<>();
 
         long seed = state.is(Blocks.LILY_PAD) ? computeBushSeed(pos) : Mth.getSeed(pos.getX(), pos.getY(), pos.getZ());
         RandomSource rand = RandomSource.create(seed);
 
-        // Try Fabric API for CTM models
-        if (model instanceof FabricBakedModel fabricModel && !fabricModel.isVanillaAdapter()) {
-            List<BakedQuad> fabricQuads = FabricApiHelper.extractQuads(fabricModel, level, state, pos, rand, spriteFinder);
-            if (!fabricQuads.isEmpty()) {
-                return fabricQuads;
-            }
-        }
-
-        // Fallback to vanilla API
+        // Collect parts using the new BlockStateModel API.
+        List<BlockModelPart> parts = new ArrayList<>();
         try {
-            for (Direction dir : Direction.values()) {
-                List<BakedQuad> q = model.getQuads(state, dir, rand, data, null);
-                if (q != null) quads.addAll(q);
+            if (model instanceof BlockStateModelExtension extension) {
+                extension.collectParts(level, pos, state, rand, parts);
+            } else {
+                model.collectParts(rand, parts);
             }
-            List<BakedQuad> q2 = model.getQuads(state, null, rand, data, null);
-            if (q2 != null) quads.addAll(q2);
         } catch (Throwable ignored) {}
 
+        if (parts.isEmpty()) {
+            return quads;
+        }
+
+        for (BlockModelPart part : parts) {
+            for (Direction dir : Direction.values()) {
+                quads.addAll(extractQuads(part, dir));
+            }
+            quads.addAll(extractQuads(part, null));
+        }
+
         return quads;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<BakedQuad> extractQuads(BlockModelPart part, Direction dir) {
+        if (part == null) return java.util.Collections.emptyList();
+        try {
+            Method method = blockModelPartQuadsMethod;
+            if (method == null) {
+                method = findBlockModelPartQuadsMethod(part.getClass());
+                blockModelPartQuadsMethod = method;
+            }
+            if (method == null) {
+                return java.util.Collections.emptyList();
+            }
+            Object result = method.invoke(part, dir);
+            if (result instanceof List<?> list) {
+                return (List<BakedQuad>) list;
+            }
+        } catch (Throwable ignored) {}
+        return java.util.Collections.emptyList();
+    }
+
+    private static Method findBlockModelPartQuadsMethod(Class<?> type) {
+        for (Method method : type.getMethods()) {
+            Class<?>[] params = method.getParameterTypes();
+            if (params.length != 1) continue;
+            if (!net.minecraft.core.Direction.class.isAssignableFrom(params[0])) continue;
+            if (!java.util.List.class.isAssignableFrom(method.getReturnType())) continue;
+            method.setAccessible(true);
+            return method;
+        }
+        return null;
     }
 
     // ===== Occlusion culling helpers =====
@@ -437,14 +462,14 @@ public final class BlockExporter {
         if (neighborState == null) return false;
 
         // Opaque blocks: standard occlusion check (is neighbor solid?)
-        if (state.isSolidRender(level, pos)) {
+        if (state.isSolidRender()) {
             // Re-use isNeighborSolid logic but with state we already fetched
             if (ExportRuntimeConfig.isFillCaveEnabled()) {
                 if (neighborState.isAir() && level.getBrightness(LightLayer.SKY, mutablePos) == 0) {
                     return true;
                 }
             }
-            return neighborState.isSolidRender(level, mutablePos);
+            return neighborState.isSolidRender();
         }
 
         // Transparent blocks (Glass, etc.): use skipRendering (culls against same block)
@@ -472,7 +497,7 @@ public final class BlockExporter {
                 return true;
             }
         }
-        return state.isSolidRender(level, neighbor);
+        return state.isSolidRender();
     }
 
     private boolean isOutsideRegion(BlockPos pos) {

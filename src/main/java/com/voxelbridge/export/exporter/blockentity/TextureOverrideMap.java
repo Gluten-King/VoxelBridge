@@ -23,4 +23,11 @@ public interface TextureOverrideMap {
      * Indicates whether a quad should be skipped entirely.
      */
     boolean skipQuad(ResourceLocation spriteName, float[] localU, float[] localV);
+
+    /**
+     * Forces UVs to be treated as sprite-space (0..1) for overrides.
+     */
+    default boolean forceSpriteUvs() {
+        return false;
+    }
 }

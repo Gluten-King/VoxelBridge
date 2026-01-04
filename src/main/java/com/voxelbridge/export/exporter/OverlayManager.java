@@ -158,10 +158,10 @@ public final class OverlayManager {
         // Mark sprite as processed (all overlays skip PASS 2)
         processedOverlaySprites.add(spriteKey);
 
-        var sprite = quad.getSprite();
+        var sprite = quad.sprite();
         if (sprite == null) return;
 
-        Direction dir = quad.getDirection();
+        Direction dir = quad.direction();
 
         // Register dynamic overlay texture
         boolean isDynamicTexture = spriteKey.contains("_overlay")
@@ -191,7 +191,7 @@ public final class OverlayManager {
         float[] localPos = positions12Pool.acquire();
 
         try {
-            int[] verts = quad.getVertices();
+            int[] verts = quad.vertices();
             if (verts.length < 32) return;
 
             float u0 = sprite.getU0();
@@ -378,8 +378,8 @@ public final class OverlayManager {
             }
         }
 
-        if (quad.getTintIndex() >= 0) {
-            int argb = Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.getTintIndex());
+        if (quad.tintIndex() >= 0) {
+            int argb = Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.tintIndex());
             return (argb == -1) ? 0xFFFFFFFF : argb;
         }
 

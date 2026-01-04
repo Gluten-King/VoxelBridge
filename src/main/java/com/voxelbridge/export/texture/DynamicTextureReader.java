@@ -5,7 +5,6 @@ import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.DynamicTexture;
-import net.minecraft.client.renderer.texture.HttpTexture;
 import net.minecraft.resources.ResourceLocation;
 
 import javax.imageio.ImageIO;
@@ -22,7 +21,7 @@ final class DynamicTextureReader {
 
     static BufferedImage tryRead(ResourceLocation location) {
         try {
-            AbstractTexture texture = Minecraft.getInstance().getTextureManager().getTexture(location, null);
+            AbstractTexture texture = Minecraft.getInstance().getTextureManager().getTexture(location);
             if (texture == null) {
                 return null;
             }
@@ -30,9 +29,9 @@ final class DynamicTextureReader {
             if (fromDynamic != null) {
                 return fromDynamic;
             }
-            BufferedImage fromHttp = readHttpTexture(texture);
-            if (fromHttp != null) {
-                return fromHttp;
+            BufferedImage fromFile = readFileBackedTexture(texture);
+            if (fromFile != null) {
+                return fromFile;
             }
         } catch (Throwable t) {
             VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, String.format("[DynamicTextureReader][WARN] Failed to read %s: %s", location, t.getMessage()));
@@ -50,10 +49,7 @@ final class DynamicTextureReader {
         return null;
     }
 
-    private static BufferedImage readHttpTexture(AbstractTexture texture) {
-        if (!(texture instanceof HttpTexture)) {
-            return null;
-        }
+    private static BufferedImage readFileBackedTexture(AbstractTexture texture) {
         File file = findFileField(texture);
         if (file == null || !file.isFile()) {
             return null;

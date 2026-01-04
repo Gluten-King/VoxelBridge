@@ -108,8 +108,7 @@ public final class ProgressNotifier {
         int filled = Math.round(barWidth * dispPct);
 
         // Raise Z-level to render above everything
-        gfx.pose().pushPose();
-        gfx.pose().translate(0, 0, 1000.0f);
+        gfx.pose().pushMatrix();
 
         // Outline (Black border)
         gfx.fill(x - 1, y - 1, x + barWidth + 1, y + barHeight + 1, 0xFF000000);
@@ -152,7 +151,7 @@ public final class ProgressNotifier {
         int detailWidth = mc.font.width(details);
         gfx.drawString(mc.font, details, (screenW - detailWidth) / 2, y + 18, 0xFFFFFFFF, true);
 
-        gfx.pose().popPose();
+        gfx.pose().popMatrix();
     }
 
     private static String stageBase(ExportProgressTracker.Stage stage) {

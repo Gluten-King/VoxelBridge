@@ -1,16 +1,12 @@
 package com.voxelbridge.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
-import com.voxelbridge.VoxelBridge;
 import net.minecraft.client.KeyMapping;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.settings.KeyConflictContext;
 import org.lwjgl.glfw.GLFW;
 
-// Registers every key binding on the client mod bus.
-@EventBusSubscriber(modid = VoxelBridge.MODID, bus = EventBusSubscriber.Bus.MOD)
 public class KeyBindings {
 
     // Define key bindings.

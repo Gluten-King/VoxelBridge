@@ -56,31 +56,57 @@ public final class VoxelBridgeCommands {
     public static void register(RegisterClientCommandsEvent event) {
         var root = Commands.literal("voxelbridge");
 
-        root.then(Commands.literal("pos1").executes(ctx -> {
-            Minecraft mc = Minecraft.getInstance();
-            BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
-            if (hit == null) {
-                ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No block targeted."));
-                return 0;
-            }
-            pos1 = hit;
-            ExportProgressTracker.previewSelection(pos1, pos2);
-            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] pos1 set to " + pos1));
-            return 1;
-        }));
+        root.then(Commands.literal("pos1")
+            .executes(ctx -> {
+                Minecraft mc = Minecraft.getInstance();
+                BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
+                if (hit == null) {
+                    ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No block targeted."));
+                    return 0;
+                }
+                pos1 = hit;
+                ExportProgressTracker.previewSelection(pos1, pos2);
+                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] pos1 set to " + pos1));
+                return 1;
+            })
+            .then(Commands.argument("x", IntegerArgumentType.integer())
+                .then(Commands.argument("y", IntegerArgumentType.integer())
+                    .then(Commands.argument("z", IntegerArgumentType.integer())
+                        .executes(ctx -> {
+                            int x = IntegerArgumentType.getInteger(ctx, "x");
+                            int y = IntegerArgumentType.getInteger(ctx, "y");
+                            int z = IntegerArgumentType.getInteger(ctx, "z");
+                            pos1 = new BlockPos(x, y, z);
+                            ExportProgressTracker.previewSelection(pos1, pos2);
+                            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] pos1 set to " + pos1));
+                            return 1;
+                        })))));
 
-        root.then(Commands.literal("pos2").executes(ctx -> {
-            Minecraft mc = Minecraft.getInstance();
-            BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
-            if (hit == null) {
-                ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No block targeted."));
-                return 0;
-            }
-            pos2 = hit;
-            ExportProgressTracker.previewSelection(pos1, pos2);
-            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] pos2 set to " + pos2));
-            return 1;
-        }));
+        root.then(Commands.literal("pos2")
+            .executes(ctx -> {
+                Minecraft mc = Minecraft.getInstance();
+                BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
+                if (hit == null) {
+                    ctx.getSource().sendSystemMessage(Component.literal("c[VoxelBridge] No block targeted."));
+                    return 0;
+                }
+                pos2 = hit;
+                ExportProgressTracker.previewSelection(pos1, pos2);
+                ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] pos2 set to " + pos2));
+                return 1;
+            })
+            .then(Commands.argument("x", IntegerArgumentType.integer())
+                .then(Commands.argument("y", IntegerArgumentType.integer())
+                    .then(Commands.argument("z", IntegerArgumentType.integer())
+                        .executes(ctx -> {
+                            int x = IntegerArgumentType.getInteger(ctx, "x");
+                            int y = IntegerArgumentType.getInteger(ctx, "y");
+                            int z = IntegerArgumentType.getInteger(ctx, "z");
+                            pos2 = new BlockPos(x, y, z);
+                            ExportProgressTracker.previewSelection(pos1, pos2);
+                            ctx.getSource().sendSystemMessage(Component.literal("a[VoxelBridge] pos2 set to " + pos2));
+                            return 1;
+                        })))));
 
         root.then(Commands.literal("info").executes(ctx -> {
             ctx.getSource().sendSystemMessage(Component.literal("6[VoxelBridge] Selection info:"));

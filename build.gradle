@@ -3,7 +3,7 @@ import org.gradle.api.tasks.bundling.Jar
 plugins {
     id 'java-library'
     id 'maven-publish'
-    id 'net.neoforged.moddev' version '2.0.116'
+    id 'net.neoforged.moddev' version '2.0.137'
     // Shadow 9.x supports Gradle 9; older 8.x throws MissingPropertyException on FileCopyDetails.mode
     id 'com.gradleup.shadow' version '9.2.2'
     id 'idea'
@@ -79,6 +79,8 @@ neoForge {
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+// Temporarily disable FRAPI integration for 1.21.8 (no compatible FFA release yet).
+sourceSets.main.java { exclude 'com/voxelbridge/modhandler/frapi/**' }
 
 dependencies {
     // Add Forgified Fabric API
@@ -155,6 +157,7 @@ tasks.named('shadowJar') {
     relocate 'de.javagl.jgltf', 'com.voxelbridge.shadow.jgltf'
     relocate 'ar.com.hjg.pngj', 'com.voxelbridge.shadow.pngj'
     relocate 'gnu.trove', 'com.voxelbridge.shadow.trove'
+    relocate 'com.fasterxml.jackson', 'com.voxelbridge.shadow.jackson'
     mergeServiceFiles()
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

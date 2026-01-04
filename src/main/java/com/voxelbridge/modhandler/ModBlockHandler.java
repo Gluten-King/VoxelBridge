@@ -1,7 +1,7 @@
 package com.voxelbridge.modhandler;
 
 import com.voxelbridge.export.ExportContext;
-import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -25,7 +25,6 @@ public interface ModBlockHandler {
         BlockState state,
         BlockEntity blockEntity,
         BlockPos pos,
-        BakedModel bakedModel
+        BlockStateModel bakedModel
     );
 }
-

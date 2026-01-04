@@ -66,7 +66,7 @@ public final class QuadProcessor {
      */
     public void processQuad(BlockState state, BlockPos pos, BakedQuad quad,
                             String blockKey, Vec3 randomOffset) {
-        TextureAtlasSprite sprite = quad.getSprite();
+        TextureAtlasSprite sprite = quad.sprite();
         if (sprite == null) return;
 
         String spriteKey = SpriteKeyResolver.resolve(sprite);
@@ -138,8 +138,8 @@ public final class QuadProcessor {
      * Computes tint color from block colors. Returns -1 if no tint logic exists.
      */
     private int computeTintColor(BlockState state, BlockPos pos, BakedQuad quad) {
-        if (quad.getTintIndex() < 0) return -1;
-        return Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.getTintIndex());
+        if (quad.tintIndex() < 0) return -1;
+        return Minecraft.getInstance().getBlockColors().getColor(state, level, pos, quad.tintIndex());
     }
 
     private boolean hasBakedColors(int[] colors) {

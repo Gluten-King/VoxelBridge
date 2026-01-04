@@ -5,6 +5,7 @@ import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.resources.metadata.animation.AnimationFrame;
 import net.minecraft.client.resources.metadata.animation.AnimationMetadataSection;
 import net.minecraft.resources.ResourceLocation;
 
@@ -58,7 +59,7 @@ public final class AnimatedTextureHelper {
                 return null;
             }
             var res = resOpt.get();
-            var metaOpt = res.metadata().getSection(AnimationMetadataSection.SERIALIZER);
+            var metaOpt = res.metadata().getSection(AnimationMetadataSection.TYPE);
             AnimationMetadataSection meta = metaOpt.orElse(null);
             if (meta == null) {
                 VoxelBridgeLogger.warn(LogModule.ANIMATION, "[Animation][WARN] No animation metadata for: " + png);
@@ -145,12 +146,17 @@ public final class AnimatedTextureHelper {
         List<AnimationMetadata.FrameTiming> frameTimings = new ArrayList<>();
 
         // Capture both frame order AND timing information
-        meta.forEachFrame((idx, time) -> {
-            if (idx >= 0 && idx < frameCount) {
-                frameOrder.add(idx);
-                frameTimings.add(new AnimationMetadata.FrameTiming(idx, time));
+        var framesOpt = meta.frames();
+        if (framesOpt != null && framesOpt.isPresent()) {
+            for (AnimationFrame frame : framesOpt.get()) {
+                int idx = frame.index();
+                int time = frame.time().orElse(meta.defaultFrameTime());
+                if (idx >= 0 && idx < frameCount) {
+                    frameOrder.add(idx);
+                    frameTimings.add(new AnimationMetadata.FrameTiming(idx, time));
+                }
             }
-        });
+        }
 
         if (frameOrder.isEmpty()) {
             // Default: sequential frames with default timing
@@ -183,15 +189,10 @@ public final class AnimatedTextureHelper {
         }
 
         // Create complete AnimationMetadata with captured timing information
-        boolean interpolate = false;
-        try {
-            interpolate = meta.isInterpolatedFrames();
-        } catch (NoSuchMethodError e) {
-            VoxelBridgeLogger.info(LogModule.ANIMATION, "[Animation][DEBUG] AnimationMetadataSection.isInterpolatedFrames() not available, using false");
-        }
+        boolean interpolate = meta.interpolatedFrames();
 
         AnimationMetadata animMetadata = new AnimationMetadata(
-            meta.getDefaultFrameTime(),
+            meta.defaultFrameTime(),
             frameTimings,
             interpolate,
             frameW,
@@ -222,7 +223,7 @@ public final class AnimatedTextureHelper {
 
         try {
             var contents = sprite.contents();
-            var metaOpt = contents.metadata().getSection(AnimationMetadataSection.SERIALIZER);
+            var metaOpt = contents.metadata().getSection(AnimationMetadataSection.TYPE);
             AnimationMetadataSection meta = metaOpt.orElse(null);
             if (meta == null) {
                 return null; // No animation metadata
@@ -421,7 +422,6 @@ public final class AnimatedTextureHelper {
         return pngLoc.getNamespace() + ":" + path;
     }
 }
-
 
 
 

@@ -123,11 +123,11 @@ public final class TextureLoader {
         for (int y = 0; y < h; y++) {
             int rowOffset = y * w;
             for (int x = 0; x < w; x++) {
-                int c = nativeImg.getPixelRGBA(x, y);
+                int c = nativeImg.getPixel(x, y);
                 int a = (c >>> 24) & 0xFF;
-                int r = c & 0xFF;
+                int r = (c >>> 16) & 0xFF;
                 int g = (c >>> 8) & 0xFF;
-                int b = (c >>> 16) & 0xFF;
+                int b = c & 0xFF;
                 allPixels[rowOffset + x] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         }

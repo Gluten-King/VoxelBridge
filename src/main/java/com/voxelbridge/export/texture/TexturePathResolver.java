@@ -11,7 +11,7 @@ public final class TexturePathResolver {
         if (existing != null) {
             return existing;
         }
-        String rel = "entity_textures/" + safe(spriteKey) + ".png";
+        String rel = "textures/entity_textures/" + safe(spriteKey) + ".png";
         ctx.getMaterialPaths().put(spriteKey, rel);
         return rel;
     }
@@ -21,12 +21,16 @@ public final class TexturePathResolver {
         if (existing != null) {
             return existing;
         }
-        String rel = "entity_textures/generated/" + safe(spriteKey) + ".png";
+        String rel = "textures/entity_textures/generated/" + safe(spriteKey) + ".png";
         ctx.getMaterialPaths().put(spriteKey, rel);
         return rel;
     }
 
     public static String safe(String spriteKey) {
-        return spriteKey.replace(':', '_').replace('/', '_');
+        String safe = spriteKey.replace(':', '_').replace('/', '_');
+        if (safe.endsWith(".png")) {
+            safe = safe.substring(0, safe.length() - 4);
+        }
+        return safe;
     }
 }

@@ -2,33 +2,26 @@ package com.voxelbridge.client;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.voxelbridge.VoxelBridge;
 import com.voxelbridge.command.VoxelBridgeCommands;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.ExportProgressTracker.ChunkState;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.ShapeRenderer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 import java.util.Map;
 
-@EventBusSubscriber(modid = VoxelBridge.MODID, value = Dist.CLIENT)
 public class SelectionRenderer {
 
     @SubscribeEvent
-    public static void onRenderLevel(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) {
-            return;
-        }
+    public static void onRenderLevel(RenderLevelStageEvent.AfterTranslucentBlocks event) {
 
         BlockPos pos1 = VoxelBridgeCommands.getPos1();
         BlockPos pos2 = VoxelBridgeCommands.getPos2();
@@ -66,7 +59,7 @@ public class SelectionRenderer {
     private static void renderBox(PoseStack poseStack, VertexConsumer consumer,
                                   BlockPos pos, float r, float g, float b, float a) {
         AABB box = new AABB(pos).inflate(0.002);
-        LevelRenderer.renderLineBox(poseStack, consumer, box, r, g, b, a);
+        ShapeRenderer.renderLineBox(poseStack, consumer, box, r, g, b, a);
     }
 
     private static void renderSelectionBox(PoseStack poseStack, VertexConsumer consumer,
@@ -80,7 +73,7 @@ public class SelectionRenderer {
         int maxZ = Math.max(pos1.getZ(), pos2.getZ()) + 1;
 
         AABB box = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
-        LevelRenderer.renderLineBox(poseStack, consumer, box, r, g, b, a);
+        ShapeRenderer.renderLineBox(poseStack, consumer, box, r, g, b, a);
     }
 
     private static void renderChunkStatus(PoseStack poseStack, VertexConsumer consumer,
@@ -135,7 +128,7 @@ public class SelectionRenderer {
             }
 
             AABB chunkBox = new AABB(boxMinX, boxMinY, boxMinZ, boxMaxX, boxMaxY, boxMaxZ);
-            LevelRenderer.renderLineBox(poseStack, consumer, chunkBox, r, g, b, 0.35f);
+            ShapeRenderer.renderLineBox(poseStack, consumer, chunkBox, r, g, b, 0.35f);
         }
     }
 

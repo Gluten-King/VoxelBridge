@@ -50,7 +50,7 @@ public final class VertexExtractor {
         float[] uv = new float[8];
         int[] colors = new int[4];
 
-        int[] verts = quad.getVertices();
+        int[] verts = quad.vertices();
         float u0 = sprite.getU0(), u1 = sprite.getU1();
         float v0 = sprite.getV0(), v1 = sprite.getV1();
 
@@ -109,7 +109,7 @@ public final class VertexExtractor {
      */
     public static float[] extractLocalPositions(BakedQuad quad) {
         float[] localPos = new float[12];
-        int[] verts = quad.getVertices();
+        int[] verts = quad.vertices();
 
         for (int i = 0; i < 4; i++) {
             int base = i * 8;

@@ -252,5 +252,3 @@ public final class BlockEntityTextureResolver {
         return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, false, null, null);
     }
 }
-
-

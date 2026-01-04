@@ -18,6 +18,9 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.HangingSignBlockEntity;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
@@ -143,7 +146,8 @@ public final class BlockEntityRenderer {
                 poseStack,
                 captureBuffer,
                 0xF000F0,
-                OverlayTexture.NO_OVERLAY
+                OverlayTexture.NO_OVERLAY,
+                Vec3.ZERO
             );
 
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] renderer.render() returned, flushing buffer...");
@@ -446,6 +450,10 @@ public final class BlockEntityRenderer {
                     }
                 }
 
+                if (isSignBlockEntity(parent.blockEntity) && isFontTexture(textureRes != null ? textureRes.texture() : null)) {
+                    return;
+                }
+
                 // Generate Material Group Key
                 // Format: "blockentity:minecraft:chest"
                 String materialGroupKey = "blockentity:" + net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE
@@ -609,6 +617,18 @@ public final class BlockEntityRenderer {
                 return (float) Math.sqrt(cx * cx + cy * cy + cz * cz);
             }
         }
+    }
+
+    private static boolean isSignBlockEntity(BlockEntity blockEntity) {
+        return blockEntity instanceof SignBlockEntity || blockEntity instanceof HangingSignBlockEntity;
+    }
+
+    private static boolean isFontTexture(ResourceLocation location) {
+        if (location == null) {
+            return false;
+        }
+        String path = location.getPath();
+        return path.contains("textures/font/") || path.startsWith("font/") || path.contains("/font/");
     }
 }
 

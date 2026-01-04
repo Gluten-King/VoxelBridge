@@ -124,8 +124,9 @@ public final class TextureExportRegistry {
         }
         spriteRelativePaths.put(spriteKey, rel);
 
+        boolean relIsRooted = rel.startsWith("textures/");
         boolean isAtlasPath = rel.startsWith("textures/atlas/");
-        Path target = isAtlasPath ? outputDir.resolve(rel) : texturesDir.resolve(rel);
+        Path target = relIsRooted ? outputDir.resolve(rel) : texturesDir.resolve(rel);
         if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE)) {
             VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
                 "[TextureExport][EntityLike] spriteKey=%s -> rel=%s target=%s (isAtlas=%s)",

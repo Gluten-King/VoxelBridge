@@ -6,25 +6,31 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.util.color.ColorModeHandler;
 import com.voxelbridge.export.util.geometry.GeometryUtil;
 import com.voxelbridge.export.texture.EntityTextureManager;
+import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.client.renderer.entity.state.EntityRenderState;
+import com.voxelbridge.util.client.EntityRendererAccessor;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 import java.awt.image.BufferedImage;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Captures entity renderer output into SceneSink.
@@ -87,8 +93,9 @@ public final class EntityRenderer {
             }
 
             EntityRenderDispatcher dispatcher = ctx.getMc().getEntityRenderDispatcher();
-            net.minecraft.client.renderer.entity.EntityRenderer<? super Entity> renderer =
-                    dispatcher.getRenderer(entity);
+            @SuppressWarnings("unchecked")
+            net.minecraft.client.renderer.entity.EntityRenderer<Entity, EntityRenderState> renderer =
+                    (net.minecraft.client.renderer.entity.EntityRenderer<Entity, EntityRenderState>) dispatcher.getRenderer(entity);
             if (renderer == null) {
                 VoxelBridgeLogger.error(LogModule.ENTITY, String.format(
                     "[ERROR] %s at [%.2f, %.2f, %.2f] - %s",
@@ -123,7 +130,7 @@ public final class EntityRenderer {
 
             poseStack.translate(finalX, finalY, finalZ);
 
-            CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, offsetX, offsetY, offsetZ, entity);
+            CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, offsetX, offsetY, offsetZ, entity, renderer.getClass().getSimpleName());
             float partial = 0f;
             float yaw = entity.getYRot();
             if (VoxelBridgeLogger.isDebugEnabled(LogModule.ENTITY)) {
@@ -143,17 +150,13 @@ public final class EntityRenderer {
 
             Runnable renderCall = () -> {
                 try {
-                    var renderOffset = renderer.getRenderOffset(entity, partial);
+                    EntityRenderState renderState = renderer.createRenderState();
+                    renderer.extractRenderState(entity, renderState, partial);
+                    captureBuffer.setFallbackTexture(tryResolveTexture(renderer, renderState, entity));
+                    var renderOffset = renderer.getRenderOffset(renderState);
                     poseStack.translate(renderOffset.x(), renderOffset.y(), renderOffset.z());
 
-                    renderer.render(
-                        entity,
-                        yaw,
-                        partial,
-                        poseStack,
-                        captureBuffer,
-                        packedLight
-                    );
+                    renderer.render(renderState, poseStack, captureBuffer, packedLight);
                     renderCompleted[0] = true;
                 } catch (Exception e) {
                     renderException[0] = e;
@@ -208,6 +211,18 @@ public final class EntityRenderer {
         return entity instanceof net.minecraft.world.entity.decoration.HangingEntity;
     }
 
+    private static ResourceLocation tryResolveTexture(net.minecraft.client.renderer.entity.EntityRenderer<Entity, EntityRenderState> renderer, EntityRenderState renderState, Entity entity) {
+        if (renderer == null || renderState == null) {
+            return null;
+        }
+        try {
+            return EntityRendererAccessor.getTextureLocation(renderer, renderState, entity);
+        } catch (Exception e) {
+            VoxelBridgeLogger.warn(LogModule.ENTITY, "[EntityRenderer] Failed to resolve texture: " + e.getMessage());
+            return null;
+        }
+    }
+
     /**
      * Capture buffer for entity renders.
      */
@@ -216,19 +231,30 @@ public final class EntityRenderer {
         private final SceneSink sceneSink;
         private final double offsetX, offsetY, offsetZ;
         private final Entity entity;
+        private final String rendererName;
+        private ResourceLocation fallbackTexture;
         private final java.util.Map<RenderType, VertexCollector> collectors = new java.util.HashMap<>();
+        private final Set<RenderType> probedRenderTypes = new HashSet<>();
         private boolean hadGeometry = false;
         private int quadCount = 0;
         private float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
         private float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
 
-        CaptureBuffer(ExportContext ctx, SceneSink sceneSink, double offsetX, double offsetY, double offsetZ, Entity entity) {
+        CaptureBuffer(ExportContext ctx, SceneSink sceneSink, double offsetX, double offsetY, double offsetZ,
+                      Entity entity, String rendererName) {
             this.ctx = ctx;
             this.sceneSink = sceneSink;
             this.offsetX = offsetX;
             this.offsetY = offsetY;
             this.offsetZ = offsetZ;
             this.entity = entity;
+            this.rendererName = rendererName;
+        }
+
+        void setFallbackTexture(ResourceLocation fallbackTexture) {
+            if (fallbackTexture != null) {
+                this.fallbackTexture = fallbackTexture;
+            }
         }
 
         @Override
@@ -392,6 +418,9 @@ public final class EntityRenderer {
                         renderType != null ? renderType.toString() : "null"));
                 }
                 EntityTextureResolver.ResolvedTexture textureRes = EntityTextureResolver.resolve(parent.entity, renderType);
+                if (textureRes == null && parent.fallbackTexture != null) {
+                    textureRes = EntityTextureResolver.resolveFallback(parent.fallbackTexture);
+                }
                 String spriteKey;
                 boolean isAtlasTexture = false;
                 float u0 = 0f, u1 = 1f, v0 = 0f, v1 = 1f;
@@ -435,7 +464,13 @@ public final class EntityRenderer {
                 String materialGroupKey = "entity:" + net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(parent.entity.getType());
 
                 if (textureRes != null && textureRes.texture() != null) {
-                    EntityTextureManager.TextureHandle handle = EntityTextureManager.register(parent.ctx, textureRes.texture());
+                    EntityTextureManager.TextureHandle handle = null;
+                    if (parent.entity instanceof AbstractClientPlayer player) {
+                        handle = tryRegisterPlayerAttachmentTexture(parent.ctx, player, textureRes.texture());
+                    }
+                    if (handle == null) {
+                        handle = EntityTextureManager.register(parent.ctx, textureRes.texture());
+                    }
                     spriteKey = handle.spriteKey();
                     isAtlasTexture = textureRes.isAtlasTexture();
                     u0 = textureRes.u0(); u1 = textureRes.u1();
@@ -466,6 +501,10 @@ public final class EntityRenderer {
                     VoxelBridgeLogger.debug(LogModule.ENTITY, "[Quad#" + parent.quadCount + "] No texture resolved, using white fallback");
                 }
 
+                if (parent.probedRenderTypes.add(renderType)) {
+                    logTextureProbe(renderType, textureRes, spriteKey);
+                }
+
                 if (isAtlasTexture && textureRes != null && textureRes.sprite() != null) {
                     float eps = 1e-4f;
                     boolean outsideSpriteBounds =
@@ -478,7 +517,16 @@ public final class EntityRenderer {
                     }
                 }
 
-                fillUvs(verts, uv0, isAtlasTexture, u0, u1, v0, v1);
+                int texWidth = 0;
+                int texHeight = 0;
+                if (!isAtlasTexture && spriteKey != null) {
+                    ExportContext.EntityTexture texInfo = parent.ctx.getEntityTextures().get(spriteKey);
+                    if (texInfo != null) {
+                        texWidth = texInfo.width();
+                        texHeight = texInfo.height();
+                    }
+                }
+                fillUvs(verts, uv0, isAtlasTexture, u0, u1, v0, v1, texWidth, texHeight);
 
                 float[] uv1 = EMPTY_UV;
                 if (ExportRuntimeConfig.getColorMode() == ExportRuntimeConfig.ColorMode.VERTEX_COLOR) {
@@ -497,7 +545,65 @@ public final class EntityRenderer {
                     RenderTypeTextureResolver.isDoubleSided(renderType));
             }
 
-            private void fillUvs(List<Vertex> verts, float[] uv0, boolean isAtlas, float u0, float u1, float v0, float v1) {
+            private void logTextureProbe(RenderType renderType, EntityTextureResolver.ResolvedTexture textureRes, String spriteKey) {
+                ResourceLocation texLoc = textureRes != null ? textureRes.texture() : null;
+                ResourceLocation atlasLoc = textureRes != null ? textureRes.atlasLocation() : null;
+                boolean isAtlas = textureRes != null && textureRes.isAtlasTexture();
+                boolean hasSprite = textureRes != null && textureRes.sprite() != null;
+
+                ResourceLocation resolvedPath = resolveTexturePathForProbe(texLoc);
+                boolean existsResolved = resourceExists(resolvedPath);
+                boolean existsRaw = resourceExists(texLoc);
+
+                String materialPath = spriteKey != null ? parent.ctx.getMaterialPaths().get(spriteKey) : null;
+
+                VoxelBridgeLogger.info(LogModule.ENTITY, String.format(
+                    "[TextureProbe] entity=%s renderer=%s renderType=%s tex=%s resolvedPath=%s existsRaw=%s existsResolved=%s atlas=%s atlasLoc=%s hasSprite=%s spriteKey=%s materialPath=%s",
+                    parent.entity.getType(),
+                    parent.rendererName,
+                    renderType != null ? renderType.toString() : "null",
+                    texLoc,
+                    resolvedPath,
+                    existsRaw,
+                    existsResolved,
+                    isAtlas,
+                    atlasLoc,
+                    hasSprite,
+                    spriteKey,
+                    materialPath
+                ));
+            }
+
+            private ResourceLocation resolveTexturePathForProbe(ResourceLocation texture) {
+                if (texture == null) {
+                    return null;
+                }
+                String path = texture.getPath();
+                if (path.startsWith("skins/") || path.startsWith("skin/")) {
+                    return texture;
+                }
+                if (!path.startsWith("textures/")) {
+                    path = "textures/" + path;
+                }
+                if (!path.endsWith(".png")) {
+                    path = path + ".png";
+                }
+                return ResourceLocation.fromNamespaceAndPath(texture.getNamespace(), path);
+            }
+
+            private boolean resourceExists(ResourceLocation location) {
+                if (location == null) {
+                    return false;
+                }
+                try {
+                    return parent.ctx.getMc().getResourceManager().getResource(location).isPresent();
+                } catch (Exception e) {
+                    return false;
+                }
+            }
+
+            private void fillUvs(List<Vertex> verts, float[] uv0, boolean isAtlas, float u0, float u1, float v0, float v1,
+                                 int texWidth, int texHeight) {
                 int count = Math.min(4, verts.size());
                 if (isAtlas) {
                     // Atlas texture: normalize UV within sprite bounds
@@ -513,8 +619,7 @@ public final class EntityRenderer {
                         uv0[i * 2 + 1] = sv;
                     }
                 } else {
-                    // Non-atlas texture: find actual UV bounds and normalize
-                    // This is important for entities like paintings where UV may not be in [0,1]
+                    // Non-atlas texture: normalize using actual texture size when UVs are in pixel units.
                     float minU = Float.POSITIVE_INFINITY, maxU = Float.NEGATIVE_INFINITY;
                     float minV = Float.POSITIVE_INFINITY, maxV = Float.NEGATIVE_INFINITY;
                     for (int i = 0; i < count; i++) {
@@ -528,23 +633,15 @@ public final class EntityRenderer {
                     float rangeU = maxU - minU;
                     float rangeV = maxV - minV;
 
-                    // IMPROVED: More robust detection with wider threshold
-                    // If UV extends significantly beyond [0,1] OR has zero range, normalize
-                    boolean needsNormalization =
-                        maxU > 1.1f || minU < -0.1f || maxV > 1.1f || minV < -0.1f ||
-                        rangeU < 1e-6f || rangeV < 1e-6f;
+                    boolean looksNormalized =
+                        maxU <= 1.1f && minU >= -0.1f && maxV <= 1.1f && minV >= -0.1f;
 
-                    if (needsNormalization && rangeU > 1e-6f && rangeV > 1e-6f) {
-                        // Normalize from [minU, maxU] x [minV, maxV] to [0, 1] x [0, 1]
-                        VoxelBridgeLogger.debug(LogModule.ENTITY, String.format(
-                            "[UV Normalization] Painting/Entity UV remapped: U[%.3f, %.3f] V[%.3f, %.3f] -> [0,1]x[0,1]",
-                            minU, maxU, minV, maxV));
+                    if (!looksNormalized && texWidth > 0 && texHeight > 0) {
+                        // Normalize using texture dimensions for entity UVs authored in pixels.
                         for (int i = 0; i < count; i++) {
                             Vertex v = verts.get(i);
-                            float su = (v.u - minU) / rangeU;
-                            float sv = (v.v - minV) / rangeV;
-                            uv0[i * 2] = Math.max(0f, Math.min(1f, su));
-                            uv0[i * 2 + 1] = Math.max(0f, Math.min(1f, sv));
+                            uv0[i * 2] = Math.max(0f, Math.min(1f, v.u / texWidth));
+                            uv0[i * 2 + 1] = Math.max(0f, Math.min(1f, v.v / texHeight));
                         }
                     } else if (rangeU < 1e-6f || rangeV < 1e-6f) {
                         // Degenerate UV (zero range) - use defaults
@@ -554,7 +651,7 @@ public final class EntityRenderer {
                             uv0[i * 2 + 1] = 0f;
                         }
                     } else {
-                        // Already in [0,1], just clamp
+                        // Already normalized, just clamp
                         for (int i = 0; i < count; i++) {
                             Vertex v = verts.get(i);
                             uv0[i * 2] = Math.max(0f, Math.min(1f, v.u));
@@ -595,6 +692,81 @@ public final class EntityRenderer {
                        Math.abs(colors[2] - 1f) < eps;
             }
         }
+    }
+
+    private static EntityTextureManager.TextureHandle tryRegisterPlayerAttachmentTexture(
+        ExportContext ctx,
+        AbstractClientPlayer player,
+        ResourceLocation texture
+    ) {
+        String type = detectPlayerAttachmentType(texture);
+        if (type == null) {
+            return null;
+        }
+        BufferedImage image = readTextureWithFallback(texture);
+        if (image == null) {
+            return null;
+        }
+        String playerName = sanitizePlayerName(player.getGameProfile().getName());
+        String key = "entity:player/" + type + "/" + playerName;
+        String relativePath = "textures/entity_textures/player/" + playerName + "_" + type + ".png";
+        return EntityTextureManager.registerGenerated(ctx, key, relativePath, image);
+    }
+
+    private static String detectPlayerAttachmentType(ResourceLocation texture) {
+        if (texture == null) {
+            return null;
+        }
+        String path = texture.getPath().toLowerCase(java.util.Locale.ROOT);
+        if (path.contains("elytra")) {
+            return "elytra";
+        }
+        if (path.contains("cape") || path.contains("cloak")) {
+            return "cape";
+        }
+        return null;
+    }
+
+    private static BufferedImage readTextureWithFallback(ResourceLocation texture) {
+        BufferedImage image = TextureLoader.readTexture(texture, ExportRuntimeConfig.isAnimationEnabled());
+        if (image != null) {
+            return image;
+        }
+        ResourceLocation fallback = resolveTexturePathFallback(texture);
+        if (!fallback.equals(texture)) {
+            return TextureLoader.readTexture(fallback, ExportRuntimeConfig.isAnimationEnabled());
+        }
+        return null;
+    }
+
+    private static ResourceLocation resolveTexturePathFallback(ResourceLocation texture) {
+        String path = texture.getPath();
+        if (path.startsWith("skins/") || path.startsWith("skin/")) {
+            return texture;
+        }
+        if (!path.startsWith("textures/")) {
+            path = "textures/" + path;
+        }
+        if (!path.endsWith(".png")) {
+            path = path + ".png";
+        }
+        return ResourceLocation.fromNamespaceAndPath(texture.getNamespace(), path);
+    }
+
+    private static String sanitizePlayerName(String name) {
+        if (name == null || name.isEmpty()) {
+            return "player";
+        }
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        StringBuilder out = new StringBuilder(lower.length());
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '.' || c == '-' || c == '_';
+            out.append(ok ? c : '_');
+        }
+        return out.toString();
     }
 }
 

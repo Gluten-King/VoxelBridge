@@ -2,7 +2,7 @@ package com.voxelbridge.modhandler;
 
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.modhandler.yuushya.YuushyaShowBlockHandler;
-import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -17,7 +17,7 @@ import java.util.Optional;
  * NOTE: This registry is for mods that need to COMPLETELY REPLACE block rendering logic.
  *
  * CTM/Continuity and Fabric Rendering API are handled differently:
- * - Fabric Rendering API: Handled directly in BlockExporter.getQuads() via FabricApiHelper
+ * - Fabric Rendering API: Disabled for 1.21.8 until a compatible FFA release
  * - CTM/Continuity overlays: Detected in BlockExporter.sampleBlock() via CtmDetector
  *
  * Only register handlers here if a mod requires custom quad generation that can't be
@@ -37,7 +37,7 @@ public final class ModHandlerRegistry {
         BlockState state,
         BlockEntity blockEntity,
         BlockPos pos,
-        BakedModel bakedModel
+        BlockStateModel bakedModel
     ) {
         for (ModBlockHandler handler : HANDLERS) {
             Optional<ModHandledQuads> result = handler.handle(ctx, level, state, blockEntity, pos, bakedModel);
@@ -48,4 +48,3 @@ public final class ModHandlerRegistry {
         return null;
     }
 }
-

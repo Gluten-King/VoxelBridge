@@ -5,7 +5,6 @@ import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -80,7 +79,6 @@ public final class EntityExporter {
         if (entity instanceof net.minecraft.world.entity.Mob mob && !mob.isNoAi()) {
             return false;
         }
-        // Explicitly skip players regardless of AI flag.
-        return !(entity instanceof Player);
+        return true;
     }
 }

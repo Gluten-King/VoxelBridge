@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.voxelbridge.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "RenderTypeCompositeRenderTypeAccessor",
+    "RenderTypeCompositeStateAccessor",
+    "RenderTypeCompositeStateCullAccessor",
+    "RenderStateShardBooleanStateShardAccessor",
+    "RenderTypeTextureStateShardAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

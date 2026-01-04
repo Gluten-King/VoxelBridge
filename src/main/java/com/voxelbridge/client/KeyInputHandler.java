@@ -5,13 +5,10 @@ import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.thread.ExportThread;
 import com.voxelbridge.util.io.IOUtil;
 import com.voxelbridge.util.client.RayCastUtil;
-import com.voxelbridge.VoxelBridge;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 
 import java.nio.file.Path;
@@ -19,8 +16,6 @@ import java.nio.file.Path;
 /**
  * Handles the VoxelBridge hotkeys for selecting positions and triggering exports.
  */
-@SuppressWarnings("removal") // TODO: migrate to new subscriber API when available
-@EventBusSubscriber(modid = VoxelBridge.MODID, bus = EventBusSubscriber.Bus.GAME, value = Dist.CLIENT)
 public class KeyInputHandler {
 
     @SubscribeEvent

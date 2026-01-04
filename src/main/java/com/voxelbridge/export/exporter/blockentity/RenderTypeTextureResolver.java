@@ -6,10 +6,15 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import com.voxelbridge.mixin.RenderStateShardBooleanStateShardAccessor;
+import com.voxelbridge.mixin.RenderTypeCompositeRenderTypeAccessor;
+import com.voxelbridge.mixin.RenderTypeCompositeStateAccessor;
+import com.voxelbridge.mixin.RenderTypeCompositeStateCullAccessor;
+import com.voxelbridge.mixin.RenderTypeTextureStateShardAccessor;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 /**
@@ -17,6 +22,10 @@ import java.util.Optional;
  */
 @OnlyIn(Dist.CLIENT)
 public final class RenderTypeTextureResolver {
+
+    private static final ConcurrentHashMap<Class<?>, Field> stateFieldCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Class<?>, Field> textureStateFieldCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Class<?>, Field> textureFieldCache = new ConcurrentHashMap<>();
 
     private RenderTypeTextureResolver() {
     }
@@ -32,25 +41,15 @@ public final class RenderTypeTextureResolver {
             return null;
         }
 
-        ResourceLocation fromState = extractFromState(renderType);
-        if (fromState != null) {
-            return sanitize(fromState);
+        // Try mixin first
+        ResourceLocation fromMixin = resolveFromMixin(renderType);
+        if (fromMixin != null) {
+            return sanitize(fromMixin);
         }
 
-        try {
-            // Try to get the texture from the RenderType
-            // This uses reflection since RenderType internals are not part of the public API
-            ResourceLocation extracted = extractTextureViaReflection(renderType);
-            if (extracted != null) {
-                return sanitize(extracted);
-            }
-        } catch (Exception e) {
-            // Log reflection failure for debugging
-            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, "[RenderTypeTextureResolver] Reflection failed for " +
-                renderType + ": " + e.getClass().getSimpleName() + " - " + e.getMessage());
-        }
-
-        return null;
+        // Fallback to reflection
+        ResourceLocation fromReflection = resolveFromReflection(renderType);
+        return fromReflection != null ? sanitize(fromReflection) : null;
     }
 
     /**
@@ -58,90 +57,173 @@ public final class RenderTypeTextureResolver {
      */
     public static boolean isDoubleSided(RenderType renderType) {
         try {
-            RenderType.CompositeState state = compositeState(renderType);
+            if (!(renderType instanceof RenderTypeCompositeRenderTypeAccessor compositeAccessor)) {
+                return false;
+            }
+            RenderType.CompositeState state = compositeAccessor.voxelbridge$state();
             if (state == null) {
                 return false;
             }
-            Field cullField = RenderType.CompositeState.class.getDeclaredField("cullState");
-            cullField.setAccessible(true);
-            Object cullState = cullField.get(state);
+            Object cullState = ((RenderTypeCompositeStateCullAccessor) (Object) state).voxelbridge$getCullState();
             if (cullState == null) {
                 return false;
             }
-            Class<?> booleanShard = cullState.getClass().getSuperclass(); // BooleanStateShard
-            Field enabled = booleanShard.getDeclaredField("enabled");
-            enabled.setAccessible(true);
-            boolean cullEnabled = enabled.getBoolean(cullState);
-            return !cullEnabled;
+            if (cullState instanceof RenderStateShardBooleanStateShardAccessor boolShard) {
+                return !boolShard.voxelbridge$isEnabled();
+            }
+            return false;
         } catch (Exception e) {
             return false;
         }
     }
 
-    private static ResourceLocation extractFromState(RenderType renderType) {
+    private static ResourceLocation resolveFromMixin(RenderType renderType) {
         try {
-            RenderType.CompositeState state = compositeState(renderType);
+            if (!(renderType instanceof RenderTypeCompositeRenderTypeAccessor compositeAccessor)) {
+                return null;
+            }
+            RenderType.CompositeState state = compositeAccessor.voxelbridge$state();
+            if (state == null) {
+                return null;
+            }
+            Object textureState = ((RenderTypeCompositeStateAccessor) (Object) state).voxelbridge$getTextureState();
+            if (textureState instanceof RenderType.TextureStateShard shard) {
+                Optional<ResourceLocation> texture = ((RenderTypeTextureStateShardAccessor) (Object) shard).voxelbridge$getTexture();
+                if (texture != null && texture.isPresent()) {
+                    return texture.get();
+                }
+            }
+        } catch (Throwable t) {
+            VoxelBridgeLogger.debug(LogModule.TEXTURE_RESOLVE,
+                "[RenderTypeTextureResolver] Mixin resolve failed for " + renderType.getClass().getSimpleName() + ": " +
+                    t.getClass().getSimpleName() + " - " + t.getMessage());
+        }
+        return null;
+    }
+
+    private static ResourceLocation resolveFromReflection(RenderType renderType) {
+        try {
+            Class<?> renderTypeClass = renderType.getClass();
+
+            // Find the state field (could be named "state" or similar)
+            Field stateField = stateFieldCache.computeIfAbsent(renderTypeClass, clazz -> {
+                for (String fieldName : new String[]{"state", "compositeState", "f_110403_"}) {
+                    Field f = findField(clazz, fieldName, RenderType.CompositeState.class);
+                    if (f != null) return f;
+                }
+                // Search all fields for CompositeState type
+                return findFieldByType(clazz, RenderType.CompositeState.class);
+            });
+
+            if (stateField == null) {
+                return null;
+            }
+
+            Object state = stateField.get(renderType);
             if (state == null) {
                 return null;
             }
 
-            Field textureField = RenderType.CompositeState.class.getDeclaredField("textureState");
-            textureField.setAccessible(true);
-            Object textureState = textureField.get(state);
+            // Find textureState field
+            Class<?> stateClass = state.getClass();
+            Field textureStateField = textureStateFieldCache.computeIfAbsent(stateClass, clazz -> {
+                for (String fieldName : new String[]{"textureState", "f_110558_"}) {
+                    Field f = findFieldInHierarchy(clazz, fieldName);
+                    if (f != null) return f;
+                }
+                return null;
+            });
+
+            if (textureStateField == null) {
+                return null;
+            }
+
+            Object textureState = textureStateField.get(state);
             if (textureState == null) {
                 return null;
             }
 
-            Method cutoutMethod = textureState.getClass().getDeclaredMethod("cutoutTexture");
-            cutoutMethod.setAccessible(true);
-            Object result = cutoutMethod.invoke(textureState);
-            if (result instanceof Optional<?> opt && opt.isPresent() && opt.get() instanceof ResourceLocation loc) {
-                return loc;
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
+            // Find texture field (Optional<ResourceLocation>)
+            Class<?> textureStateClass = textureState.getClass();
+            Field textureField = textureFieldCache.computeIfAbsent(textureStateClass, clazz -> {
+                for (String fieldName : new String[]{"texture", "f_110315_"}) {
+                    Field f = findFieldInHierarchy(clazz, fieldName);
+                    if (f != null) return f;
+                }
+                // Search for Optional<ResourceLocation> field
+                return findOptionalResourceLocationField(clazz);
+            });
 
-    private static RenderType.CompositeState compositeState(RenderType renderType) {
-        try {
-            // Use reflection to access CompositeRenderType and state() method
-            Class<?> compositeRenderTypeClass = Class.forName("net.minecraft.client.renderer.RenderType$CompositeRenderType");
-            if (!compositeRenderTypeClass.isInstance(renderType)) {
+            if (textureField == null) {
                 return null;
             }
 
-            Method stateMethod = compositeRenderTypeClass.getDeclaredMethod("state");
-            stateMethod.setAccessible(true);
-            Object state = stateMethod.invoke(renderType);
-            if (state instanceof RenderType.CompositeState compositeState) {
-                return compositeState;
+            Object textureOptional = textureField.get(textureState);
+            if (textureOptional instanceof Optional<?> opt && opt.isPresent()) {
+                Object value = opt.get();
+                if (value instanceof ResourceLocation loc) {
+                    VoxelBridgeLogger.debug(LogModule.TEXTURE_RESOLVE,
+                        "[RenderTypeTextureResolver] Reflection resolved: " + loc);
+                    return loc;
+                }
             }
-        } catch (Exception ignored) {
+        } catch (Throwable t) {
+            VoxelBridgeLogger.debug(LogModule.TEXTURE_RESOLVE,
+                "[RenderTypeTextureResolver] Reflection resolve failed: " + t.getClass().getSimpleName() + " - " + t.getMessage());
         }
         return null;
     }
 
-    private static ResourceLocation extractTextureViaReflection(RenderType renderType) {
+    private static Field findField(Class<?> clazz, String name, Class<?> expectedType) {
         try {
-            // Try to access toString() and parse it (fallback method)
-            String name = renderType.toString();
-            if (name.contains("RenderType[")) {
-                // Parse texture from toString output if possible
-                // Format is usually like "RenderType[name, texture=minecraft:textures/..., ...]"
-                int texIdx = name.indexOf("texture=");
-                if (texIdx >= 0) {
-                    int start = texIdx + 8;
-                    int end = name.indexOf(",", start);
-                    if (end < 0) end = name.indexOf("]", start);
-                    if (end > start) {
-                        String texStr = name.substring(start, end).trim();
-                        return ResourceLocation.parse(texStr);
-                    }
+            Field f = clazz.getDeclaredField(name);
+            if (expectedType == null || expectedType.isAssignableFrom(f.getType())) {
+                f.setAccessible(true);
+                return f;
+            }
+        } catch (NoSuchFieldException ignored) {
+        }
+        return null;
+    }
+
+    private static Field findFieldInHierarchy(Class<?> clazz, String name) {
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            try {
+                Field f = current.getDeclaredField(name);
+                f.setAccessible(true);
+                return f;
+            } catch (NoSuchFieldException ignored) {
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private static Field findFieldByType(Class<?> clazz, Class<?> fieldType) {
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            for (Field f : current.getDeclaredFields()) {
+                if (fieldType.isAssignableFrom(f.getType())) {
+                    f.setAccessible(true);
+                    return f;
                 }
             }
-        } catch (Exception e) {
-            // Ignore
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    private static Field findOptionalResourceLocationField(Class<?> clazz) {
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            for (Field f : current.getDeclaredFields()) {
+                if (Optional.class.isAssignableFrom(f.getType())) {
+                    f.setAccessible(true);
+                    return f;
+                }
+            }
+            current = current.getSuperclass();
         }
         return null;
     }

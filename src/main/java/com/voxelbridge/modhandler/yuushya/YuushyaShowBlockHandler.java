@@ -4,7 +4,7 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.modhandler.ModBlockHandler;
 import com.voxelbridge.modhandler.ModHandledQuads;
 import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -42,7 +42,7 @@ public final class YuushyaShowBlockHandler implements ModBlockHandler {
         BlockState state,
         BlockEntity blockEntity,
         BlockPos pos,
-        BakedModel bakedModel
+        BlockStateModel bakedModel
     ) {
         if (blockEntity == null) return Optional.empty();
         if (!SHOW_BLOCK_ID.equals(BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString())) return Optional.empty();
@@ -86,17 +86,20 @@ public final class YuushyaShowBlockHandler implements ModBlockHandler {
         }
     }
 
-    private Object createModel(Direction facing, BakedModel backup) {
+    private Object createModel(Direction facing, Object backup) {
         for (String className : MODEL_CLASSES) {
             try {
                 Class<?> clazz = Class.forName(className);
-                try {
-                    Constructor<?> ctor = clazz.getConstructor(Direction.class, BakedModel.class);
-                    return ctor.newInstance(facing, backup);
-                } catch (NoSuchMethodException ignored) {
-                    Constructor<?> ctor = clazz.getConstructor(Direction.class);
-                    return ctor.newInstance(facing);
+                if (backup != null) {
+                    for (Constructor<?> ctor : clazz.getConstructors()) {
+                        Class<?>[] params = ctor.getParameterTypes();
+                        if (params.length == 2 && params[0] == Direction.class && params[1].isAssignableFrom(backup.getClass())) {
+                            return ctor.newInstance(facing, backup);
+                        }
+                    }
                 }
+                Constructor<?> ctor = clazz.getConstructor(Direction.class);
+                return ctor.newInstance(facing);
             } catch (ClassNotFoundException ignored) {
                 // Yuushya not present on this platform; continue
             } catch (Exception ignored) {
@@ -106,4 +109,3 @@ public final class YuushyaShowBlockHandler implements ModBlockHandler {
         return null;
     }
 }
-
