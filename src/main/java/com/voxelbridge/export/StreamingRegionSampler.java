@@ -343,17 +343,14 @@ public final class StreamingRegionSampler {
             }
 
             // ATOMIC EXPORT
-            BufferedSceneSink buffer = new BufferedSceneSink();
             finalSink.onChunkStart(chunkPos.x, chunkPos.z);
             started = true;
-            // OPTIMIZATION: Use shared BlockEntityRenderBatch instead of per-chunk instance
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
-            localSampler.setRegionBounds(regionMin, regionMax);
 
             // OPTIMIZATION: Reuse MutableBlockPos to avoid 98,304 object allocations per chunk
             // Memory savings: ~2.4MB temporary objects per chunk + reduced GC pressure
             BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
             int blockCount = 0;
+            boolean producedGeometry = false;
 
             // OPTIMIZATION: Use ChunkSection API for faster block state access (1.3-1.8x speedup)
             // Reduces 98,304 method calls per chunk by accessing palette directly
@@ -368,6 +365,11 @@ public final class StreamingRegionSampler {
                 if (section == null || section.hasOnlyAir()) {
                     continue; // Skip empty sections entirely
                 }
+
+                // Section-local buffer/dedup to降低单批内存峰值
+                BufferedSceneSink buffer = new BufferedSceneSink();
+                BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
+                localSampler.setRegionBounds(regionMin, regionMax);
 
                 int sectionBaseY = worldMinY + (sectionIndex - minSectionY) * 16;
 
@@ -403,26 +405,33 @@ public final class StreamingRegionSampler {
                         }
                     }
                 }
-            }
-
-            if (localSampler.hadMissingNeighborAndReset()) {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                    VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Chunk " + chunkPos + " incomplete (missing neighbors), retry.");
+                if (localSampler.hadMissingNeighborAndReset()) {
+                    if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
+                        VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Chunk " + chunkPos + " incomplete (missing neighbors), retry.");
+                    }
+                    // BUG FIX: Don't clear shared batch! Only discard this chunk's buffered geometry
+                    ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
+                    finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+                    started = false;
+                    return;
                 }
-                // BUG FIX: Don't clear shared batch! Only discard this chunk's buffered geometry
-                // sharedBeBatch.clear();  // REMOVED: This would discard ALL queued BlockEntity tasks from other chunks!
-                ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
-                finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
-                started = false;
-                return;
+
+                if (!buffer.isEmpty()) {
+                    if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
+                        VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Flushing section buffered quads chunk=" + chunkPos + " sectionY=" + sectionIndex + " quads=" + buffer.getQuadCount());
+                    }
+                    buffer.flushTo(finalSink);
+                    producedGeometry = true;
+                }
             }
 
             // OPTIMIZATION: Don't flush per-chunk, accumulate in shared batch
             // sharedBeBatch will be flushed once after all chunks complete
             // Export entities in this chunk (deduped globally, skip AI-enabled livings)
+            BufferedSceneSink entityBuffer = new BufferedSceneSink();
             com.voxelbridge.export.exporter.entity.EntityExporter.exportEntitiesInChunk(
                 ctx,
-                buffer,
+                entityBuffer,
                 level,
                 new net.minecraft.world.phys.AABB(
                     minX, minY, minZ,
@@ -432,15 +441,13 @@ public final class StreamingRegionSampler {
                 processedEntityIds
             );
 
-            if (!buffer.isEmpty()) {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                    VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Flushing buffered quads for chunk " + chunkPos + ", quads=" + buffer.getQuadCount());
-                }
-                buffer.flushTo(finalSink);
-            } else {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                    VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Chunk " + chunkPos + " produced 0 quads after sampling");
-                }
+            if (!entityBuffer.isEmpty()) {
+                entityBuffer.flushTo(finalSink);
+                producedGeometry = true;
+            }
+
+            if (!producedGeometry && VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
+                VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Chunk " + chunkPos + " produced 0 quads after sampling");
             }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
             finalSink.onChunkEnd(chunkPos.x, chunkPos.z, true);
@@ -494,14 +501,12 @@ public final class StreamingRegionSampler {
             }
 
             // Force path: iterate full block volume for the chunk bounds.
-            BufferedSceneSink buffer = new BufferedSceneSink();
             finalSink.onChunkStart(chunkPos.x, chunkPos.z);
             started = true;
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
-            localSampler.setRegionBounds(regionMin, regionMax);
 
             BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
             int blockCount = 0;
+            boolean producedGeometry = false;
 
             // OPTIMIZATION: Use ChunkSection API for faster block state access
             // This mirrors the fast path in exportChunk
@@ -514,6 +519,10 @@ public final class StreamingRegionSampler {
                 if (section == null || section.hasOnlyAir()) {
                     continue; // Skip empty sections
                 }
+
+                BufferedSceneSink buffer = new BufferedSceneSink();
+                BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
+                localSampler.setRegionBounds(regionMin, regionMax);
 
                 int sectionBaseY = worldMinY + (sectionIndex - minSectionY) * 16;
 
@@ -543,17 +552,29 @@ public final class StreamingRegionSampler {
                         }
                     }
                 }
+                if (localSampler.hadMissingNeighborAndReset()) {
+                    if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
+                        VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming][Force] Chunk " + chunkPos + " incomplete (missing neighbors), retry.");
+                    }
+                    ExportProgressTracker.markPending(chunkPos.x, chunkPos.z);
+                    finalSink.onChunkEnd(chunkPos.x, chunkPos.z, false);
+                    started = false;
+                    return;
+                }
+
+                if (!buffer.isEmpty()) {
+                    if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
+                        VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming][Force] Flushing section buffered quads chunk=" + chunkPos + " sectionY=" + sectionIndex + " quads=" + buffer.getQuadCount());
+                    }
+                    buffer.flushTo(finalSink);
+                    producedGeometry = true;
+                }
             }
 
-            if (!buffer.isEmpty()) {
-                if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                    VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming][Force] Flushing buffered quads for chunk " + chunkPos + ", quads=" + buffer.getQuadCount());
-                }
-                buffer.flushTo(finalSink);
-            }
+            BufferedSceneSink entityBuffer = new BufferedSceneSink();
             com.voxelbridge.export.exporter.entity.EntityExporter.exportEntitiesInChunk(
                 ctx,
-                buffer,
+                entityBuffer,
                 level,
                 new net.minecraft.world.phys.AABB(
                     minX, minY, minZ,
@@ -562,9 +583,13 @@ public final class StreamingRegionSampler {
                 offsetX, offsetY, offsetZ,
                 processedEntityIds
             );
+            if (!entityBuffer.isEmpty()) {
+                entityBuffer.flushTo(finalSink);
+                producedGeometry = true;
+            }
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
             if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
-                VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming][Force] Chunk " + chunkPos + " force exported, blocksVisited=" + blockCount);
+                VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming][Force] Chunk " + chunkPos + " force exported, blocksVisited=" + blockCount + ", producedGeometry=" + producedGeometry);
             }
             finalSink.onChunkEnd(chunkPos.x, chunkPos.z, true);
             notifySamplingProgress(mc);

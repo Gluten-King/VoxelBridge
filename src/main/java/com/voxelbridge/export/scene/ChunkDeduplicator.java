@@ -131,118 +131,125 @@ final class ChunkDeduplicator {
 
     // Flush deduplicated data to the target sink.
     void flushTo(SceneSink target) {
-        if (quads.isEmpty()) return;
-
-        // OPTIMIZATION: Batch transfer for GltfSceneBuilder to reduce lock contention
-        if (target instanceof com.voxelbridge.export.scene.gltf.GltfSceneBuilder gltfSink) {
-            int count = quads.size();
-            List<String> spriteKeys = new ArrayList<>(count);
-            List<String> overlaySpriteKeys = new ArrayList<>(count);
-            
-            // Allocate flat arrays (Single allocation per batch instead of N per quad)
-            float[] flatPositions = new float[count * 12];
-            float[] flatUv0s = new float[count * 8];
-            float[] flatUv1s = new float[count * 8];
-            float[] flatNormals = new float[count * 3];
-            float[] flatColors = new float[count * 16];
-            List<Boolean> allDoubleSided = new ArrayList<>(count);
-
-            for (int i = 0; i < count; i++) {
-                DeduplicatedQuad quad = quads.get(i);
-                int posBase = i * 12;
-                int uvBase = i * 8;
-                int normBase = i * 3;
-                int colBase = i * 16;
-
-                for (int v = 0; v < 4; v++) {
-                    int vertIdx = quad.vertexIndices()[v];
-
-                    // positions
-                    flatPositions[posBase + v * 3]     = positions.get(vertIdx * 3);
-                    flatPositions[posBase + v * 3 + 1] = positions.get(vertIdx * 3 + 1);
-                    flatPositions[posBase + v * 3 + 2] = positions.get(vertIdx * 3 + 2);
-
-                    // uv0
-                    flatUv0s[uvBase + v * 2]     = uv0.get(vertIdx * 2);
-                    flatUv0s[uvBase + v * 2 + 1] = uv0.get(vertIdx * 2 + 1);
-
-                    // uv1
-                    flatUv1s[uvBase + v * 2]     = uv1.get(vertIdx * 2);
-                    flatUv1s[uvBase + v * 2 + 1] = uv1.get(vertIdx * 2 + 1);
-
-                    // colors
-                    flatColors[colBase + v * 4]     = colors.get(vertIdx * 4);
-                    flatColors[colBase + v * 4 + 1] = colors.get(vertIdx * 4 + 1);
-                    flatColors[colBase + v * 4 + 2] = colors.get(vertIdx * 4 + 2);
-                    flatColors[colBase + v * 4 + 3] = colors.get(vertIdx * 4 + 3);
-                }
-
-                float[] norm = quad.normal();
-                if (norm != null && norm.length >= 3) {
-                    flatNormals[normBase]     = norm[0];
-                    flatNormals[normBase + 1] = norm[1];
-                    flatNormals[normBase + 2] = norm[2];
-                } else {
-                    flatNormals[normBase]     = 0f;
-                    flatNormals[normBase + 1] = 1f;
-                    flatNormals[normBase + 2] = 0f;
-                }
-
-                spriteKeys.add(quad.spriteKey());
-                overlaySpriteKeys.add(quad.overlaySpriteKey());
-                allDoubleSided.add(quad.doubleSided());
-            }
-
-            gltfSink.addBatch(
-                materialKey,
-                spriteKeys,
-                overlaySpriteKeys,
-                flatPositions,
-                flatUv0s,
-                flatUv1s,
-                flatNormals,
-                flatColors,
-                allDoubleSided
-            );
+        if (quads.isEmpty()) {
+            releaseMemory();
             return;
         }
 
-        for (DeduplicatedQuad quad : quads) {
-            float[] quadPositions = new float[12];
-            float[] quadUv0 = new float[8];
-            float[] quadUv1 = new float[8];
-            float[] quadColors = new float[16];
+        try {
+            // OPTIMIZATION: Batch transfer for GltfSceneBuilder to reduce lock contention
+            if (target instanceof com.voxelbridge.export.scene.gltf.GltfSceneBuilder gltfSink) {
+                int count = quads.size();
+                List<String> spriteKeys = new ArrayList<>(count);
+                List<String> overlaySpriteKeys = new ArrayList<>(count);
+                
+                // Allocate flat arrays (Single allocation per batch instead of N per quad)
+                float[] flatPositions = new float[count * 12];
+                float[] flatUv0s = new float[count * 8];
+                float[] flatUv1s = new float[count * 8];
+                float[] flatNormals = new float[count * 3];
+                float[] flatColors = new float[count * 16];
+                List<Boolean> allDoubleSided = new ArrayList<>(count);
 
-            for (int i = 0; i < 4; i++) {
-                int vertIdx = quad.vertexIndices()[i];
+                for (int i = 0; i < count; i++) {
+                    DeduplicatedQuad quad = quads.get(i);
+                    int posBase = i * 12;
+                    int uvBase = i * 8;
+                    int normBase = i * 3;
+                    int colBase = i * 16;
 
-                quadPositions[i * 3] = positions.get(vertIdx * 3);
-                quadPositions[i * 3 + 1] = positions.get(vertIdx * 3 + 1);
-                quadPositions[i * 3 + 2] = positions.get(vertIdx * 3 + 2);
+                    for (int v = 0; v < 4; v++) {
+                        int vertIdx = quad.vertexIndices()[v];
 
-                quadUv0[i * 2] = uv0.get(vertIdx * 2);
-                quadUv0[i * 2 + 1] = uv0.get(vertIdx * 2 + 1);
+                        // positions
+                        flatPositions[posBase + v * 3]     = positions.get(vertIdx * 3);
+                        flatPositions[posBase + v * 3 + 1] = positions.get(vertIdx * 3 + 1);
+                        flatPositions[posBase + v * 3 + 2] = positions.get(vertIdx * 3 + 2);
 
-                quadUv1[i * 2] = uv1.get(vertIdx * 2);
-                quadUv1[i * 2 + 1] = uv1.get(vertIdx * 2 + 1);
+                        // uv0
+                        flatUv0s[uvBase + v * 2]     = uv0.get(vertIdx * 2);
+                        flatUv0s[uvBase + v * 2 + 1] = uv0.get(vertIdx * 2 + 1);
 
-                quadColors[i * 4] = colors.get(vertIdx * 4);
-                quadColors[i * 4 + 1] = colors.get(vertIdx * 4 + 1);
-                quadColors[i * 4 + 2] = colors.get(vertIdx * 4 + 2);
-                quadColors[i * 4 + 3] = colors.get(vertIdx * 4 + 3);
+                        // uv1
+                        flatUv1s[uvBase + v * 2]     = uv1.get(vertIdx * 2);
+                        flatUv1s[uvBase + v * 2 + 1] = uv1.get(vertIdx * 2 + 1);
+
+                        // colors
+                        flatColors[colBase + v * 4]     = colors.get(vertIdx * 4);
+                        flatColors[colBase + v * 4 + 1] = colors.get(vertIdx * 4 + 1);
+                        flatColors[colBase + v * 4 + 2] = colors.get(vertIdx * 4 + 2);
+                        flatColors[colBase + v * 4 + 3] = colors.get(vertIdx * 4 + 3);
+                    }
+
+                    float[] norm = quad.normal();
+                    if (norm != null && norm.length >= 3) {
+                        flatNormals[normBase]     = norm[0];
+                        flatNormals[normBase + 1] = norm[1];
+                        flatNormals[normBase + 2] = norm[2];
+                    } else {
+                        flatNormals[normBase]     = 0f;
+                        flatNormals[normBase + 1] = 1f;
+                        flatNormals[normBase + 2] = 0f;
+                    }
+
+                    spriteKeys.add(quad.spriteKey());
+                    overlaySpriteKeys.add(quad.overlaySpriteKey());
+                    allDoubleSided.add(quad.doubleSided());
+                }
+
+                gltfSink.addBatch(
+                    materialKey,
+                    spriteKeys,
+                    overlaySpriteKeys,
+                    flatPositions,
+                    flatUv0s,
+                    flatUv1s,
+                    flatNormals,
+                    flatColors,
+                    allDoubleSided
+                );
+                return;
             }
 
-            target.addQuad(
-                materialKey,
-                quad.spriteKey(),
-                quad.overlaySpriteKey(),
-                quadPositions,
-                quadUv0,
-                quadUv1,
-                quad.normal(),
-                quadColors,
-                quad.doubleSided()
-            );
+            for (DeduplicatedQuad quad : quads) {
+                float[] quadPositions = new float[12];
+                float[] quadUv0 = new float[8];
+                float[] quadUv1 = new float[8];
+                float[] quadColors = new float[16];
+
+                for (int i = 0; i < 4; i++) {
+                    int vertIdx = quad.vertexIndices()[i];
+
+                    quadPositions[i * 3] = positions.get(vertIdx * 3);
+                    quadPositions[i * 3 + 1] = positions.get(vertIdx * 3 + 1);
+                    quadPositions[i * 3 + 2] = positions.get(vertIdx * 3 + 2);
+
+                    quadUv0[i * 2] = uv0.get(vertIdx * 2);
+                    quadUv0[i * 2 + 1] = uv0.get(vertIdx * 2 + 1);
+
+                    quadUv1[i * 2] = uv1.get(vertIdx * 2);
+                    quadUv1[i * 2 + 1] = uv1.get(vertIdx * 2 + 1);
+
+                    quadColors[i * 4] = colors.get(vertIdx * 4);
+                    quadColors[i * 4 + 1] = colors.get(vertIdx * 4 + 1);
+                    quadColors[i * 4 + 2] = colors.get(vertIdx * 4 + 2);
+                    quadColors[i * 4 + 3] = colors.get(vertIdx * 4 + 3);
+                }
+
+                target.addQuad(
+                    materialKey,
+                    quad.spriteKey(),
+                    quad.overlaySpriteKey(),
+                    quadPositions,
+                    quadUv0,
+                    quadUv1,
+                    quad.normal(),
+                    quadColors,
+                    quad.doubleSided()
+                );
+            }
+        } finally {
+            releaseMemory();
         }
     }
 
@@ -399,5 +406,26 @@ final class ChunkDeduplicator {
         }
 
         return new int[]{idx[0], idx[1], idx[2], idx[3]};
+    }
+
+    // Release internal buffers to avoid retaining transparent culling data across LOD batches.
+    private void releaseMemory() {
+        clearAndTrim(positions);
+        clearAndTrim(uv0);
+        clearAndTrim(uv1);
+        clearAndTrim(colors);
+        quads.clear();
+        if (needsQuadDedup && quadKeys != null) {
+            quadKeys.clear();
+        }
+        vertexLookup.clear();
+        vertexCount = 0;
+    }
+
+    private static <T> void clearAndTrim(List<T> list) {
+        list.clear();
+        if (list instanceof ArrayList<?> arrayList) {
+            arrayList.trimToSize();
+        }
     }
 }

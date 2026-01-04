@@ -43,6 +43,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Arrays;
+import java.util.Set;
 import java.awt.image.BufferedImage;
 import com.mojang.blaze3d.vertex.PoseStack;
 import org.joml.Matrix4f;
@@ -123,6 +124,12 @@ public class VoxelMesher {
     private final Long2IntOpenHashMap tintCache = new Long2IntOpenHashMap();
     private final Int2ByteOpenHashMap fluidPresenceCache = new Int2ByteOpenHashMap();
     private final Int2IntOpenHashMap fluidBlockIdCache = new Int2IntOpenHashMap();
+    // Cross-LOD caches
+    private final Int2ByteOpenHashMap occlusionCache = new Int2ByteOpenHashMap();
+    private final long[][] fineNeighborSnapshots = new long[24][];
+    private Set<Long> sectionsToMesh;
+    private static final int FACE_DECISION_SKIP = -1;
+    private static final int FACE_DECISION_FULL = 16;
     private static final float[] WHITE_COLORS = GeometryUtil.whiteColor();
     private static final BlockState AIR_STATE = Blocks.AIR.defaultBlockState();
 
@@ -325,6 +332,7 @@ public class VoxelMesher {
         this.tintCache.defaultReturnValue(Integer.MIN_VALUE);
         this.fluidPresenceCache.defaultReturnValue((byte) -1);
         this.fluidBlockIdCache.defaultReturnValue(Integer.MIN_VALUE);
+        this.occlusionCache.defaultReturnValue((byte) -1);
     }
 
     static {
@@ -339,6 +347,165 @@ public class VoxelMesher {
         for (Direction dir : Direction.values()) {
             FACE_UV_TEMPLATE[dir.get3DDataValue()] = computeFaceUvTemplate(dir);
         }
+    }
+
+    public void setSectionsToMesh(Set<Long> sectionsToMesh) {
+        this.sectionsToMesh = sectionsToMesh;
+    }
+
+    // --- Cross-LOD helpers ---
+    private void snapshotFineNeighbors(int chunkX, int chunkY, int chunkZ, int fineLevel) {
+        int baseX = chunkX * 2;
+        int baseY = chunkY * 2;
+        int baseZ = chunkZ * 2;
+
+        snapshotFineQuad(0, fineLevel, baseX, baseY - 1, baseZ, Direction.DOWN);
+        snapshotFineQuad(4, fineLevel, baseX, baseY + 2, baseZ, Direction.UP);
+        snapshotFineQuad(8, fineLevel, baseX, baseY, baseZ - 1, Direction.NORTH);
+        snapshotFineQuad(12, fineLevel, baseX, baseY, baseZ + 2, Direction.SOUTH);
+        snapshotFineQuad(16, fineLevel, baseX - 1, baseY, baseZ, Direction.WEST);
+        snapshotFineQuad(20, fineLevel, baseX + 2, baseY, baseZ, Direction.EAST);
+    }
+
+    private void snapshotFineQuad(int offset, int level, int startX, int startY, int startZ, Direction dirFromCurrent) {
+        int dirIndex = offset / 4;
+        for (int i = 0; i < 4; i++) {
+            int dx = 0, dy = 0, dz = 0;
+            int u = (i & 1);
+            int v = (i >> 1) & 1;
+            switch (dirIndex) {
+                case 0, 1 -> { dx = u; dz = v; }
+                case 2, 3 -> { dx = u; dy = v; }
+                case 4, 5 -> { dy = u; dz = v; }
+            }
+            WorldSection section = worldEngine.acquireIfExists(level, startX + dx, startY + dy, startZ + dz);
+            if (section != null) {
+                try {
+                    fineNeighborSnapshots[offset + i] = extractFaceData(section, dirFromCurrent);
+                } finally {
+                    section.release();
+                }
+            } else {
+                fineNeighborSnapshots[offset + i] = null;
+            }
+        }
+    }
+
+    private long[] extractFaceData(WorldSection section, Direction dirFromCurrent) {
+        long[] snapshot = new long[32 * 32];
+        long[] src = section._unsafeGetRawDataArray();
+        boolean isPositiveDir = dirFromCurrent.getAxisDirection() == Direction.AxisDirection.POSITIVE;
+        int fixedCoord = isPositiveDir ? 0 : 31;
+
+        if (dirFromCurrent.getAxis() == Direction.Axis.Y) {
+            int start = fixedCoord << 10;
+            System.arraycopy(src, start, snapshot, 0, 1024);
+        } else if (dirFromCurrent.getAxis() == Direction.Axis.Z) {
+            int idx = 0;
+            for (int y = 0; y < 32; y++) {
+                int yBase = (y << 10) | (fixedCoord << 5);
+                System.arraycopy(src, yBase, snapshot, idx, 32);
+                idx += 32;
+            }
+        } else {
+            int idx = 0;
+            for (int y = 0; y < 32; y++) {
+                for (int z = 0; z < 32; z++) {
+                    int srcIdx = (y << 10) | (z << 5) | fixedCoord;
+                    snapshot[idx++] = src[srcIdx];
+                }
+            }
+        }
+        return snapshot;
+    }
+
+    private void releaseFineNeighbors() {
+        Arrays.fill(fineNeighborSnapshots, null);
+    }
+
+    private int computeFineOcclusionMask(int localX, int localY, int localZ, Direction dir) {
+        int u = 0, v = 0;
+        int fineU = 0, fineV = 0;
+        switch (dir) {
+            case DOWN, UP -> {
+                u = (localX >= 16) ? 1 : 0;
+                v = (localZ >= 16) ? 1 : 0;
+                fineU = (localX * 2) % 32;
+                fineV = (localZ * 2) % 32;
+            }
+            case NORTH, SOUTH -> {
+                u = (localX >= 16) ? 1 : 0;
+                v = (localY >= 16) ? 1 : 0;
+                fineU = (localX * 2) % 32;
+                fineV = (localY * 2) % 32;
+            }
+            case WEST, EAST -> {
+                u = (localY >= 16) ? 1 : 0;
+                v = (localZ >= 16) ? 1 : 0;
+                fineU = (localY * 2) % 32;
+                fineV = (localZ * 2) % 32;
+            }
+        }
+
+        int chunkIdx = dir.ordinal() * 4 + (u + v * 2);
+        long[] snapshot = fineNeighborSnapshots[chunkIdx];
+        if (snapshot == null) return 0;
+
+        int mask = 0;
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 2; j++) {
+                int du = fineU + i;
+                int dv = fineV + j;
+                int snapIdx;
+                if (dir.getAxis() == Direction.Axis.Y) {
+                    snapIdx = (dv << 5) | du;
+                } else if (dir.getAxis() == Direction.Axis.Z) {
+                    snapIdx = (dv << 5) | du;
+                } else {
+                    snapIdx = (du << 5) | dv;
+                }
+                long id = snapshot[snapIdx];
+                if (!Mapper.isAir(id)) {
+                    int blockId = Mapper.getBlockId(id);
+                    if (isOccluding(blockId)) {
+                        int bit = (j << 1) | i;
+                        mask |= (1 << bit);
+                    }
+                }
+            }
+        }
+        return mask;
+    }
+
+    private boolean hasFineSnapshot(Direction dir, int localX, int localY, int localZ) {
+        int u = 0, v = 0;
+        switch (dir) {
+            case DOWN, UP -> {
+                u = (localX >= 16) ? 1 : 0;
+                v = (localZ >= 16) ? 1 : 0;
+            }
+            case NORTH, SOUTH -> {
+                u = (localX >= 16) ? 1 : 0;
+                v = (localY >= 16) ? 1 : 0;
+            }
+            case WEST, EAST -> {
+                u = (localY >= 16) ? 1 : 0;
+                v = (localZ >= 16) ? 1 : 0;
+            }
+        }
+        int chunkIdx = dir.ordinal() * 4 + (u + v * 2);
+        return fineNeighborSnapshots[chunkIdx] != null;
+    }
+
+    private boolean isOccluding(int blockId) {
+        byte cached = occlusionCache.get(blockId);
+        if (cached != -1) {
+            return cached == 1;
+        }
+        BlockState state = mapper.getBlockStateFromBlockId(blockId);
+        boolean occ = state.canOcclude();
+        occlusionCache.put(blockId, (byte) (occ ? 1 : 0));
+        return occ;
     }
 
     public void meshChunk(int chunkX, int chunkY, int chunkZ, int level) {
@@ -374,6 +541,9 @@ public class VoxelMesher {
                 data, dataNegX, dataPosX, dataNegY, dataPosY, dataNegZ, dataPosZ);
             BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
             BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
+            if (level > 0) {
+                snapshotFineNeighbors(chunkX, chunkY, chunkZ, level - 1);
+            }
             
             // Standard loop over 32x32x32 section
             for (int y = 0; y < 32; y++) {
@@ -405,23 +575,29 @@ public class VoxelMesher {
                             continue;
                         }
 
-                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.UP, state)) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, stats);
+                        int upDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.UP, state, level, chunkX, chunkY, chunkZ, x, y, z);
+                        if (upDecision != FACE_DECISION_SKIP) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.UP, scale, upDecision, stats);
                         }
-                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.DOWN, state)) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, stats);
+                        int downDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.DOWN, state, level, chunkX, chunkY, chunkZ, x, y, z);
+                        if (downDecision != FACE_DECISION_SKIP) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.DOWN, scale, downDecision, stats);
                         }
-                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.NORTH, state)) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, stats);
+                        int northDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.NORTH, state, level, chunkX, chunkY, chunkZ, x, y, z);
+                        if (northDecision != FACE_DECISION_SKIP) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.NORTH, scale, northDecision, stats);
                         }
-                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.SOUTH, state)) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, stats);
+                        int southDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.SOUTH, state, level, chunkX, chunkY, chunkZ, x, y, z);
+                        if (southDecision != FACE_DECISION_SKIP) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.SOUTH, scale, southDecision, stats);
                         }
-                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.WEST, state)) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, stats);
+                        int westDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.WEST, state, level, chunkX, chunkY, chunkZ, x, y, z);
+                        if (westDecision != FACE_DECISION_SKIP) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.WEST, scale, westDecision, stats);
                         }
-                        if (shouldRenderFace(blockGetter, pos, neighborPos, Direction.EAST, state)) {
-                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, stats);
+                        int eastDecision = shouldRenderFace(blockGetter, pos, neighborPos, Direction.EAST, state, level, chunkX, chunkY, chunkZ, x, y, z);
+                        if (eastDecision != FACE_DECISION_SKIP) {
+                            emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, x, y, z, Direction.EAST, scale, eastDecision, stats);
                         }
                     }
                 }
@@ -434,6 +610,8 @@ public class VoxelMesher {
                 level, chunkX, chunkY, chunkZ, stats.nonAirBlocks, stats.faces));
 
         } finally {
+            releaseFineNeighbors();
+            occlusionCache.clear();
             if (negX != null) negX.release();
             if (posX != null) posX.release();
             if (negY != null) negY.release();
@@ -444,13 +622,70 @@ public class VoxelMesher {
         }
     }
 
-    private boolean shouldRenderFace(LodBlockGetter blockGetter,
-                                     BlockPos.MutableBlockPos pos,
-                                     BlockPos.MutableBlockPos neighborPos,
-                                     Direction dir,
-                                     BlockState state) {
+    private int shouldRenderFace(LodBlockGetter blockGetter,
+                                 BlockPos.MutableBlockPos pos,
+                                 BlockPos.MutableBlockPos neighborPos,
+                                 Direction dir,
+                                 BlockState state,
+                                 int level,
+                                 int chunkX,
+                                 int chunkY,
+                                 int chunkZ,
+                                 int localX,
+                                 int localY,
+                                 int localZ) {
         neighborPos.setWithOffset(pos, dir);
-        return Block.shouldRenderFace(state, blockGetter, pos, dir, neighborPos);
+        boolean visible = Block.shouldRenderFace(state, blockGetter, pos, dir, neighborPos);
+
+        if (level > 0) {
+            boolean isBoundary = switch (dir) {
+                case DOWN -> localY == 0;
+                case UP -> localY == 31;
+                case NORTH -> localZ == 0;
+                case SOUTH -> localZ == 31;
+                case WEST -> localX == 0;
+                case EAST -> localX == 31;
+            };
+
+            if (isBoundary) {
+                int neighborChunkX = chunkX + dir.getStepX();
+                int neighborChunkY = chunkY + dir.getStepY();
+                int neighborChunkZ = chunkZ + dir.getStepZ();
+                long neighborSectionId = WorldEngine.getWorldSectionId(level, neighborChunkX, neighborChunkY, neighborChunkZ);
+                boolean neighborWillBeMeshed = sectionsToMesh != null && sectionsToMesh.contains(neighborSectionId);
+
+                if (neighborWillBeMeshed) {
+                    return visible ? FACE_DECISION_FULL : FACE_DECISION_SKIP;
+                }
+
+                boolean fineSnapshotExists = hasFineSnapshot(dir, localX, localY, localZ);
+                if (fineSnapshotExists) {
+                    int mask = computeFineOcclusionMask(localX, localY, localZ, dir);
+                    boolean fullyOccluded = mask == 0xF;
+                    if (visible) {
+                        if (fullyOccluded) {
+                            return FACE_DECISION_SKIP;
+                        }
+                        if (mask == 0) {
+                            return FACE_DECISION_FULL;
+                        }
+                        return mask;
+                    } else {
+                        if (fullyOccluded) {
+                            return FACE_DECISION_SKIP;
+                        }
+                        if (mask == 0) {
+                            return FACE_DECISION_FULL;
+                        }
+                        return mask;
+                    }
+                } else {
+                    return FACE_DECISION_SKIP;
+                }
+            }
+        }
+
+        return visible ? FACE_DECISION_FULL : FACE_DECISION_SKIP;
     }
 
     private void emitFluidFaces(LodBlockGetter blockGetter,
@@ -769,6 +1004,10 @@ public class VoxelMesher {
     }
 
     private void emitFace(BlockState state, int blockId, int biomeId, int chunkX, int chunkY, int chunkZ, int localX, int localY, int localZ, Direction dir, int scale, MeshStats stats) {
+        emitFace(state, blockId, biomeId, chunkX, chunkY, chunkZ, localX, localY, localZ, dir, scale, FACE_DECISION_FULL, stats);
+    }
+
+    private void emitFace(BlockState state, int blockId, int biomeId, int chunkX, int chunkY, int chunkZ, int localX, int localY, int localZ, Direction dir, int scale, int fineOcclusionMask, MeshStats stats) {
         if (state.getRenderShape() == RenderShape.INVISIBLE && !(state.getBlock() instanceof LiquidBlock)) {
             return;
         }
@@ -776,13 +1015,13 @@ public class VoxelMesher {
         String spriteName;
         LodFaceMeta faceMeta = null;
         String overlaySprite = null;
-        boolean disableLodTexture = state.getBlock() instanceof LiquidBlock; // 流体使用原版贴图，避免 LOD 纹理导致的发黑
+        boolean disableLodTexture = state.getBlock() instanceof LiquidBlock;
         if (FORCE_LOD_MATERIAL) {
             materialKey = LOD_MATERIAL_KEY;
             spriteName = LOD_SPRITE_KEY;
         } else {
             if (disableLodTexture) {
-                spriteName = resolveSpriteKeyVanilla(state, blockId, dir); // 不使用 LOD bake 结果
+                spriteName = resolveSpriteKeyVanilla(state, blockId, dir);
             } else {
                 spriteName = resolveSpriteKey(state, blockId, dir);
                 if (hasLodTextures(blockId) && lodTextureProvider instanceof LodFaceProvider faceProvider) {
@@ -811,25 +1050,19 @@ public class VoxelMesher {
 
         int baseTintColor = -1;
         int overlayTintColor = -1;
-        // int baseTintIndex = resolveBaseTintIndex(state, blockId, dir); // 不再依赖不可靠的索引
 
         if (overlaySprite != null) {
-            // 终极策略：基于方块类型的特例判定
-            // 草方块侧面是唯一且确定的必须染 Overlay 的情况。
             boolean isGrassBlock = state.getBlock() == Blocks.GRASS_BLOCK;
             boolean isOverlayType = isOverlaySprite(overlaySprite);
 
             if ((isGrassBlock && dir.getAxis().isHorizontal()) || isOverlayType) {
-                // 情况1：草方块侧面 或 标准 Overlay -> Tint 给 Overlay
                 baseTintColor = -1;
                 overlayTintColor = tintColor;
             } else {
-                // 情况2：其他所有情况（包括 Mod 树叶） -> Tint 给 Base
                 baseTintColor = tintColor;
                 overlayTintColor = -1;
             }
         } else {
-            // 无 Overlay：直接使用 tint
             baseTintColor = tintColor;
         }
 
@@ -838,19 +1071,16 @@ public class VoxelMesher {
         String combinedSprite = null;
 
         if (overlaySprite != null && exportContext != null) {
-            // 有 Overlay：强制合并烘焙，顶点色保持纯白
             combinedSprite = buildLayeredTintedSprite(exportContext, spriteName, baseTintColor, overlaySprite, overlayTintColor);
             if (combinedSprite != null) {
                 spriteName = combinedSprite;
-                overlaySprite = null; // 合并完成，移除 overlay 引用
+                overlaySprite = null;
                 baseColors = WHITE_COLORS;
             } else {
-                // 合并失败兜底：使用顶点色
                 baseColors = resolveColors(baseTintColor, baseTintColor != -1);
                 overlayColors = resolveColors(overlayTintColor, overlayTintColor != -1);
             }
         } else {
-            // 无 Overlay：直接写入顶点色（不烘焙），复用原纹理
             if (baseTintColor != -1) {
                 baseColors = resolveColors(baseTintColor, true);
             } else {
@@ -858,49 +1088,33 @@ public class VoxelMesher {
             }
         }
 
-        // Register tinted sprites to atlas for proper UV remapping
         if (exportContext != null) {
             if (combinedSprite != null) {
                 com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, 0xFFFFFF);
             } else {
-            // Overlay sprites must always be registered as tinted, even if tintColor is -1
-            // This allows grass_block_side_overlay and similar textures to be properly separated
-            boolean isBaseTinted = baseTintColor != -1;
-            boolean isOverlay = overlaySprite != null && overlayTintColor != -1;
-            boolean isBaseSpriteOverlay = isOverlaySprite(spriteName);
+                boolean isBaseTinted = baseTintColor != -1;
+                boolean isOverlay = overlaySprite != null && overlayTintColor != -1;
+                boolean isBaseSpriteOverlay = isOverlaySprite(spriteName);
 
-            if (isBaseTinted || isBaseSpriteOverlay) {
-                int colorToRegister = (overlaySprite != null) ? 0xFFFFFF : (isBaseTinted ? baseTintColor : 0xFFFFFF);
-                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, colorToRegister);
-            }
+                if (isBaseTinted || isBaseSpriteOverlay) {
+                    int colorToRegister = (overlaySprite != null) ? 0xFFFFFF : (isBaseTinted ? baseTintColor : 0xFFFFFF);
+                    com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, spriteName, colorToRegister);
+                }
 
-            if (overlaySprite != null) {
-                int overlayRegColor = overlayTintColor != -1 ? overlayTintColor : 0xFFFFFF;
-                com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, overlayRegColor);
-            }
+                if (overlaySprite != null) {
+                    int overlayRegColor = overlayTintColor != -1 ? overlayTintColor : 0xFFFFFF;
+                    com.voxelbridge.export.texture.TextureAtlasManager.registerTint(exportContext, overlaySprite, overlayRegColor);
+                }
             }
         }
 
-        // Generate geometry for a standard unit face
-        float[] positions = new float[12];
-        float[] uvs = new float[8];
-        float[] normals = new float[]{dir.getStepX(), dir.getStepY(), dir.getStepZ()};
-        
-        // Basic Unit Cube Geometry
         float baseX = (float) ((chunkX * 32 + localX) * scale + offsetX);
         float baseY = (float) ((chunkY * 32 + localY) * scale + offsetY);
         float baseZ = (float) ((chunkZ * 32 + localZ) * scale + offsetZ);
-        float x0 = baseX, x1 = baseX + scale;
-        float y0 = baseY, y1 = baseY + scale;
-        float z0 = baseZ, z1 = baseZ + scale;
 
         if (faceMeta != null && faceMeta.empty) {
             return;
         }
-
-        // For UP/DOWN faces: u0/u1 map to X, v0/v1 map to Z, depth affects Y
-        // For NORTH/SOUTH faces: u0/u1 map to X, v0/v1 map to Y, depth affects Z
-        // For EAST/WEST faces: u0/u1 map to Z, v0/v1 map to Y, depth affects X
 
         float u0 = 0f;
         float u1 = 1f;
@@ -908,32 +1122,116 @@ public class VoxelMesher {
         float v1 = 1f;
         float depthOffset = 0f;
 
-        // UV coords for texture sampling - V is flipped because the saved image is Y-flipped
         float uvU0 = 0f;
         float uvU1 = 1f;
         float uvV0 = 0f;
         float uvV1 = 1f;
 
         if (faceMeta != null) {
-            // Geometry cropping uses OpenGL texture coords (Y=0 at bottom, matches world Y)
             u0 = faceMeta.minX / 16.0f;
             u1 = (faceMeta.maxX + 1) / 16.0f;
             v0 = faceMeta.minY / 16.0f;
             v1 = (faceMeta.maxY + 1) / 16.0f;
 
-            // UV sampling uses image coords (Y=0 at top, because image is Y-flipped when saved)
-            // Flip V: if original minY=0,maxY=7 (bottom half in OpenGL),
-            // after image flip it's at top half, so UV should be flipped
             uvU0 = u0;
             uvU1 = u1;
-            uvV0 = 1.0f - v1;  // Flip: original maxY becomes UV minV
-            uvV1 = 1.0f - v0;  // Flip: original minY becomes UV maxV
+            uvV0 = 1.0f - v1;
+            uvV1 = 1.0f - v0;
 
             depthOffset = clamp01(faceMeta.depth);
             if ((dir.get3DDataValue() & 1) == 1) {
                 depthOffset = 1.0f - depthOffset;
             }
         }
+
+        int occlusionMask = (fineOcclusionMask >= 0 && fineOcclusionMask < FACE_DECISION_FULL) ? fineOcclusionMask : 0;
+        if (occlusionMask == 0xF) {
+            return;
+        }
+        if (occlusionMask != 0) {
+            emitCroppedFace(materialKey, spriteName, overlaySprite, baseColors, overlayColors, faceMeta,
+                dir, scale, baseX, baseY, baseZ, u0, u1, v0, v1, uvU0, uvU1, uvV0, uvV1, depthOffset, occlusionMask, stats);
+            return;
+        }
+
+        emitFaceSection(materialKey, spriteName, overlaySprite, baseColors, overlayColors, faceMeta,
+            dir, scale, baseX, baseY, baseZ, u0, u1, v0, v1, uvU0, uvU1, uvV0, uvV1, depthOffset, stats);
+    }
+
+    private void emitCroppedFace(String materialKey,
+                                 String spriteName,
+                                 String overlaySprite,
+                                 float[] baseColors,
+                                 float[] overlayColors,
+                                 LodFaceMeta faceMeta,
+                                 Direction dir,
+                                 int scale,
+                                 float baseX,
+                                 float baseY,
+                                 float baseZ,
+                                 float u0,
+                                 float u1,
+                                 float v0,
+                                 float v1,
+                                 float uvU0,
+                                 float uvU1,
+                                 float uvV0,
+                                 float uvV1,
+                                 float depthOffset,
+                                 int occlusionMask,
+                                 MeshStats stats) {
+        float midU = lerp(u0, u1, 0.5f);
+        float midV = lerp(v0, v1, 0.5f);
+        float midUvU = lerp(uvU0, uvU1, 0.5f);
+        float midUvV = lerp(uvV0, uvV1, 0.5f);
+
+        for (int vIdx = 0; vIdx < 2; vIdx++) {
+            float subV0 = (vIdx == 0) ? v0 : midV;
+            float subV1 = (vIdx == 0) ? midV : v1;
+            float subUvV0 = (vIdx == 0) ? uvV0 : midUvV;
+            float subUvV1 = (vIdx == 0) ? midUvV : uvV1;
+            for (int uIdx = 0; uIdx < 2; uIdx++) {
+                int bit = (vIdx << 1) | uIdx;
+                if ((occlusionMask & (1 << bit)) != 0) {
+                    continue;
+                }
+                float subU0 = (uIdx == 0) ? u0 : midU;
+                float subU1 = (uIdx == 0) ? midU : u1;
+                float subUvU0 = (uIdx == 0) ? uvU0 : midUvU;
+                float subUvU1 = (uIdx == 0) ? midUvU : uvU1;
+
+                emitFaceSection(materialKey, spriteName, overlaySprite, baseColors, overlayColors, faceMeta,
+                    dir, scale, baseX, baseY, baseZ, subU0, subU1, subV0, subV1, subUvU0, subUvU1, subUvV0, subUvV1, depthOffset, stats);
+            }
+        }
+    }
+
+    private void emitFaceSection(String materialKey,
+                                 String spriteName,
+                                 String overlaySprite,
+                                 float[] baseColors,
+                                 float[] overlayColors,
+                                 LodFaceMeta faceMeta,
+                                 Direction dir,
+                                 int scale,
+                                 float baseX,
+                                 float baseY,
+                                 float baseZ,
+                                 float u0,
+                                 float u1,
+                                 float v0,
+                                 float v1,
+                                 float uvU0,
+                                 float uvU1,
+                                 float uvV0,
+                                 float uvV1,
+                                 float depthOffset,
+                                 MeshStats stats) {
+        float[] positions;
+        float[] normals = new float[]{dir.getStepX(), dir.getStepY(), dir.getStepZ()};
+        float x0 = baseX, x1 = baseX + scale;
+        float y0 = baseY, y1 = baseY + scale;
+        float z0 = baseZ, z1 = baseZ + scale;
 
         switch (dir) {
             case DOWN -> {
@@ -942,7 +1240,6 @@ public class VoxelMesher {
                 float zz0 = lerp(z0, z1, v0);
                 float zz1 = lerp(z0, z1, v1);
                 float yy = faceMeta != null ? (baseY + depthOffset * scale) : y0;
-                // y0 face: (x0, z1), (x0, z0), (x1, z0), (x1, z1)
                 positions = new float[]{
                     xx0, yy, zz1,
                     xx0, yy, zz0,
@@ -956,7 +1253,6 @@ public class VoxelMesher {
                 float zz0 = lerp(z0, z1, v0);
                 float zz1 = lerp(z0, z1, v1);
                 float yy = faceMeta != null ? (baseY + depthOffset * scale) : y1;
-                // y1 face: (x0, z0), (x0, z1), (x1, z1), (x1, z0)
                 positions = new float[]{
                     xx0, yy, zz0,
                     xx0, yy, zz1,
@@ -970,7 +1266,6 @@ public class VoxelMesher {
                 float yy0 = lerp(y0, y1, v0);
                 float yy1 = lerp(y0, y1, v1);
                 float zz = faceMeta != null ? (baseZ + depthOffset * scale) : z0;
-                // z0 face: (x1, y1), (x1, y0), (x0, y0), (x0, y1)
                 positions = new float[]{
                     xx1, yy1, zz,
                     xx1, yy0, zz,
@@ -984,7 +1279,6 @@ public class VoxelMesher {
                 float yy0 = lerp(y0, y1, v0);
                 float yy1 = lerp(y0, y1, v1);
                 float zz = faceMeta != null ? (baseZ + depthOffset * scale) : z1;
-                // z1 face: (x0, y1), (x0, y0), (x1, y0), (x1, y1)
                 positions = new float[]{
                     xx0, yy1, zz,
                     xx0, yy0, zz,
@@ -993,7 +1287,6 @@ public class VoxelMesher {
                 };
             }
             case WEST -> {
-                // 东西面：LOD 烘焙的 X 方向与世界 Z 方向存在镜像，需要反转几何的 u->z 映射（UV 不变）
                 float gu0 = u0;
                 float gu1 = u1;
                 if (faceMeta != null) {
@@ -1024,7 +1317,6 @@ public class VoxelMesher {
                 float yy0 = lerp(y0, y1, v0);
                 float yy1 = lerp(y0, y1, v1);
                 float xx = faceMeta != null ? (baseX + depthOffset * scale) : x1;
-                // x1 face: (x1, y1, z0), (x1, y0, z0), (x1, y0, z1), (x1, y1, z1)
                 positions = new float[]{
                     xx, yy1, zz1,
                     xx, yy0, zz1,
@@ -1032,11 +1324,11 @@ public class VoxelMesher {
                     xx, yy1, zz0
                 };
             }
+            default -> positions = new float[12];
         }
 
-        
         float[] uvTemplate = FACE_UV_TEMPLATE[dir.get3DDataValue()];
-        uvs = new float[]{
+        float[] uvs = new float[]{
             lerp(uvU0, uvU1, uvTemplate[0]), lerp(uvV0, uvV1, uvTemplate[1]),
             lerp(uvU0, uvU1, uvTemplate[2]), lerp(uvV0, uvV1, uvTemplate[3]),
             lerp(uvU0, uvU1, uvTemplate[4]), lerp(uvV0, uvV1, uvTemplate[5]),
@@ -1078,6 +1370,7 @@ public class VoxelMesher {
         }
         stats.faces++;
     }
+
 
     private boolean shouldUseModelQuads(BlockState state, int blockId) {
         if (state.getRenderShape() != RenderShape.MODEL) {

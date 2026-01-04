@@ -200,6 +200,7 @@ public final class LodExportService {
             maxRequiredLvl, alignSize, alignedMinChunkX, alignedMaxChunkX, alignedMinChunkZ, alignedMaxChunkZ));
 
         importer.importRegionDirectoryAsync(regionDir.toFile(), alignedMinChunkX, alignedMaxChunkX, alignedMinChunkZ, alignedMaxChunkZ);
+        importer.setSectionFilter(selMinY, selMaxY);
         importer.runImport(
             (finished, total) -> {
                 long now = System.nanoTime();
@@ -416,6 +417,8 @@ public final class LodExportService {
                 gpuBake.bakeBlockIds(blockIds);
             }
             VoxelMesher mesher = new VoxelMesher(engine, countingSink, offsetX, offsetY, offsetZ, gpuBake, ctx);
+            // Pass the set of sections that will be meshed for boundary face culling
+            mesher.setSectionsToMesh(new java.util.HashSet<>(sectionsToMesh));
             for (long sectionId : sectionsToMesh) {
                 int lvl = WorldEngine.getLevel(sectionId);
                 int x = WorldEngine.getX(sectionId);

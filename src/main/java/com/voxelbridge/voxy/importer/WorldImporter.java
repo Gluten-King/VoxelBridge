@@ -61,6 +61,8 @@ public class WorldImporter implements IDataImporter {
 
     private final ConcurrentLinkedDeque<Runnable> jobQueue = new ConcurrentLinkedDeque<>();
     private final Service service;
+    private final ServiceManager serviceManager;
+    private final int workerThreads;
 
     private volatile boolean isRunning;
     private final AtomicBoolean refAcquired = new AtomicBoolean(false);
@@ -69,9 +71,14 @@ public class WorldImporter implements IDataImporter {
     private int maxChunkXFilter;
     private int minChunkZFilter;
     private int maxChunkZFilter;
+    private boolean hasSectionFilter = false;
+    private int minSectionYFilter;
+    private int maxSectionYFilter;
 
     public WorldImporter(WorldEngine worldEngine, Level mcWorld, ServiceManager sm, BooleanSupplier runChecker) {
         this.world = worldEngine;
+        this.serviceManager = sm;
+        this.workerThreads = Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() - 1, 8));
         this.service = sm.createService(()->new Pair<>(()->this.jobQueue.poll().run(), ()->{}), 3, "World importer", runChecker);
 
         var biomeRegistry = mcWorld.registryAccess().registryOrThrow(Registries.BIOME);
@@ -97,6 +104,7 @@ public class WorldImporter implements IDataImporter {
         this.refAcquired.set(true);
         this.updateCallback = updateCallback;
         this.completionCallback = completionCallback;
+        startWorkers();
         this.worker.start();
     }
 
@@ -122,6 +130,7 @@ public class WorldImporter implements IDataImporter {
             this.world.releaseRef();
             this.service.shutdown();
         }
+        stopWorkers();
         //Free all the remaining entries by running the lambda
         while (!this.jobQueue.isEmpty()) {
             this.jobQueue.poll().run();
@@ -141,8 +150,38 @@ public class WorldImporter implements IDataImporter {
     }
 
     private volatile Thread worker;
+    private Thread[] workers;
     private IUpdateCallback updateCallback;
     private ICompletionCallback completionCallback;
+
+    private void startWorkers() {
+        if (this.workers != null) return;
+        this.workers = new Thread[this.workerThreads];
+        for (int i = 0; i < this.workerThreads; i++) {
+            int idx = i;
+            this.workers[i] = new Thread(() -> {
+                Thread.currentThread().setName("WorldImporter-Worker-" + idx);
+                while (this.isRunning) {
+                    int res = this.serviceManager.tryRunAJob();
+                    if (res != 0) {
+                        try {
+                            Thread.sleep(1);
+                        } catch (InterruptedException ignored) {}
+                    }
+                }
+            });
+            this.workers[i].setDaemon(true);
+            this.workers[i].start();
+        }
+    }
+
+    private void stopWorkers() {
+        if (this.workers == null) return;
+        for (Thread t : this.workers) {
+            if (t != null) t.interrupt();
+        }
+        this.workers = null;
+    }
     public void importRegionDirectoryAsync(File directory) {
         hasChunkFilter = false;
         var files = directory.listFiles((dir, name) -> {
@@ -194,6 +233,14 @@ public class WorldImporter implements IDataImporter {
         this.importRegionsAsync(files, this::importRegionFile);
     }
 
+    public void setSectionFilter(int minY, int maxY) {
+        hasSectionFilter = true;
+        int minSec = Math.min(minY, maxY) >> 4;
+        int maxSec = Math.max(minY, maxY) >> 4;
+        minSectionYFilter = minSec;
+        maxSectionYFilter = maxSec;
+    }
+
     public void importZippedRegionDirectoryAsync(File zip, String innerDirectory) {
         try {
             innerDirectory = innerDirectory.replace("\\\\", "\\\\").replace("\\", "/");
@@ -243,7 +290,6 @@ public class WorldImporter implements IDataImporter {
                 } catch (NumberFormatException e) {
                     Logger.error("Invalid format for region position, x: \""+sections[1]+"\" z: \"" + sections[2] + "\" skipping region");
                 }
-                buf.free();
             });
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -350,17 +396,18 @@ public class WorldImporter implements IDataImporter {
                 "[LOD] region file done r.%d.%d queued=%d empty=%d filtered=%d invalid=%d external=%d",
                 rx, rz, stats.chunksQueued, stats.chunksEmpty, stats.chunksFiltered,
                 stats.chunksInvalid, stats.chunksExternal));
-            fileData.free();
         }
     }
 
 
     private RegionStats importRegion(MemoryBuffer regionFile, int x, int z) {
         RegionStats stats = new RegionStats();
+        java.util.concurrent.atomic.AtomicInteger regionPending = new java.util.concurrent.atomic.AtomicInteger(0);
         //Find and load all saved chunks
         if (regionFile.size < 8192) {//File not big enough
             Logger.warn("Header of region file invalid");
             stats.chunksInvalid++;
+            regionFile.free();
             return stats;
         }
         for (int idx = 0; idx < 1024; idx++) {
@@ -419,10 +466,13 @@ public class WorldImporter implements IDataImporter {
                         Logger.error("Declared size of chunk is negative");
                         stats.chunksInvalid++;
                     } else {
-                        var data = new MemoryBuffer(n).cpyFrom(base + 5);
+                        regionPending.incrementAndGet();
+                        var data = MemoryBuffer.createUntrackedUnfreeableRawFrom(base + 5, n);
                         this.jobQueue.add(()-> {
                             if (!this.isRunning) {
-                                data.free();
+                                if (regionPending.decrementAndGet() == 0) {
+                                    regionFile.free();
+                                }
                                 return;
                             }
                             try {
@@ -437,7 +487,9 @@ public class WorldImporter implements IDataImporter {
                             } catch (Exception e) {
                                 throw new RuntimeException(e);
                             } finally {
-                                data.free();
+                                if (regionPending.decrementAndGet() == 0) {
+                                    regionFile.free();
+                                }
                             }
                         });
                         this.totalChunks.incrementAndGet();
@@ -447,6 +499,9 @@ public class WorldImporter implements IDataImporter {
                     }
                 }
             }
+        }
+        if (regionPending.get() == 0) {
+            regionFile.free();
         }
         return stats;
     }
@@ -519,6 +574,9 @@ public class WorldImporter implements IDataImporter {
                 if (y == Integer.MIN_VALUE) {
                     VoxelBridgeLogger.warn(LogModule.LOD, String.format(
                         "[LOD] section missing Y tag, skipping x=%d z=%d", x, z));
+                    continue;
+                }
+                if (hasSectionFilter && (y < minSectionYFilter || y > maxSectionYFilter)) {
                     continue;
                 }
                 this.importSectionNBT(x, y, z, section);

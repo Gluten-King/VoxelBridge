@@ -33,6 +33,9 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
     private static final String SPRITE_PREFIX = "voxelbridge:lod/bake";
     private static final String TRANSPARENT_SPRITE = "voxelbridge:transparent";
     private static final int OVERLAY_OFFSET = 500000;
+    // Reuse bake results across exports/instances to avoid duplicate GPU work
+    private static final ConcurrentHashMap<Integer, FaceBakeData> SHARED_BAKED_DATA = new ConcurrentHashMap<>();
+    private static final Set<Integer> SHARED_BAKED_IDS = ConcurrentHashMap.newKeySet();
 
     // Debug flag: set to true to save bake debug images to disk
     private static final boolean BAKE_DEBUG = true;
@@ -41,12 +44,14 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
     private final ExportContext ctx;
     private final Mapper mapper;
     private final ModelBakerySubsystem modelBakery;
-    private final ConcurrentHashMap<Integer, FaceBakeData> bakedData = new ConcurrentHashMap<>();
-    private final Set<Integer> bakedIds = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<Integer, FaceBakeData> bakedData;
+    private final Set<Integer> bakedIds;
 
     public LodGpuBakeService(Mapper mapper, ExportContext ctx) {
         this.ctx = ctx;
         this.mapper = mapper;
+        this.bakedData = SHARED_BAKED_DATA;
+        this.bakedIds = SHARED_BAKED_IDS;
         this.modelBakery = runOnRenderThread(() -> new ModelBakerySubsystem(mapper, true));
         // We now include overlays in the GPU bake (default behavior of ModelTextureBakery)
         // effectively baking them into the base texture, aligning with Voxy's approach.
@@ -61,8 +66,6 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         IntOpenHashSet waitSet = new IntOpenHashSet(blockIds);
         
         for (int blockId : blockIds) {
-            modelBakery.requestBlockBake(blockId);
-            
             BlockState state = this.mapper.getBlockStateFromBlockId(blockId);
             boolean hasOverlay = false;
             for (Direction dir : Direction.values()) {
@@ -71,10 +74,19 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
                     break;
                 }
             }
+            boolean baseBaked = bakedIds.contains(blockId);
+            if (!baseBaked) {
+                modelBakery.requestBlockBake(blockId);
+            } else {
+                waitSet.remove(blockId);
+            }
+
             if (hasOverlay) {
                 int overlayReqId = blockId + OVERLAY_OFFSET;
-                modelBakery.requestBlockBake(overlayReqId);
-                waitSet.add(overlayReqId);
+                if (!bakedIds.contains(overlayReqId)) {
+                    modelBakery.requestBlockBake(overlayReqId);
+                    waitSet.add(overlayReqId);
+                }
             }
         }
         waitForBakes(waitSet);
