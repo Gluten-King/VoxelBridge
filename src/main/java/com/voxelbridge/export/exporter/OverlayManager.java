@@ -1,6 +1,7 @@
 package com.voxelbridge.export.exporter;
 
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.TextureLoader;
 import com.voxelbridge.export.util.color.ColorModeHandler;
@@ -319,9 +320,14 @@ public final class OverlayManager {
 
             for (OverlayQuadData overlay : overlays) {
                 // Use suffix if provided (e.g., "_overlay", "_hilight"), otherwise use base materialKey
-                String overlayMaterialKey = overlay.materialSuffix != null
-                    ? overlay.materialKey + overlay.materialSuffix
-                    : overlay.materialKey;
+                String overlayMaterialKey;
+                if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+                    overlayMaterialKey = overlay.spriteKey;
+                } else {
+                    overlayMaterialKey = overlay.materialSuffix != null
+                        ? overlay.materialKey + overlay.materialSuffix
+                        : overlay.materialKey;
+                }
                 Direction dir = overlay.direction;
 
                 // Apply occlusion culling

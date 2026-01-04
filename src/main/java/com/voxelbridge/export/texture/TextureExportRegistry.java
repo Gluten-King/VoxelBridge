@@ -45,12 +45,43 @@ public final class TextureExportRegistry {
             return existing;
         }
 
+        // Special-case transparent placeholder to avoid failing on missing disk resource
+        if ("voxelbridge:transparent".equals(spriteKey)) {
+            String rel = ctx.getMaterialPaths().getOrDefault(spriteKey, "textures/" + safe(spriteKey) + ".png");
+            Path target = outputDir.resolve(rel);
+            try {
+                Files.createDirectories(target.getParent());
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            if (!Files.exists(target)) {
+                BufferedImage transparent = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+                try {
+                    ImageIO.write(transparent, "PNG", target.toFile());
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            spriteRelativePaths.put(spriteKey, rel);
+            return rel;
+        }
+
         if (isPbrSprite(spriteKey)) {
             String rel = ctx.getMaterialPaths().get(spriteKey);
             if (rel != null) {
                 spriteRelativePaths.put(spriteKey, rel);
                 return rel;
             }
+        }
+
+        String materialRel = ctx.getMaterialPaths().get(spriteKey);
+        if (materialRel != null) {
+            Path target = outputDir.resolve(materialRel);
+            spriteRelativePaths.put(spriteKey, materialRel);
+            if (!Files.exists(target)) {
+                writeFromCaches(spriteKey, target);
+            }
+            return materialRel;
         }
 
         if (isEntityLike(spriteKey)) {
@@ -79,34 +110,7 @@ public final class TextureExportRegistry {
         String rel = "textures/" + png.getFileName().toString();
         spriteRelativePaths.put(spriteKey, rel);
         if (!Files.exists(png)) {
-            ResourceLocation pngRes = TextureLoader.spriteKeyToTexturePNG(spriteKey);
-            BufferedImage image = repo.get(pngRes);
-            if (image == null) {
-                image = ctx.getCachedSpriteImage(spriteKey);
-            }
-            if (image == null) {
-                image = TextureLoader.readTexture(pngRes, ExportRuntimeConfig.isAnimationEnabled());
-                if (image != null) {
-                    repo.put(pngRes, spriteKey, image);
-                }
-            }
-            if (image == null) {
-                throw new IllegalStateException("Failed to resolve texture for spriteKey=" + spriteKey);
-            }
-            if (ExportRuntimeConfig.isAnimationEnabled()) {
-                AnimatedFrameSet framesForWrite = repo.getAnimation(spriteKey);
-                if (framesForWrite == null) {
-                    framesForWrite = AnimatedTextureHelper.extractAndStore(spriteKey, image, repo);
-                }
-                if (framesForWrite != null && !framesForWrite.isEmpty()) {
-                    image = framesForWrite.frames().get(0);
-                }
-            }
-            try {
-                ImageIO.write(image, "PNG", png.toFile());
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            writeFromCaches(spriteKey, png);
         }
         return rel;
     }
@@ -170,5 +174,41 @@ public final class TextureExportRegistry {
 
     private String safe(String spriteKey) {
         return TexturePathResolver.safe(spriteKey);
+    }
+
+    private void writeFromCaches(String spriteKey, Path target) {
+        try {
+            Files.createDirectories(target.getParent());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        BufferedImage image = repo.getBySpriteKey(spriteKey);
+        if (image == null) {
+            image = ctx.getCachedSpriteImage(spriteKey);
+        }
+        if (image == null) {
+            ResourceLocation pngRes = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            image = TextureLoader.readTexture(pngRes, ExportRuntimeConfig.isAnimationEnabled());
+            if (image != null) {
+                repo.put(pngRes, spriteKey, image);
+            }
+        }
+        if (image == null) {
+            throw new IllegalStateException("Failed to resolve texture for spriteKey=" + spriteKey);
+        }
+        if (ExportRuntimeConfig.isAnimationEnabled()) {
+            AnimatedFrameSet framesForWrite = repo.getAnimation(spriteKey);
+            if (framesForWrite == null) {
+                framesForWrite = AnimatedTextureHelper.extractAndStore(spriteKey, image, repo);
+            }
+            if (framesForWrite != null && !framesForWrite.isEmpty()) {
+                image = framesForWrite.frames().get(0);
+            }
+        }
+        try {
+            ImageIO.write(image, "PNG", target.toFile());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

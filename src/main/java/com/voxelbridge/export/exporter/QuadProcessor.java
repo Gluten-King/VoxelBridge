@@ -126,11 +126,16 @@ public final class QuadProcessor {
             }
         }
 
+        String finalMaterialKey = blockKey;
+        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+            finalMaterialKey = spriteKey;
+        }
+
         // Register sprite material (Intern strings)
-        ctx.registerSpriteMaterial(spriteKey, blockKey);
+        ctx.registerSpriteMaterial(spriteKey, finalMaterialKey);
 
         // Output quad (Intern keys)
-        sceneSink.addQuad(ctx.intern(blockKey), ctx.intern(spriteKey), null, vertexData.positions(), vertexData.uvs(),
+        sceneSink.addQuad(ctx.intern(finalMaterialKey), ctx.intern(spriteKey), null, vertexData.positions(), vertexData.uvs(),
                 colorData.uv1(), vertexData.normal(), colorData.colors(), doubleSided);
     }
 

@@ -482,7 +482,12 @@ public final class BlockEntityRenderer {
                             System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
                         }
 
-                        parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, uv1, NORMAL_UP, colors,
+                        String finalMaterialKey = materialGroupKey;
+                        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+                             finalMaterialKey = spriteKey;
+                        }
+
+                        parent.sceneSink.addQuad(finalMaterialKey, spriteKey, "voxelbridge:transparent", positions, uv0, uv1, NORMAL_UP, colors,
                             com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver.isDoubleSided(renderType));
                         return;
                     }
@@ -533,9 +538,14 @@ public final class BlockEntityRenderer {
                     System.arraycopy(GeometryUtil.whiteColor(), 0, colors, 0, colors.length);
                 }
 
+                String finalMaterialKey = materialGroupKey;
+                if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+                     finalMaterialKey = spriteKey;
+                }
+
                 // Send quad to scene sink using the BlockEntity type as group key (block entities typically don't have overlays)
-                parent.ctx.registerSpriteMaterial(spriteKey, materialGroupKey);
-                parent.sceneSink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent", positions, uv0, uv1, NORMAL_UP, colors,
+                parent.ctx.registerSpriteMaterial(spriteKey, finalMaterialKey);
+                parent.sceneSink.addQuad(finalMaterialKey, spriteKey, "voxelbridge:transparent", positions, uv0, uv1, NORMAL_UP, colors,
                     com.voxelbridge.export.exporter.blockentity.RenderTypeTextureResolver.isDoubleSided(renderType));
             }
 

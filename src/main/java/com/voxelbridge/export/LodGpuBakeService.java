@@ -63,7 +63,7 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
         if (blockIds == null || blockIds.isEmpty()) {
             return;
         }
-        IntOpenHashSet waitSet = new IntOpenHashSet(blockIds);
+        IntOpenHashSet waitSet = new IntOpenHashSet();
         
         for (int blockId : blockIds) {
             BlockState state = this.mapper.getBlockStateFromBlockId(blockId);
@@ -74,16 +74,16 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
                     break;
                 }
             }
-            boolean baseBaked = bakedIds.contains(blockId);
-            if (!baseBaked) {
+            boolean needsBaseBake = needsBakeForContext(blockId, false);
+            if (needsBaseBake) {
                 modelBakery.requestBlockBake(blockId);
-            } else {
-                waitSet.remove(blockId);
+                waitSet.add(blockId);
             }
 
             if (hasOverlay) {
                 int overlayReqId = blockId + OVERLAY_OFFSET;
-                if (!bakedIds.contains(overlayReqId)) {
+                boolean needsOverlayBake = needsBakeForContext(blockId, true);
+                if (needsOverlayBake) {
                     modelBakery.requestBlockBake(overlayReqId);
                     waitSet.add(overlayReqId);
                 }
@@ -174,6 +174,33 @@ public final class LodGpuBakeService implements VoxelMesher.LodOverlayProvider, 
             }
         }
         return true;
+    }
+
+    /**
+     * Determines whether the current ExportContext has the baked sprite images for the given block id.
+     * If not, we need to re-bake (even if the shared bakedIds already contains the id) to repopulate
+     * this session's TextureRepository and avoid missing textures on subsequent exports.
+     */
+    private boolean needsBakeForContext(int blockId, boolean overlay) {
+        int reqId = overlay ? blockId + OVERLAY_OFFSET : blockId;
+        if (!bakedIds.contains(reqId)) {
+            return true;
+        }
+        FaceBakeData data = bakedData.get(blockId);
+        if (data == null) {
+            return true;
+        }
+        String[] keys = overlay ? data.overlayKeys : data.spriteKeys;
+        if (keys == null) {
+            return true;
+        }
+        for (String key : keys) {
+            if (key == null) continue;
+            if (ctx.getCachedSpriteImage(key) == null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void handleBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean darkenedTinting, boolean hasBakedTint) {

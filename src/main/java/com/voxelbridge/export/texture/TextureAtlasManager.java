@@ -199,7 +199,7 @@ public final class TextureAtlasManager {
         VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] Block sprites to process: %d", blockEntries.size()));
 
         if (atlasMode == AtlasMode.INDIVIDUAL) {
-            generateIndividualTextures(ctx, outDir, blockEntries, "textures/individual/");
+            generateIndividualTextures(ctx, outDir, blockEntries, "textures/");
             return;
         }
 
@@ -235,24 +235,42 @@ public final class TextureAtlasManager {
                 base = createMissingTexture();
             }
 
-            BufferedImage outputImage = tintTile(base, tintBySlot[0]);
-            String relativePath = subDir + safe(spriteKey) + ".png";
-            Path target = outDir.resolve(relativePath);
-            Files.createDirectories(target.getParent());
-            PngjWriter.write(outputImage, target);
-            atlas.atlasFile = target;
-            atlas.texW = outputImage.getWidth();
-            atlas.texH = outputImage.getHeight();
+            atlas.atlasFile = null;
+            atlas.texW = base.getWidth();
+            atlas.texH = base.getHeight();
             atlas.usesAtlas = false;
             atlas.cols = 1;
-            atlas.placements.clear();
-            ctx.getMaterialPaths().put(spriteKey, relativePath);
 
-            if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
-                VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[AtlasGen] sprite=%s mode=individual path=%s", spriteKey, relativePath));
+            for (int slot = 0; slot < tintSlots; slot++) {
+                int tint = tintBySlot[slot];
+                BufferedImage outputImage = tintTile(base, tint);
+                String suffix = slot == 0 ? "" : "_t" + slot;
+                String relativePath = subDir + safe(spriteKey) + suffix + ".png";
+                Path target = outDir.resolve(relativePath);
+                Files.createDirectories(target.getParent());
+                PngjWriter.write(outputImage, target);
+
+                // Store placement info so downstream UV remap (if any) has dimensions/path per slot
+                TexturePlacement placement = new TexturePlacement(
+                    0, 0, 0,
+                    0, 0,
+                    outputImage.getWidth(), outputImage.getHeight(),
+                    0f, 0f, 1f, 1f,
+                    relativePath
+                );
+                atlas.placements.put(slot, placement);
+                // Primary key maps to slot 0; extra tint slots get a dedicated key for lookup
+                String slotKey = slot == 0 ? spriteKey : spriteKey + "#t" + slot;
+                ctx.getMaterialPaths().put(slotKey, relativePath);
+
+                if (VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE_ATLAS)) {
+                    VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format(
+                        "[AtlasGen] sprite=%s slot=%d tint=%06X mode=individual path=%s",
+                        spriteKey, slot, tint, relativePath));
+                }
             }
 
-            // Dump PBR companions if present in cache for debugging/inspection
+            // Dump PBR companions if present in cache for debugging/inspection (single export reused across slots)
             BufferedImage normal = ctx.getCachedSpriteImage(spriteKey + "_n");
             if (normal != null) {
                 String normalRel = subDir + safe(spriteKey) + "_n.png";

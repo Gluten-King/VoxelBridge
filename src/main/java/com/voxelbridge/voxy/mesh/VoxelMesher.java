@@ -3,11 +3,13 @@ package com.voxelbridge.voxy.mesh;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.util.geometry.GeometryUtil;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import com.voxelbridge.voxy.common.world.WorldEngine;
 import com.voxelbridge.voxy.common.world.WorldSection;
 import com.voxelbridge.voxy.common.world.other.Mapper;
+import com.voxelbridge.export.texture.TextureLoader;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
@@ -1127,6 +1129,9 @@ public class VoxelMesher {
         float uvV0 = 0f;
         float uvV1 = 1f;
 
+        boolean individualMode = exportContext != null
+            && ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL;
+
         if (faceMeta != null) {
             u0 = faceMeta.minX / 16.0f;
             u1 = (faceMeta.maxX + 1) / 16.0f;
@@ -1142,6 +1147,24 @@ public class VoxelMesher {
             if ((dir.get3DDataValue() & 1) == 1) {
                 depthOffset = 1.0f - depthOffset;
             }
+        }
+
+        if (individualMode) {
+            String cropped = ensureCroppedSprite(exportContext, spriteName, faceMeta);
+            if (cropped != null) {
+                spriteName = cropped;
+                uvU0 = 0f;
+                uvU1 = 1f;
+                uvV0 = 0f;
+                uvV1 = 1f;
+            }
+            if (overlaySprite != null) {
+                String croppedOverlay = ensureCroppedSprite(exportContext, overlaySprite, faceMeta);
+                if (croppedOverlay != null) {
+                    overlaySprite = croppedOverlay;
+                }
+            }
+            materialKey = overlaySprite != null ? (spriteName + "+ov+" + overlaySprite) : spriteName;
         }
 
         int occlusionMask = (fineOcclusionMask >= 0 && fineOcclusionMask < FACE_DECISION_FULL) ? fineOcclusionMask : 0;
@@ -1425,8 +1448,13 @@ public class VoxelMesher {
                 }
             }
 
+            String matKey = materialKey;
+            if (exportContext != null && ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+                matKey = spriteKey;
+            }
+
             sink.addQuad(
-                materialKey,
+                matKey,
                 spriteKey,
                 null,
                 positions,
@@ -1662,6 +1690,73 @@ public class VoxelMesher {
         if (v < 0f) return 0f;
         if (v > 1f) return 1f;
         return v;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        if (value < min) return min;
+        if (value > max) return max;
+        return value;
+    }
+
+    /**
+     * Individual 模式下为裁剪区域生成独立贴图 key，保证每个材质只对应一种 UV 引用。
+     */
+    private String ensureCroppedSprite(ExportContext ctx, String baseKey, LodFaceMeta meta) {
+        if (ctx == null || baseKey == null || meta == null) {
+            return null;
+        }
+        String croppedKey = baseKey + "#crop_" + meta.minX + "_" + meta.maxX + "_" + meta.minY + "_" + meta.maxY;
+        if (ctx.getCachedSpriteImage(croppedKey) != null) {
+            return croppedKey;
+        }
+
+        BufferedImage baseImg = loadSpriteImage(ctx, baseKey);
+        if (baseImg == null) {
+            return null;
+        }
+
+        int w = baseImg.getWidth();
+        int h = baseImg.getHeight();
+        int minX = clamp(meta.minX, 0, w - 1);
+        int maxX = clamp(meta.maxX, 0, w - 1);
+        int minY = clamp(meta.minY, 0, h - 1);
+        int maxY = clamp(meta.maxY, 0, h - 1);
+        if (minX > maxX || minY > maxY) {
+            return null;
+        }
+
+        // meta 的 Y 以底部为 0，需要转换为图片坐标（顶部为 0）
+        int srcX = minX;
+        int srcY = h - 1 - maxY;
+        int cw = maxX - minX + 1;
+        int ch = maxY - minY + 1;
+        if (srcY < 0 || srcY + ch > h) {
+            return null;
+        }
+
+        BufferedImage cropped = baseImg.getSubimage(srcX, srcY, cw, ch);
+        ctx.cacheSpriteImage(croppedKey, cropped);
+        return croppedKey;
+    }
+
+    private BufferedImage loadSpriteImage(ExportContext ctx, String spriteKey) {
+        BufferedImage cached = ctx.getCachedSpriteImage(spriteKey);
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            ResourceLocation loc = TextureLoader.spriteKeyToTexturePNG(spriteKey);
+            if (loc == null) {
+                return null;
+            }
+            BufferedImage img = TextureLoader.readTexture(loc, ExportRuntimeConfig.isAnimationEnabled());
+            if (img != null) {
+                ctx.getTextureRepository().put(loc, spriteKey, img);
+            }
+            return img;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static void addBakeView(int i, float pitch, float yaw, float rotation, int flip) {

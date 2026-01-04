@@ -1,6 +1,7 @@
 package com.voxelbridge.export.exporter;
 
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.scene.SceneSink;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.export.util.geometry.GeometryUtil;
@@ -147,8 +148,13 @@ final class QuadCollector implements VertexConsumer {
         // Use ColorModeHandler to prepare colors
         ColorModeHandler.ColorData colorData = ColorModeHandler.prepareColorsWithUV(ctx, quadArgb, normalizedUVs);
 
+        String effectiveMaterialKey = materialGroupKey;
+        if (ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.INDIVIDUAL) {
+             effectiveMaterialKey = spriteKey;
+        }
+
         // Send to sink (fluids typically do not have overlays)
-        sink.addQuad(materialGroupKey, spriteKey, "voxelbridge:transparent",
+        sink.addQuad(effectiveMaterialKey, spriteKey, "voxelbridge:transparent",
                      positions.clone(), normalizedUVs, colorData.uv1(), normal, colorData.colors(), true);
 
         resetQuadState();
