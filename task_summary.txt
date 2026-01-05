@@ -1,0 +1,9 @@
+Task Completed:
+1.  Addressed the issue where sign text was still being exported as black blocks (artifacts).
+2.  Refined the logic in `src/main/java/com/voxelbridge/export/exporter/blockentity/BlockEntityTextureResolver.java`.
+3.  Changed the texture resolution strategy to be "strict opt-in" for sign wood textures:
+    - Previously, it checked if the texture was "font" to opt-out. This failed because the font texture might not be explicitly named "font" or `current` might be null/unknown for text render types.
+    - Now, it ONLY resolves to the sign wood texture if the `RenderType` explicitly uses the Sign Atlas (`textures/atlas/signs.png`).
+    - If the `RenderType` uses anything else (like a font texture, or is unknown/null), it returns `null`.
+4.  This `null` return value causes `BlockEntityRenderer.java` to classify the geometry as "not a sign body" (since `isSignTexture` returns false), triggering the existing filter to skip export.
+5.  This ensures that only the sign body (board/stick) is exported, and text meshes are reliably ignored.

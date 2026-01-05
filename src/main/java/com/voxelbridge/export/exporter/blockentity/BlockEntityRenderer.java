@@ -12,6 +12,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -450,7 +451,7 @@ public final class BlockEntityRenderer {
                     }
                 }
 
-                if (isSignBlockEntity(parent.blockEntity) && isFontTexture(textureRes != null ? textureRes.texture() : null)) {
+                if (isSignBlockEntity(parent.blockEntity) && !isSignTexture(textureRes)) {
                     return;
                 }
 
@@ -623,12 +624,18 @@ public final class BlockEntityRenderer {
         return blockEntity instanceof SignBlockEntity || blockEntity instanceof HangingSignBlockEntity;
     }
 
-    private static boolean isFontTexture(ResourceLocation location) {
+    private static boolean isSignTexture(BlockEntityTextureResolver.ResolvedTexture textureRes) {
+        if (textureRes == null) {
+            return false;
+        }
+        ResourceLocation location = textureRes.texture();
         if (location == null) {
             return false;
         }
         String path = location.getPath();
-        return path.contains("textures/font/") || path.startsWith("font/") || path.contains("/font/");
+        // Only match actual sign wood textures (e.g., "entity/signs/oak", "entity/signs/hanging/birch")
+        // Do NOT match other textures that happen to be in SIGN_SHEET atlas
+        return path.startsWith("entity/signs/") || path.startsWith("entity/signs/hanging/");
     }
 }
 

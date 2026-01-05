@@ -144,10 +144,18 @@ public final class BlockEntityTextureResolver {
 
         // Signs - need to determine wood type
         if (blockEntity instanceof HangingSignBlockEntity hangingSign) {
-            return resolveSignTexture(hangingSign.getBlockState().getBlock(), true);
+            // Only resolve sign wood texture if the render type is using the sign atlas.
+            // This prevents font/text geometry from being mapped to the wood texture.
+            if (current != null && current.getPath().contains("signs.png")) {
+                return resolveSignTexture(hangingSign.getBlockState().getBlock(), true);
+            }
+            return null;
         }
         if (blockEntity instanceof SignBlockEntity sign) {
-            return resolveSignTexture(sign.getBlockState().getBlock(), false);
+            if (current != null && current.getPath().contains("signs.png")) {
+                return resolveSignTexture(sign.getBlockState().getBlock(), false);
+            }
+            return null;
         }
 
         // For other BlockEntities (including DecoratedPot), the generic method will handle them
