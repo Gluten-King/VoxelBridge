@@ -6,12 +6,18 @@ tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
 }
 
-def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
+tasks.named('build').configure {
+    dependsOn(':fabric:build')
+}
 
-subprojects { subproj ->
-    if (subproj.name.startsWith('mc-') && subproj.name != "mc-${activeMc}") {
-        subproj.tasks.configureEach { task ->
-            task.enabled = false
-        }
-    }
+tasks.register('runClient') {
+    group = 'moddev'
+    description = 'Run the Fabric client from the root project.'
+    dependsOn(':fabric:runClient')
+}
+
+tasks.register('runServer') {
+    group = 'moddev'
+    description = 'Run the Fabric server from the root project.'
+    dependsOn(':fabric:runServer')
 }

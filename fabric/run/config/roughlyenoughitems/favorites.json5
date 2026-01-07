@@ -1,0 +1,9 @@
+{
+	"favorites": [
+		"{type:\"roughlyenoughitems:weather\",weather:\"NOT_SET\"}",
+		"{mode:\"NOT_SET\",type:\"roughlyenoughitems:gamemode\"}",
+		"{mode:\"NOT_SET\",type:\"roughlyenoughitems:time\"}"
+	],
+	"hiddenFavorites": [],
+	"displays": []
+}

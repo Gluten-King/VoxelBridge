@@ -1,7 +1,7 @@
 pluginManagement {
     repositories {
         gradlePluginPortal()
-        maven { url = 'https://maven.neoforged.net/releases' }
+        maven { url = 'https://maven.fabricmc.net' }
     }
 }
 
@@ -9,7 +9,5 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
-include ':core'
-include ':mod'
-include ':mc-1.21.1'
-include ':mc-1.21.8'
+include ':fabric'
+include ':mc-1.21.1-fabric'
