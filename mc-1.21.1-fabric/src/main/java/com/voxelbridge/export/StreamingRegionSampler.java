@@ -4,6 +4,7 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.core.scene.BufferedSceneSink;
 import com.voxelbridge.export.exporter.BlockExporter;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.util.client.ProgressNotifier;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
@@ -113,6 +114,8 @@ public final class StreamingRegionSampler {
         Set<ChunkPos> processing = ConcurrentHashMap.newKeySet();
         AtomicBoolean keepRunning = new AtomicBoolean(true);
         AtomicInteger scanCycles = new AtomicInteger(0);
+        BlockEntityRenderBatch sharedBeBatch = new BlockEntityRenderBatch();
+        java.util.Set<Integer> processedEntityIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
         Thread monitor = new Thread(() -> {
             try {
@@ -157,7 +160,7 @@ public final class StreamingRegionSampler {
                                 regionMin, regionMax,
                                 cminX, cmaxX, cminZ, cmaxZ, minY, maxY,
                                 mc, processing, playerChunk, activeDistance,
-                                offsetX, offsetY, offsetZ
+                                sharedBeBatch, offsetX, offsetY, offsetZ, processedEntityIds
                             ));
                     } else {
                         String reason = (chunk == null) ? "null" : "empty";
@@ -213,7 +216,7 @@ public final class StreamingRegionSampler {
                             // Force-export pending chunk using the slow path.
                             forceExportChunk(chunk, chunkPos, level, sink, ctx,
                                 regionMin, regionMax, cminX, cmaxX, cminZ, cmaxZ,
-                                minY, maxY, mc, offsetX, offsetY, offsetZ);
+                                minY, maxY, mc, sharedBeBatch, offsetX, offsetY, offsetZ, processedEntityIds);
                         } else {
                             String reason = (chunk == null) ? "null" : "empty";
                             if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
@@ -225,6 +228,8 @@ public final class StreamingRegionSampler {
                 }
             }
 
+            VoxelBridgeLogger.info(LogModule.EXPORT, "[StreamingRegionSampler] Flushing accumulated BlockEntity render tasks...");
+            sharedBeBatch.flush(mc);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
@@ -252,7 +257,9 @@ public final class StreamingRegionSampler {
                                    int minY, int maxY,
                                    MinecraftClient mc, Set<ChunkPos> processing,
                                    ChunkPos playerChunk, int activeDistance,
-                                   double offsetX, double offsetY, double offsetZ) {
+                                   BlockEntityRenderBatch sharedBeBatch,
+                                   double offsetX, double offsetY, double offsetZ,
+                                   java.util.Set<Integer> processedEntityIds) {
         boolean started = false;
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
@@ -288,7 +295,7 @@ public final class StreamingRegionSampler {
         BufferedSceneSink buffer = new BufferedSceneSink();
             finalSink.onChunkStart(chunkPos.x, chunkPos.z);
             started = true;
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level);
+            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
             localSampler.setRegionBounds(regionMin, regionMax);
 
             // OPTIMIZATION: Reuse MutableBlockPos to avoid 98,304 object allocations per chunk
@@ -359,6 +366,18 @@ public final class StreamingRegionSampler {
                 return;
             }
 
+            com.voxelbridge.export.exporter.entity.EntityExporter.exportEntitiesInChunk(
+                ctx,
+                buffer,
+                level,
+                new net.minecraft.util.math.Box(
+                    minX, minY, minZ,
+                    maxX + 1, maxY + 1, maxZ + 1
+                ),
+                offsetX, offsetY, offsetZ,
+                processedEntityIds
+            );
+
             if (!buffer.isEmpty()) {
                 if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
                     VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming] Flushing buffered quads for chunk " + chunkPos + ", quads=" + buffer.getQuadCount());
@@ -403,7 +422,9 @@ public final class StreamingRegionSampler {
                                         int minX, int maxX, int minZ, int maxZ,
                                         int minY, int maxY,
                                         MinecraftClient mc,
-                                        double offsetX, double offsetY, double offsetZ) {
+                                        BlockEntityRenderBatch sharedBeBatch,
+                                        double offsetX, double offsetY, double offsetZ,
+                                        java.util.Set<Integer> processedEntityIds) {
         boolean started = false;
         try {
             ExportProgressTracker.markRunning(chunkPos.x, chunkPos.z);
@@ -423,7 +444,7 @@ public final class StreamingRegionSampler {
             BufferedSceneSink buffer = new BufferedSceneSink();
             finalSink.onChunkStart(chunkPos.x, chunkPos.z);
             started = true;
-            BlockExporter localSampler = new BlockExporter(ctx, buffer, level);
+            BlockExporter localSampler = new BlockExporter(ctx, buffer, level, sharedBeBatch, finalSink);
             localSampler.setRegionBounds(regionMin, regionMax);
 
             BlockPos.Mutable mutablePos = new BlockPos.Mutable();
@@ -478,6 +499,17 @@ public final class StreamingRegionSampler {
                 }
                 buffer.flushTo(finalSink);
             }
+            com.voxelbridge.export.exporter.entity.EntityExporter.exportEntitiesInChunk(
+                ctx,
+                buffer,
+                level,
+                new net.minecraft.util.math.Box(
+                    minX, minY, minZ,
+                    maxX + 1, maxY + 1, maxZ + 1
+                ),
+                offsetX, offsetY, offsetZ,
+                processedEntityIds
+            );
             ExportProgressTracker.markDone(chunkPos.x, chunkPos.z);
             if (VoxelBridgeLogger.isDebugEnabled(LogModule.EXPORT)) {
                 VoxelBridgeLogger.info(LogModule.EXPORT, "[Streaming][Force] Chunk " + chunkPos + " force exported, blocksVisited=" + blockCount);

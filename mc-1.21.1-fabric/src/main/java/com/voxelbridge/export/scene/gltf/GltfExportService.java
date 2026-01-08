@@ -76,10 +76,13 @@ public final class GltfExportService {
         ExportContext ctx = new ExportContext(mc);
         ctx.resetConsumedBlocks();
         ctx.clearTextureState();
-        ctx.setBlockEntityExportEnabled(false);
+        ctx.setBlockEntityExportEnabled(true);
         ctx.setCoordinateMode(ExportRuntimeConfig.getCoordinateMode());
         ctx.setVanillaRandomTransformEnabled(ExportRuntimeConfig.isVanillaRandomTransformEnabled());
         ctx.setDiscoveryMode(false);
+
+        // Clear BlockEntity texture registry for new export (NF parity)
+        com.voxelbridge.export.texture.BlockEntityTextureManager.clear(ctx);
 
         // Initialize reserved slots (must be done before any texture registration)
         TextureAtlasManager.initializeReservedSlots(ctx);

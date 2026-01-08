@@ -4,11 +4,15 @@ import com.voxelbridge.core.texture.AnimationMetadata;
 import com.voxelbridge.core.texture.TextureAccess;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.texture.TextureLoader;
+import net.minecraft.client.resource.metadata.AnimationResourceMetadata;
 import net.minecraft.client.texture.Sprite;
 import net.minecraft.util.Identifier;
 
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -53,7 +57,32 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
 
     @Override
     public AnimationMetadata readAnimationMetadata(String resourceKey) {
-        return null;
+        if (resourceKey == null) {
+            return null;
+        }
+        try {
+            var rm = ClientAccessHolder.get().getResourceManager();
+            Identifier loc = Identifier.tryParse(resourceKey);
+            if (loc == null) {
+                return null;
+            }
+            var resOpt = rm.getResource(loc);
+            if (resOpt.isEmpty()) {
+                return null;
+            }
+            var res = resOpt.get();
+            Optional<AnimationResourceMetadata> metaOpt =
+                res.getMetadata().decode(AnimationResourceMetadata.READER);
+            AnimationResourceMetadata meta = metaOpt.orElse(null);
+            if (meta == null) {
+                return null;
+            }
+            List<AnimationMetadata.FrameTiming> timings = new ArrayList<>();
+            meta.forEachFrame((idx, time) -> timings.add(new AnimationMetadata.FrameTiming(idx, time)));
+            return new AnimationMetadata(meta.getDefaultFrameTime(), timings, meta.shouldInterpolate(), 0, 0);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     @Override

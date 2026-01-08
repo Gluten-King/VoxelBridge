@@ -6,6 +6,7 @@ import com.voxelbridge.core.texture.TextureRepository;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import net.minecraft.client.resource.metadata.AnimationResourceMetadata;
 import net.minecraft.client.texture.Sprite;
 
 import java.awt.image.BufferedImage;
@@ -210,7 +211,32 @@ public final class AnimatedTextureHelper {
      */
     public static com.voxelbridge.core.texture.AnimatedFrameSet extractFromSprite(ExportContext ctx, String spriteKey,
                                                                                   Sprite sprite, TextureRepository repo) {
-        return null;
+        if (!ExportRuntimeConfig.isAnimationEnabled() || sprite == null || spriteKey == null || repo == null) {
+            return null;
+        }
+        if (repo.hasAnimation(spriteKey)) {
+            return repo.getAnimation(spriteKey);
+        }
+
+        try {
+            var contents = sprite.getContents();
+            var metaOpt = contents.getMetadata().decode(AnimationResourceMetadata.READER);
+            AnimationResourceMetadata meta = metaOpt.orElse(null);
+            if (meta == null) {
+                return null;
+            }
+
+            BufferedImage full = ctx.getTextureAccess().readTexture(contents.getId().toString(), true);
+            if (full != null) {
+                AnimationMetadata anim = toCoreMetadata(meta);
+                return splitWithMetadata(spriteKey, full, anim, repo);
+            }
+            return null;
+        } catch (Exception e) {
+            VoxelBridgeLogger.warn(LogModule.ANIMATION,
+                "[Animation][WARN] Failed to extract from sprite: " + spriteKey + " - " + e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -379,6 +405,12 @@ public final class AnimatedTextureHelper {
             path = path.substring(0, path.length() - 4);
         }
         return namespace + ":" + path;
+    }
+
+    private static AnimationMetadata toCoreMetadata(AnimationResourceMetadata meta) {
+        List<AnimationMetadata.FrameTiming> timings = new ArrayList<>();
+        meta.forEachFrame((idx, time) -> timings.add(new AnimationMetadata.FrameTiming(idx, time)));
+        return new AnimationMetadata(meta.getDefaultFrameTime(), timings, meta.shouldInterpolate(), 0, 0);
     }
 
 }

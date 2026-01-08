@@ -49,7 +49,7 @@ public final class ExportContext {
     }
 
     public void runOnMainThread(Runnable task) {
-        sampler.getMc().execute(task);
+        sampler.getMc().submitAndJoin(task);
     }
 
     public TextureAccess<Sprite> getTextureAccess() {

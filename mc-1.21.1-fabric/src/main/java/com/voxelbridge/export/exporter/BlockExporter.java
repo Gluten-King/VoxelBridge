@@ -4,6 +4,9 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.export.CoordinateMode;
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityExportResult;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityExporter;
+import com.voxelbridge.export.exporter.blockentity.BlockEntityRenderBatch;
 import com.voxelbridge.export.util.geometry.VertexExtractor;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
@@ -37,6 +40,7 @@ public final class BlockExporter {
     private final World level;
     private final ClientChunkManager chunkCache;
     private final boolean vanillaRandomTransformEnabled;
+    private final BlockEntityRenderBatch blockEntityBatch;
 
     private BlockPos regionMin;
     private BlockPos regionMax;
@@ -52,12 +56,21 @@ public final class BlockExporter {
     private volatile boolean missingNeighborDetected = false;
 
     public BlockExporter(ExportContext ctx, IrSink sceneSink, World level) {
+        this(ctx, sceneSink, level, null, sceneSink);
+    }
+
+    public BlockExporter(ExportContext ctx, IrSink sceneSink, World level, BlockEntityRenderBatch blockEntityBatch) {
+        this(ctx, sceneSink, level, blockEntityBatch, sceneSink);
+    }
+
+    public BlockExporter(ExportContext ctx, IrSink sceneSink, World level, BlockEntityRenderBatch blockEntityBatch, IrSink blockEntitySceneSink) {
         this.ctx = ctx;
         this.sceneSink = sceneSink;
-        this.blockEntitySceneSink = sceneSink;
+        this.blockEntitySceneSink = blockEntitySceneSink != null ? blockEntitySceneSink : sceneSink;
         this.level = level;
         this.chunkCache = (level instanceof ClientWorld cl) ? cl.getChunkManager() : null;
         this.vanillaRandomTransformEnabled = ctx.isVanillaRandomTransformEnabled();
+        this.blockEntityBatch = blockEntityBatch;
     }
 
     public void setRegionBounds(BlockPos min, BlockPos max) {
@@ -108,8 +121,20 @@ public final class BlockExporter {
 
         // Export block entity
         BlockEntity be = level.getBlockEntity(pos);
-        if (be != null && VoxelBridgeLogger.isDebugEnabled(LogModule.BLOCKENTITY)) {
-            VoxelBridgeLogger.info(LogModule.BLOCKENTITY, "[BlockExporter] Skipping block entity in basic Fabric export: " + be.getClass().getSimpleName());
+        if (be != null) {
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY,
+                "[BlockExporter] Found BlockEntity: " + be.getClass().getSimpleName() + " at " + pos.toShortString() +
+                    ", isExportEnabled=" + ctx.isBlockEntityExportEnabled());
+        }
+        if (be != null && ctx.isBlockEntityExportEnabled()) {
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY,
+                "[BlockExporter] Calling BlockEntityExporter.export for " + be.getClass().getSimpleName());
+            BlockEntityExportResult beResult = BlockEntityExporter.export(ctx, level, state, be, pos,
+                blockEntitySceneSink, offsetX, offsetY, offsetZ, blockEntityBatch);
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY,
+                "[BlockExporter] BlockEntityExporter.export returned: rendered=" + beResult.rendered() +
+                    ", replaceBlockModel=" + beResult.replaceBlockModel());
+            if (beResult.replaceBlockModel()) return;
         }
 
         // Skip invisible blocks
@@ -124,7 +149,7 @@ public final class BlockExporter {
         if (!isTransparent && isFullyOccluded(pos)) return;
 
         // Get quads via Adapter (handles Fabric API internally)
-        long seed = state.isOf(Blocks.LILY_PAD) ? computeBushSeed(pos) : pos.asLong();
+        long seed = state.isOf(Blocks.LILY_PAD) ? computeBushSeed(pos) : computeBlockSeed(pos);
         List<BakedQuad> quads = com.voxelbridge.adapter.Adapters.getRender().getQuads(model, state, pos, level, seed);
 
         if (quads.isEmpty()) return;
@@ -383,6 +408,11 @@ public final class BlockExporter {
     }
 
     private long computeBushSeed(BlockPos pos) {
+        long seed = pos.getX() * 3129871L ^ pos.getZ() * 116129781L ^ pos.getY();
+        return seed * seed * 42317861L + seed * 11L;
+    }
+
+    private long computeBlockSeed(BlockPos pos) {
         long seed = pos.getX() * 3129871L ^ pos.getZ() * 116129781L ^ pos.getY();
         return seed * seed * 42317861L + seed * 11L;
     }

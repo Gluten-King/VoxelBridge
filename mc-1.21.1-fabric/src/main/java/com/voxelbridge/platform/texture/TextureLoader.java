@@ -87,7 +87,48 @@ public final class TextureLoader {
         if (sprite == null) {
             return null;
         }
-        return readTexture(sprite.getContents().getId(), ExportRuntimeConfig.isAnimationEnabled());
+        Identifier id = sprite.getContents().getId();
+        BufferedImage img = readTexture(id, ExportRuntimeConfig.isAnimationEnabled());
+        if (img == null) {
+            Identifier pngId = ensureSpritePng(id);
+            if (pngId != null && !pngId.equals(id)) {
+                img = readTexture(pngId, ExportRuntimeConfig.isAnimationEnabled());
+            }
+        }
+        if (img == null) {
+            img = cropFromAtlas(sprite);
+        }
+        return img;
+    }
+
+    private static BufferedImage cropFromAtlas(Sprite sprite) {
+        Identifier atlasId = sprite.getAtlasId();
+        if (atlasId == null) {
+            return null;
+        }
+        BufferedImage atlas = readTexture(atlasId, true);
+        if (atlas == null) {
+            return null;
+        }
+        int x = sprite.getX();
+        int y = sprite.getY();
+        int w = sprite.getContents().getWidth();
+        int h = sprite.getContents().getHeight();
+        if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+            return null;
+        }
+        int maxX = x + w;
+        int maxY = y + h;
+        if (maxX > atlas.getWidth() || maxY > atlas.getHeight()) {
+            return null;
+        }
+        try {
+            return atlas.getSubimage(x, y, w, h);
+        } catch (Exception e) {
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE,
+                "[TextureLoader][WARN] Failed to crop sprite from atlas " + atlasId + ": " + e.getMessage());
+            return null;
+        }
     }
 
     private static BufferedImage nativeImageToBufferedImage(NativeImage nativeImg) {
@@ -110,6 +151,10 @@ public final class TextureLoader {
 
         out.setRGB(0, 0, w, h, allPixels, 0, w);
         return out;
+    }
+
+    public static BufferedImage fromNativeImage(NativeImage nativeImg) {
+        return nativeImg == null ? null : nativeImageToBufferedImage(nativeImg);
     }
 
     /**
@@ -204,6 +249,18 @@ public final class TextureLoader {
 
     private static String ensurePngExtension(String path) {
         return path.endsWith(".png") ? path : path + ".png";
+    }
+
+    private static Identifier ensureSpritePng(Identifier id) {
+        if (id == null) {
+            return null;
+        }
+        String path = id.getPath();
+        if (!path.startsWith("textures/")) {
+            path = "textures/" + path;
+        }
+        path = ensurePngExtension(path);
+        return Identifier.of(id.getNamespace(), path);
     }
 
     /**
