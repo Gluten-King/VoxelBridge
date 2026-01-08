@@ -251,6 +251,9 @@ public final class EntityRenderer {
         @Override
         public void onQuad(net.minecraft.client.render.RenderLayer renderLayer, List<RenderCapture.Vertex> verts) {
             if (verts.size() < 3) return;
+            if (isShadowLayer(renderLayer)) {
+                return;
+            }
 
             recordGeometry();
             quadCount++;
@@ -377,6 +380,14 @@ public final class EntityRenderer {
                 RENDER_TYPE_RESOLVER.isDoubleSided(renderLayer),
                 false,
                 positions, uv0, colorResult.uv1(), NORMAL_UP, colors);
+        }
+
+        private boolean isShadowLayer(net.minecraft.client.render.RenderLayer renderLayer) {
+            if (renderLayer == null) {
+                return false;
+            }
+            String name = renderLayer.toString().toLowerCase(Locale.ROOT);
+            return name.contains("shadow");
         }
 
         private void fillUvs(List<RenderCapture.Vertex> verts, float[] uv0, boolean isAtlas, float u0, float u1, float v0, float v1) {

@@ -38,7 +38,8 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         if (resourceKey == null) {
             return null;
         }
-        Identifier loc = Identifier.tryParse(resourceKey);
+        String normalized = ensurePngKey(resourceKey);
+        Identifier loc = Identifier.tryParse(normalized);
         if (loc == null) {
             return null;
         }
@@ -62,7 +63,8 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            Identifier loc = Identifier.tryParse(resourceKey);
+            String normalized = ensurePngKey(resourceKey);
+            Identifier loc = Identifier.tryParse(normalized);
             if (loc == null) {
                 return null;
             }
@@ -92,7 +94,8 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            Identifier loc = Identifier.tryParse(resourceKey);
+            String normalized = ensurePngKey(resourceKey);
+            Identifier loc = Identifier.tryParse(normalized);
             return loc != null && rm.getResource(loc).isPresent();
         } catch (Exception ignored) {
             return false;
@@ -124,7 +127,8 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            Identifier loc = Identifier.tryParse(resourceKey);
+            String normalized = ensurePngKey(resourceKey);
+            Identifier loc = Identifier.tryParse(normalized);
             if (loc == null) {
                 return null;
             }

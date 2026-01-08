@@ -1,6 +1,5 @@
 package com.voxelbridge.platform.texture;
 
-import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.texture.AbstractTexture;
@@ -13,6 +12,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Attempts to read runtime textures from TextureManager when no resource exists.
@@ -21,44 +21,51 @@ public final class DynamicTextureReader {
 
     private DynamicTextureReader() {}
 
+    private static final ConcurrentHashMap<Identifier, BufferedImage> DYNAMIC_CACHE = new ConcurrentHashMap<>();
+
     public static BufferedImage tryRead(Identifier location) {
         if (location == null) {
             return null;
         }
-        BufferedImage img = tryReadInternal(location);
-        if (img != null) {
-            return img;
+        BufferedImage cached = DYNAMIC_CACHE.get(location);
+        if (cached != null) {
+            return cached;
         }
         Identifier alt = toDynamicKey(location);
         if (alt != null && !alt.equals(location)) {
-            return tryReadInternal(alt);
+            BufferedImage cachedAlt = DYNAMIC_CACHE.get(alt);
+            if (cachedAlt != null) {
+                return cachedAlt;
+            }
         }
         return null;
     }
 
-    private static BufferedImage tryReadInternal(Identifier location) {
-        try {
-            AbstractTexture texture = ClientAccessHolder.get().getTextureManager().getTexture(location);
-            if (texture == null) {
-                return null;
-            }
-            BufferedImage fromDynamic = readDynamicTexture(texture);
-            if (fromDynamic != null) {
-                return fromDynamic;
-            }
-            BufferedImage fromNative = readNativeImageTexture(texture);
-            if (fromNative != null) {
-                return fromNative;
-            }
-            BufferedImage fromHttp = readHttpTexture(texture);
-            if (fromHttp != null) {
-                return fromHttp;
-            }
-        } catch (Throwable t) {
-            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE,
-                String.format("[DynamicTextureReader][WARN] Failed to read %s: %s", location, t.getMessage()));
+    public static void cacheDynamic(Identifier location, AbstractTexture texture) {
+        if (location == null || texture == null) {
+            return;
         }
-        return null;
+        BufferedImage img = tryExtract(texture);
+        if (img == null) {
+            return;
+        }
+        DYNAMIC_CACHE.put(location, img);
+        Identifier alt = toDynamicKey(location);
+        if (alt != null) {
+            DYNAMIC_CACHE.putIfAbsent(alt, img);
+        }
+    }
+
+    public static BufferedImage tryExtract(AbstractTexture texture) {
+        BufferedImage fromDynamic = readDynamicTexture(texture);
+        if (fromDynamic != null) {
+            return fromDynamic;
+        }
+        BufferedImage fromNative = readNativeImageTexture(texture);
+        if (fromNative != null) {
+            return fromNative;
+        }
+        return readHttpTexture(texture);
     }
 
     private static BufferedImage readDynamicTexture(AbstractTexture texture) {
