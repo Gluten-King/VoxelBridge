@@ -18,6 +18,8 @@ import com.voxelbridge.platform.texture.TextureLoader;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.client.util.SkinTextures;
 import net.minecraft.client.render.entity.EntityRenderDispatcher;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
@@ -320,10 +322,9 @@ public final class EntityRenderer {
                         textureId = Identifier.of(textureId.getNamespace(), "painting/" + path);
                     }
                 }
-                EntityTextureManager.TextureHandle handle = null;
-                if (entity instanceof AbstractClientPlayerEntity player) {
-                    handle = tryRegisterPlayerAttachmentTexture(ctx, player, textureId);
-                }
+                EntityTextureManager.TextureHandle handle = entity instanceof AbstractClientPlayerEntity player
+                    ? resolvePlayerTexture(ctx, player, textureId, renderLayer)
+                    : null;
                 if (handle == null) {
                     handle = EntityTextureManager.register(ctx, textureId.toString());
                 }
@@ -441,47 +442,108 @@ public final class EntityRenderer {
         }
     }
 
-    private static EntityTextureManager.TextureHandle tryRegisterPlayerAttachmentTexture(
+    private static EntityTextureManager.TextureHandle resolvePlayerTexture(
         ExportContext ctx,
         AbstractClientPlayerEntity player,
-        Identifier texture
+        Identifier renderTexture,
+        net.minecraft.client.render.RenderLayer renderLayer
     ) {
-        String type = detectPlayerAttachmentType(texture);
-        if (type == null) {
+        PlayerTextures handles = ensurePlayerTextures(ctx, player);
+        if (handles == null) {
             return null;
         }
-        BufferedImage image = readTextureWithFallback(texture);
-        if (image == null) {
+        String path = renderTexture != null ? renderTexture.getPath().toLowerCase(Locale.ROOT) : "";
+        String layerName = renderLayer != null ? renderLayer.toString().toLowerCase(Locale.ROOT) : "";
+
+        if ((path.contains("elytra") || layerName.contains("elytra") || layerName.contains("wing"))
+            && handles.elytra() != null) {
+            return handles.elytra();
+        }
+        if ((path.contains("cape") || path.contains("cloak") || layerName.contains("cape"))
+            && handles.cape() != null) {
+            return handles.cape();
+        }
+        return handles.skin() != null ? handles.skin() : handles.cape() != null ? handles.cape() : handles.elytra();
+    }
+
+    private static PlayerTextures ensurePlayerTextures(ExportContext ctx, AbstractClientPlayerEntity player) {
+        SkinTextures skinTextures = getPlayerSkinTextures(player);
+        if (skinTextures == null) {
             return null;
         }
         String playerName = sanitizePlayerName(player.getGameProfile().getName());
-        String key = "entity:player/" + type + "/" + playerName;
-        String relativePath = "textures/entity_textures/player/" + playerName + "_" + type + ".png";
-        return EntityTextureManager.registerGenerated(ctx, key, relativePath, image);
-    }
 
-    private static String detectPlayerAttachmentType(Identifier texture) {
-        if (texture == null) {
+        EntityTextureManager.TextureHandle skinHandle = null;
+        EntityTextureManager.TextureHandle capeHandle = null;
+        EntityTextureManager.TextureHandle elytraHandle = null;
+
+        Identifier skin = skinTextures.texture();
+        BufferedImage skinImg = readTextureWithFallback(skin, skinTextures.textureUrl());
+        if (skinImg != null) {
+            String key = "entity:player/skin/" + playerName;
+            String relativePath = "textures/entity_textures/player/" + playerName + "_skin.png";
+            skinHandle = EntityTextureManager.registerGenerated(ctx, key, relativePath, skinImg);
+        }
+
+        Identifier cape = skinTextures.capeTexture();
+        BufferedImage capeImg = readTextureWithFallback(cape, null);
+        if (capeImg != null) {
+            String key = "entity:player/cape/" + playerName;
+            String relativePath = "textures/entity_textures/player/" + playerName + "_cape.png";
+            capeHandle = EntityTextureManager.registerGenerated(ctx, key, relativePath, capeImg);
+        }
+
+        Identifier elytra = skinTextures.elytraTexture();
+        BufferedImage elytraImg = readTextureWithFallback(elytra, null);
+        if (elytraImg != null) {
+            String key = "entity:player/elytra/" + playerName;
+            String relativePath = "textures/entity_textures/player/" + playerName + "_elytra.png";
+            elytraHandle = EntityTextureManager.registerGenerated(ctx, key, relativePath, elytraImg);
+        }
+
+        if (skinHandle == null && capeHandle == null && elytraHandle == null) {
             return null;
         }
-        String path = texture.getPath().toLowerCase(Locale.ROOT);
-        if (path.contains("elytra")) {
-            return "elytra";
-        }
-        if (path.contains("cape") || path.contains("cloak")) {
-            return "cape";
-        }
-        return null;
+        return new PlayerTextures(skinHandle, capeHandle, elytraHandle);
     }
 
-    private static BufferedImage readTextureWithFallback(Identifier texture) {
+    private static SkinTextures getPlayerSkinTextures(AbstractClientPlayerEntity player) {
+        try {
+            PlayerListEntry entry = ClientAccessHolder.get().getMinecraft().getNetworkHandler()
+                .getPlayerListEntry(player.getGameProfile().getId());
+            if (entry != null) {
+                return entry.getSkinTextures();
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            return player.getSkinTextures();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static BufferedImage readTextureWithFallback(Identifier texture, String url) {
         BufferedImage image = TextureLoader.readTexture(texture, ExportRuntimeConfig.isAnimationEnabled());
         if (image != null) {
             return image;
         }
         Identifier fallback = resolveTexturePathFallback(texture);
         if (fallback != null && !fallback.equals(texture)) {
-            return TextureLoader.readTexture(fallback, ExportRuntimeConfig.isAnimationEnabled());
+            image = TextureLoader.readTexture(fallback, ExportRuntimeConfig.isAnimationEnabled());
+            if (image != null) {
+                return image;
+            }
+        }
+        if (url != null && !url.isEmpty()) {
+            try (java.io.InputStream in = new java.net.URL(url).openStream()) {
+                image = javax.imageio.ImageIO.read(in);
+                if (image != null && !ExportRuntimeConfig.isAnimationEnabled()) {
+                    image = TextureLoader.extractFirstFrame(image);
+                }
+                return image;
+            } catch (Exception ignored) {
+            }
         }
         return null;
     }
@@ -518,4 +580,10 @@ public final class EntityRenderer {
         }
         return out.toString();
     }
+
+    private record PlayerTextures(
+        EntityTextureManager.TextureHandle skin,
+        EntityTextureManager.TextureHandle cape,
+        EntityTextureManager.TextureHandle elytra
+    ) {}
 }

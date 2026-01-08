@@ -4,8 +4,8 @@ import com.voxelbridge.core.texture.AnimationMetadata;
 import com.voxelbridge.core.texture.TextureAccess;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.texture.TextureLoader;
-import net.minecraft.client.resource.metadata.AnimationResourceMetadata;
 import net.minecraft.client.texture.Sprite;
+import net.minecraft.client.resource.metadata.AnimationResourceMetadata;
 import net.minecraft.util.Identifier;
 
 import java.awt.image.BufferedImage;
@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 
 /**
  * Minecraft-backed texture access adapter.
+ * 对齐 NeoForge 1.21.8 行为。
  */
 public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
 
@@ -38,11 +39,7 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         if (resourceKey == null) {
             return null;
         }
-        String normalized = ensurePngKey(resourceKey);
-        Identifier loc = Identifier.tryParse(normalized);
-        if (loc == null) {
-            return null;
-        }
+        Identifier loc = Identifier.tryParse(resourceKey);
         return TextureLoader.readTexture(loc, preserveAnimationStrip);
     }
 
@@ -63,8 +60,7 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            String normalized = ensurePngKey(resourceKey);
-            Identifier loc = Identifier.tryParse(normalized);
+            Identifier loc = Identifier.tryParse(resourceKey);
             if (loc == null) {
                 return null;
             }
@@ -94,8 +90,7 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            String normalized = ensurePngKey(resourceKey);
-            Identifier loc = Identifier.tryParse(normalized);
+            Identifier loc = Identifier.tryParse(resourceKey);
             return loc != null && rm.getResource(loc).isPresent();
         } catch (Exception ignored) {
             return false;
@@ -127,8 +122,7 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            String normalized = ensurePngKey(resourceKey);
-            Identifier loc = Identifier.tryParse(normalized);
+            Identifier loc = Identifier.tryParse(resourceKey);
             if (loc == null) {
                 return null;
             }

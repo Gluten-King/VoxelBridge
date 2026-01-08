@@ -13,6 +13,7 @@ import java.io.InputStream;
 
 /**
  * TextureLoader reads vanilla or resource-pack textures and exposes tint helpers.
+ * 对齐 NeoForge 1.21.8 的读取逻辑，依赖 ResourceManager + DynamicTextureReader。
  */
 public final class TextureLoader {
 
@@ -33,42 +34,61 @@ public final class TextureLoader {
         if (logResolve) {
             VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Resolving %s", png));
         }
+        String path = png != null ? png.getPath() : "";
+        boolean isPlayerDynamic =
+            path.startsWith("skins/") || path.startsWith("skin/")
+                || path.startsWith("capes/") || path.startsWith("cape/")
+                || path.startsWith("textures/entity/player/")
+                || path.startsWith("textures/entity/elytra/");
+        boolean isDynamic = isPlayerDynamic || path.startsWith("custom/");
+
+        // 玩家/自定义等动态纹理强制走 GPU/TextureManager。
+        if (isDynamic) {
+            BufferedImage dyn = DynamicTextureReader.tryRead(png, preserveAnimationStrip);
+            if (dyn != null) {
+                return dyn;
+            }
+            if (logResolve) {
+                VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE,
+                    String.format("[TextureLoader][WARN] GPU read failed for %s", png));
+            }
+            return null;
+        }
+
+        // 1) 先尝试资源文件（方块/静态纹理）。
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
             var opt = rm.getResource(png);
-            if (opt.isEmpty()) {
-                if (logResolve) {
-                    VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader][WARN] Missing resource %s", png));
-                }
-                BufferedImage dynamic = DynamicTextureReader.tryRead(png);
-                if (dynamic != null) {
+            if (opt.isPresent()) {
+                try (InputStream in = opt.get().getInputStream()) {
+                    BufferedImage img = readPngNoColorConversion(in);
                     if (logResolve) {
-                        VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Loaded dynamic texture %s (%dx%d)", png, dynamic.getWidth(), dynamic.getHeight()));
+                        VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Loaded %s (%dx%d)", png, img.getWidth(), img.getHeight()));
                     }
-                    return preserveAnimationStrip ? dynamic : extractFirstFrame(dynamic);
+                    if (preserveAnimationStrip) {
+                        return img;
+                    }
+                    BufferedImage firstFrame = extractFirstFrame(img);
+                    if (firstFrame != img && logResolve) {
+                        VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Extracted first frame for %s -> %dx%d",
+                                png, firstFrame.getWidth(), firstFrame.getHeight()));
+                    }
+                    return firstFrame;
                 }
-                return null;
             }
-            try (InputStream in = opt.get().getInputStream()) {
-                BufferedImage img = readPngNoColorConversion(in);
-                if (logResolve) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Loaded %s (%dx%d)", png, img.getWidth(), img.getHeight()));
-                }
-                if (preserveAnimationStrip) {
-                    return img;
-                }
-                BufferedImage firstFrame = extractFirstFrame(img);
-                if (firstFrame != img && logResolve) {
-                    VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Extracted first frame for %s -> %dx%d",
-                        png, firstFrame.getWidth(), firstFrame.getHeight()));
-                }
-                return firstFrame;
-            }
-        } catch (Throwable t) {
-            VoxelBridgeLogger.error(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader][ERROR] Failed to read %s: %s", png, t));
-            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, "[VoxelBridge][WARN] readTexture failed: " + png + " :: " + t);
-            return null;
+        } catch (Throwable ignored) {
         }
+
+        // 2) 动态/GPU 兜底。
+        BufferedImage dynamic = DynamicTextureReader.tryRead(png, preserveAnimationStrip);
+        if (dynamic != null) {
+            return dynamic;
+        }
+        if (logResolve) {
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE,
+                String.format("[TextureLoader][WARN] GPU read failed for %s", png));
+        }
+        return null;
     }
 
     /**
@@ -83,52 +103,29 @@ public final class TextureLoader {
         }
     }
 
+    public static BufferedImage fromNativeImage(NativeImage nativeImg) {
+        return nativeImageToBufferedImage(nativeImg);
+    }
+
     public static BufferedImage fromSprite(Sprite sprite) {
         if (sprite == null) {
             return null;
         }
         Identifier id = sprite.getContents().getId();
-        BufferedImage img = readTexture(id, ExportRuntimeConfig.isAnimationEnabled());
-        if (img == null) {
-            Identifier pngId = ensureSpritePng(id);
-            if (pngId != null && !pngId.equals(id)) {
-                img = readTexture(pngId, ExportRuntimeConfig.isAnimationEnabled());
-            }
+        BufferedImage img = null;
+
+        // Try direct PNG load first.
+        Identifier pngId = ensureSpritePng(id);
+        if (pngId != null) {
+            img = readTexture(pngId, ExportRuntimeConfig.isAnimationEnabled());
         }
+
+        // Fallback: crop from atlas if direct load failed.
         if (img == null) {
             img = cropFromAtlas(sprite);
         }
-        return img;
-    }
 
-    private static BufferedImage cropFromAtlas(Sprite sprite) {
-        Identifier atlasId = sprite.getAtlasId();
-        if (atlasId == null) {
-            return null;
-        }
-        BufferedImage atlas = readTexture(atlasId, true);
-        if (atlas == null) {
-            return null;
-        }
-        int x = sprite.getX();
-        int y = sprite.getY();
-        int w = sprite.getContents().getWidth();
-        int h = sprite.getContents().getHeight();
-        if (x < 0 || y < 0 || w <= 0 || h <= 0) {
-            return null;
-        }
-        int maxX = x + w;
-        int maxY = y + h;
-        if (maxX > atlas.getWidth() || maxY > atlas.getHeight()) {
-            return null;
-        }
-        try {
-            return atlas.getSubimage(x, y, w, h);
-        } catch (Exception e) {
-            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE,
-                "[TextureLoader][WARN] Failed to crop sprite from atlas " + atlasId + ": " + e.getMessage());
-            return null;
-        }
+        return img;
     }
 
     private static BufferedImage nativeImageToBufferedImage(NativeImage nativeImg) {
@@ -153,14 +150,10 @@ public final class TextureLoader {
         return out;
     }
 
-    public static BufferedImage fromNativeImage(NativeImage nativeImg) {
-        return nativeImg == null ? null : nativeImageToBufferedImage(nativeImg);
-    }
-
     /**
      * Extracts the first animation frame by taking the top-most square slice.
      */
-    private static BufferedImage extractFirstFrame(BufferedImage img) {
+    public static BufferedImage extractFirstFrame(BufferedImage img) {
         int width = img.getWidth();
         int height = img.getHeight();
 
@@ -175,28 +168,6 @@ public final class TextureLoader {
             VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE, "[TextureLoader][WARN] Failed to extract first frame: " + e);
             return img;
         }
-    }
-
-    /**
-     * Applies a multiplicative tint to every pixel of the image.
-     */
-    public static BufferedImage tintImage(BufferedImage src, float r, float g, float b) {
-        int w = src.getWidth();
-        int h = src.getHeight();
-        BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        int[] pixels = src.getRGB(0, 0, w, h, null, 0, w);
-
-        java.util.stream.IntStream.range(0, pixels.length).parallel().forEach(i -> {
-            int argb = pixels[i];
-            int a = (argb >>> 24) & 0xFF;
-            int rr = Math.min(255, (int) (((argb >>> 16) & 0xFF) * r));
-            int gg = Math.min(255, (int) (((argb >>> 8) & 0xFF) * g));
-            int bb = Math.min(255, (int) ((argb & 0xFF) * b));
-            pixels[i] = (a << 24) | (rr << 16) | (gg << 8) | bb;
-        });
-
-        dst.setRGB(0, 0, w, h, pixels, 0, w);
-        return dst;
     }
 
     /**
@@ -247,10 +218,6 @@ public final class TextureLoader {
         return ensurePngExtension("textures/block/" + path);
     }
 
-    private static String ensurePngExtension(String path) {
-        return path.endsWith(".png") ? path : path + ".png";
-    }
-
     private static Identifier ensureSpritePng(Identifier id) {
         if (id == null) {
             return null;
@@ -261,6 +228,42 @@ public final class TextureLoader {
         }
         path = ensurePngExtension(path);
         return Identifier.of(id.getNamespace(), path);
+    }
+
+    private static BufferedImage cropFromAtlas(Sprite sprite) {
+        try {
+            Identifier atlasId = sprite.getAtlasId();
+            if (atlasId == null) {
+                return null;
+            }
+            BufferedImage atlas = readTexture(atlasId, true);
+            if (atlas == null) {
+                return null;
+            }
+            int x = sprite.getX();
+            int y = sprite.getY();
+            int w = sprite.getContents().getWidth();
+            int h = sprite.getContents().getHeight();
+            if (w <= 0 || h <= 0) {
+                return null;
+            }
+            if (x < 0 || y < 0 || x + w > atlas.getWidth() || y + h > atlas.getHeight()) {
+                return null;
+            }
+            BufferedImage sub = atlas.getSubimage(x, y, w, h);
+            if (!ExportRuntimeConfig.isAnimationEnabled()) {
+                sub = extractFirstFrame(sub);
+            }
+            return sub;
+        } catch (Exception e) {
+            VoxelBridgeLogger.warn(LogModule.TEXTURE_RESOLVE,
+                "[TextureLoader][WARN] Failed to crop sprite from atlas: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static String ensurePngExtension(String path) {
+        return path.endsWith(".png") ? path : path + ".png";
     }
 
     /**

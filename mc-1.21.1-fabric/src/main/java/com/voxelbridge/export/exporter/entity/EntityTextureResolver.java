@@ -6,6 +6,7 @@ import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.render.RenderLayerTextureResolver;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.TexturedRenderLayers;
 import net.minecraft.client.texture.Sprite;
@@ -13,9 +14,12 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.decoration.painting.PaintingEntity;
 import net.minecraft.entity.decoration.painting.PaintingVariant;
+import net.minecraft.item.FilledMapItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.util.Identifier;
+
+import java.lang.reflect.Method;
 
 /**
  * Resolves textures for entity renderers with entity-specific overrides.
@@ -114,6 +118,15 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
                 "[EntityData] %s %s=%s",
                 itemFrame.getType(), "direction", itemFrame.getHorizontalFacing()));
 
+            if (hasItem && item.getItem() instanceof FilledMapItem) {
+                Identifier mapTexId = resolveMapTextureId(itemFrame.getWorld(), item);
+                if (mapTexId != null) {
+                    VoxelBridgeLogger.debug(LogModule.ENTITY,
+                        "[ItemFrame] Using map texture: " + mapTexId);
+                    return new ResolvedTexture(mapTexId, 0f, 1f, 0f, 1f, false, null, null);
+                }
+            }
+
             Identifier base = RenderLayerTextureResolver.INSTANCE.resolve(renderLayer);
             if (base != null) {
                 VoxelBridgeLogger.debug(LogModule.ENTITY, "[ItemFrame] Resolved texture from RenderLayer: " + base);
@@ -133,6 +146,93 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
                 "[EntityTextureResolver] Failed to resolve item frame texture: " + e.getMessage());
             return null;
         }
+    }
+
+    private static Identifier resolveMapTextureId(net.minecraft.world.World world, ItemStack item) {
+        try {
+            Object mapState = FilledMapItem.getMapState(item, world);
+            if (mapState == null) {
+                return null;
+            }
+            // Try to obtain map id via reflection (getId or getMapId)
+            Object mapIdObj = null;
+            for (String method : new String[] {"getId", "getMapId"}) {
+                try {
+                    Method m = mapState.getClass().getMethod(method);
+                    m.setAccessible(true);
+                    Object v = m.invoke(mapState);
+                    if (v != null) {
+                        mapIdObj = v;
+                        break;
+                    }
+                } catch (NoSuchMethodException ignored) {
+                }
+            }
+            Object renderer = invokeNoArg(MinecraftClient.getInstance(), "getMapRenderer", "getMapTextureManager");
+            if (renderer == null) {
+                return null;
+            }
+            // Invoke getTexture/getMapTexture with mapId or mapState
+            Identifier id = invokeTextureGetter(renderer, mapIdObj, mapState);
+            return id;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static Object invokeNoArg(Object target, String... methodNames) {
+        if (target == null) return null;
+        for (String name : methodNames) {
+            try {
+                Method m = target.getClass().getMethod(name);
+                m.setAccessible(true);
+                return m.invoke(target);
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static Identifier invokeTextureGetter(Object renderer, Object mapIdObj, Object mapState) {
+        if (renderer == null) return null;
+        Method[] methods = renderer.getClass().getMethods();
+        for (Method m : methods) {
+            String name = m.getName();
+            if (!name.equals("getTexture") && !name.equals("getMapTexture")) continue;
+            Class<?>[] params = m.getParameterTypes();
+            if (params.length != 1) continue;
+            try {
+                Object arg = null;
+                if (mapIdObj != null && params[0].isInstance(mapIdObj)) {
+                    arg = mapIdObj;
+                } else if (mapState != null && params[0].isInstance(mapState)) {
+                    arg = mapState;
+                }
+                if (arg == null) continue;
+                Object tex = m.invoke(renderer, arg);
+                Identifier id = extractId(tex);
+                if (id != null) return id;
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static Identifier extractId(Object textureObj) {
+        if (textureObj == null) return null;
+        if (textureObj instanceof Identifier id) {
+            return id;
+        }
+        try {
+            Method m = textureObj.getClass().getMethod("getId");
+            m.setAccessible(true);
+            Object v = m.invoke(textureObj);
+            if (v instanceof Identifier id) {
+                return id;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     private static ResolvedTexture resolveTextureWithAtlasDetection(Identifier texture) {
