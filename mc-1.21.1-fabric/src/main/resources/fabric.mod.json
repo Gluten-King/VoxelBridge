@@ -14,6 +14,9 @@
       "com.voxelbridge.fabric.VoxelBridgeFabric"
     ]
   },
+  "mixins": [
+    "voxelbridge.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=${fabric_loader_version}",
     "fabric-api": "*",

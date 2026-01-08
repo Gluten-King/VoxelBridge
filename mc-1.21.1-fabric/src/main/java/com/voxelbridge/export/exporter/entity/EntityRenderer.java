@@ -452,6 +452,18 @@ public final class EntityRenderer {
         if (handles == null) {
             return null;
         }
+        SkinTextures skinTextures = getPlayerSkinTextures(player);
+        if (skinTextures != null && renderTexture != null) {
+            if (renderTexture.equals(skinTextures.elytraTexture()) && handles.elytra() != null) {
+                return handles.elytra();
+            }
+            if (renderTexture.equals(skinTextures.capeTexture()) && handles.cape() != null) {
+                return handles.cape();
+            }
+            if (renderTexture.equals(skinTextures.texture()) && handles.skin() != null) {
+                return handles.skin();
+            }
+        }
         String path = renderTexture != null ? renderTexture.getPath().toLowerCase(Locale.ROOT) : "";
         String layerName = renderLayer != null ? renderLayer.toString().toLowerCase(Locale.ROOT) : "";
 
@@ -463,7 +475,23 @@ public final class EntityRenderer {
             && handles.cape() != null) {
             return handles.cape();
         }
-        return handles.skin() != null ? handles.skin() : handles.cape() != null ? handles.cape() : handles.elytra();
+
+        if (path.contains("textures/atlas/")
+            || path.contains("textures/item/")
+            || path.contains("textures/block/")
+            || path.contains("textures/models/")) {
+            return null;
+        }
+
+        boolean isSkin =
+            path.contains("skins/") || path.contains("skin/")
+                || path.contains("textures/entity/player/")
+                || path.endsWith("/steve.png")
+                || path.endsWith("/alex.png");
+        if (isSkin && handles.skin() != null) {
+            return handles.skin();
+        }
+        return null;
     }
 
     private static PlayerTextures ensurePlayerTextures(ExportContext ctx, AbstractClientPlayerEntity player) {

@@ -4,22 +4,25 @@ import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
 import com.voxelbridge.export.exporter.resolve.TextureResolver;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.render.RenderLayerTextureResolver;
+import com.voxelbridge.platform.texture.TextureLoader;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.render.MapRenderer;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.TexturedRenderLayers;
 import net.minecraft.client.texture.Sprite;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.component.type.MapIdComponent;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.decoration.painting.PaintingEntity;
 import net.minecraft.entity.decoration.painting.PaintingVariant;
 import net.minecraft.item.FilledMapItem;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.map.MapState;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.util.Identifier;
-
-import java.lang.reflect.Method;
 
 /**
  * Resolves textures for entity renderers with entity-specific overrides.
@@ -150,89 +153,48 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
 
     private static Identifier resolveMapTextureId(net.minecraft.world.World world, ItemStack item) {
         try {
-            Object mapState = FilledMapItem.getMapState(item, world);
+            VoxelBridgeLogger.debug(LogModule.MAP, String.format(
+                "[Map] resolveMapTextureId item=%s world=%s",
+                item != null ? item.getItem() : "null",
+                world != null ? world.getRegistryKey().getValue() : "null"));
+            if (item == null || world == null) {
+                VoxelBridgeLogger.debug(LogModule.MAP, "[Map] missing item or world");
+                return null;
+            }
+            MapIdComponent mapId = item.get(DataComponentTypes.MAP_ID);
+            if (mapId == null) {
+                VoxelBridgeLogger.debug(LogModule.MAP, "[Map] mapId=null");
+                return null;
+            }
+            MapState mapState = FilledMapItem.getMapState(mapId, world);
             if (mapState == null) {
+                VoxelBridgeLogger.debug(LogModule.MAP, "[Map] mapState=null");
                 return null;
             }
-            // Try to obtain map id via reflection (getId or getMapId)
-            Object mapIdObj = null;
-            for (String method : new String[] {"getId", "getMapId"}) {
-                try {
-                    Method m = mapState.getClass().getMethod(method);
-                    m.setAccessible(true);
-                    Object v = m.invoke(mapState);
-                    if (v != null) {
-                        mapIdObj = v;
-                        break;
-                    }
-                } catch (NoSuchMethodException ignored) {
-                }
+            TextureLoader.registerMapState(mapId.id(), mapState);
+            MinecraftClient client = MinecraftClient.getInstance();
+            MapRenderer mapRenderer = client != null && client.gameRenderer != null
+                ? client.gameRenderer.getMapRenderer()
+                : null;
+            if (mapRenderer != null) {
+                mapRenderer.updateTexture(mapId, mapState);
+                VoxelBridgeLogger.debug(LogModule.MAP, String.format(
+                    "[Map] updated renderer=%s mapId=%s",
+                    mapRenderer.getClass().getSimpleName(), mapId.asString()));
+            } else {
+                VoxelBridgeLogger.debug(LogModule.MAP, String.format(
+                    "[Map] renderer=null mapId=%s",
+                    mapId.asString()));
             }
-            Object renderer = invokeNoArg(MinecraftClient.getInstance(), "getMapRenderer", "getMapTextureManager");
-            if (renderer == null) {
-                return null;
-            }
-            // Invoke getTexture/getMapTexture with mapId or mapState
-            Identifier id = invokeTextureGetter(renderer, mapIdObj, mapState);
+            Identifier id = Identifier.of("minecraft", "map/" + mapId.id());
+            VoxelBridgeLogger.debug(LogModule.MAP, String.format(
+                "[Map] resolved id=%s",
+                id));
             return id;
         } catch (Exception ignored) {
+            VoxelBridgeLogger.debug(LogModule.MAP, "[Map] resolveMapTextureId failed with exception");
             return null;
         }
-    }
-
-    private static Object invokeNoArg(Object target, String... methodNames) {
-        if (target == null) return null;
-        for (String name : methodNames) {
-            try {
-                Method m = target.getClass().getMethod(name);
-                m.setAccessible(true);
-                return m.invoke(target);
-            } catch (Exception ignored) {
-            }
-        }
-        return null;
-    }
-
-    private static Identifier invokeTextureGetter(Object renderer, Object mapIdObj, Object mapState) {
-        if (renderer == null) return null;
-        Method[] methods = renderer.getClass().getMethods();
-        for (Method m : methods) {
-            String name = m.getName();
-            if (!name.equals("getTexture") && !name.equals("getMapTexture")) continue;
-            Class<?>[] params = m.getParameterTypes();
-            if (params.length != 1) continue;
-            try {
-                Object arg = null;
-                if (mapIdObj != null && params[0].isInstance(mapIdObj)) {
-                    arg = mapIdObj;
-                } else if (mapState != null && params[0].isInstance(mapState)) {
-                    arg = mapState;
-                }
-                if (arg == null) continue;
-                Object tex = m.invoke(renderer, arg);
-                Identifier id = extractId(tex);
-                if (id != null) return id;
-            } catch (Exception ignored) {
-            }
-        }
-        return null;
-    }
-
-    private static Identifier extractId(Object textureObj) {
-        if (textureObj == null) return null;
-        if (textureObj instanceof Identifier id) {
-            return id;
-        }
-        try {
-            Method m = textureObj.getClass().getMethod("getId");
-            m.setAccessible(true);
-            Object v = m.invoke(textureObj);
-            if (v instanceof Identifier id) {
-                return id;
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
     }
 
     private static ResolvedTexture resolveTextureWithAtlasDetection(Identifier texture) {

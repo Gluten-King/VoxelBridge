@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.voxelbridge.fabric.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "SpriteContentsAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
