@@ -5,8 +5,12 @@
   "name": "${mod_name}",
   "icon": "icon.png",
   "description": "${mod_description}",
+  "contact": {
+    "homepage": "https://modrinth.com/mod/voxelbridge",
+    "issues": "https://github.com/Gluten-King/VoxelBridge/issues"
+  },
   "authors": [
-    "${mod_authors}"
+  "${mod_authors}"
   ],
   "license": "${mod_license}",
   "environment": "client",
