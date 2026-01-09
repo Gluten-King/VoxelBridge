@@ -455,7 +455,7 @@ public final class BlockExporter {
             }
         }
 
-        return state.isSolidBlock(level, neighbor);
+        return state.isOpaqueFullCube(level, neighbor);
     }
 
     private long computeBushSeed(BlockPos pos) {

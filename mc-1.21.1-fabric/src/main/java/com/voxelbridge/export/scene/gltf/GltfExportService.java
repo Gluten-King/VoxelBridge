@@ -107,6 +107,8 @@ public final class GltfExportService {
         ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
 
         // Texture export is handled before glTF assembly so the writer is MC-agnostic.
+        ExportProgressTracker.setStage(ExportProgressTracker.Stage.ATLAS, "Generating Textures");
+        ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
         TextureExportPipeline.build(ctx, gltfDir, ctx.getAtlasBook().keySet());
 
         // OPTIMIZATION: Removed forced GC calls to eliminate 1-5 second Full GC pauses
@@ -123,6 +125,9 @@ public final class GltfExportService {
         // Write synchronously to ensure the glTF file is created.
         Path outputPath = null;
         try {
+            ExportProgressTracker.setStage(ExportProgressTracker.Stage.FINALIZE, "Writing glTF");
+            ProgressNotifier.showDetailed(mc, ExportProgressTracker.progress());
+
             VoxelBridgeLogger.memory("before_geometry_write");
             long tSceneWrite = VoxelBridgeLogger.now();
             outputPath = sceneBuilder.write(request);
