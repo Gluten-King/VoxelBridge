@@ -34,7 +34,7 @@ public final class FabricPlatformBootstrap implements PlatformBootstrap {
                 SelectionRenderer.onRenderLevel(context));
 
         // HUD overlay (optional)
-        // HudRenderCallback.EVENT.register((drawContext, tickDelta) ->
-        //         HudOverlayRenderer.onRenderGui(drawContext, tickDelta, MinecraftClient.getInstance()));
+        HudRenderCallback.EVENT.register((drawContext, tickDelta) ->
+                HudOverlayRenderer.onRenderGui(drawContext, tickDelta, MinecraftClient.getInstance()));
     }
 }

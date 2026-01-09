@@ -10,6 +10,7 @@ import net.fabricmc.fabric.api.renderer.v1.model.FabricBakedModel;
 import net.fabricmc.fabric.api.renderer.v1.model.SpriteFinder;
 import net.fabricmc.fabric.api.renderer.v1.render.RenderContext;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Block;
 import net.minecraft.client.render.model.BakedModel;
 import net.minecraft.client.render.model.BakedQuad;
 import net.minecraft.client.texture.Sprite;
@@ -66,7 +67,15 @@ public final class FabricApiHelper {
 
                 @Override
                 public boolean isFaceCulled(Direction face) {
-                    return false;
+                    if (face == null) {
+                        return false;
+                    }
+                    if (!state.isOpaqueFullCube(level, pos)) {
+                        // Avoid premature culling for visually transparent blocks; exporter handles shell culling.
+                        return false;
+                    }
+                    BlockPos neighbor = pos.offset(face);
+                    return !Block.shouldDrawSide(state, level, pos, face, neighbor);
                 }
 
                 @Override
@@ -163,11 +172,14 @@ public final class FabricApiHelper {
         }
 
         Sprite sprite = spriteFinder.find(quad, 0);
-        Direction cullFace = quad.cullFace();
+        Direction face = quad.lightFace();
+        if (face == null) {
+            face = quad.cullFace();
+        }
         int tintIndex = quad.colorIndex();
         boolean shade = true;
 
-        return new BakedQuad(vertices, tintIndex, cullFace, sprite, shade);
+        return new BakedQuad(vertices, tintIndex, face, sprite, shade);
     }
 
     private static int packNormal(float x, float y, float z) {

@@ -130,7 +130,7 @@ public final class OverlayManager {
      */
     public void cacheOverlay(String baseMaterialKey, BlockState state, BlockPos pos,
                              BakedQuad quad, Vec3d randomOffset, String spriteKey) {
-        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_overlay");
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_overlay", true);
     }
 
     /**
@@ -139,7 +139,7 @@ public final class OverlayManager {
      */
     public void cacheHilight(String baseMaterialKey, BlockState state, BlockPos pos,
                              BakedQuad quad, Vec3d randomOffset, String spriteKey) {
-        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_hilight");
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_hilight", true);
     }
 
     /**
@@ -148,11 +148,17 @@ public final class OverlayManager {
      */
     public void cacheOverlayNoMarkup(String baseMaterialKey, BlockState state, BlockPos pos,
                                      BakedQuad quad, Vec3d randomOffset, String spriteKey) {
-        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, null);
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, null, true);
+    }
+
+    public void cacheCtmOverlay(String baseMaterialKey, BlockState state, BlockPos pos,
+                                BakedQuad quad, Vec3d randomOffset, String spriteKey) {
+        cacheOverlayInternal(baseMaterialKey, state, pos, quad, randomOffset, spriteKey, "_overlay", false);
     }
 
     private void cacheOverlayInternal(String baseMaterialKey, BlockState state, BlockPos pos,
-                             BakedQuad quad, Vec3d randomOffset, String spriteKey, String materialSuffix) {
+                             BakedQuad quad, Vec3d randomOffset, String spriteKey, String materialSuffix,
+                             boolean allowBlockTint) {
         if (baseMaterialKey == null || baseMaterialKey.isEmpty()) {
             baseMaterialKey = "unknown";
         }
@@ -261,7 +267,7 @@ public final class OverlayManager {
             float[] worldPos = VertexExtractor.localToWorld(localPos, pos, offsetX, offsetY, offsetZ, randomOffset);
             System.arraycopy(worldPos, 0, positions, 0, 12);
 
-            int overlayColor = extractOverlayColor(state, pos, quad, vertexColors);
+            int overlayColor = extractOverlayColor(state, pos, quad, vertexColors, allowBlockTint);
             float[] normal = GeometryUtil.computeFaceNormal(positions);
 
             OverlayQuadData data = new OverlayQuadData(
@@ -372,7 +378,8 @@ public final class OverlayManager {
     /**
      * Extracts overlay color from vertex colors or tint index.
      */
-    private int extractOverlayColor(BlockState state, BlockPos pos, BakedQuad quad, int[] vertexColors) {
+    private int extractOverlayColor(BlockState state, BlockPos pos, BakedQuad quad, int[] vertexColors,
+                                    boolean allowBlockTint) {
         for (int i = 0; i < 4; i++) {
             int abgr = vertexColors[i];
             int rgb = abgr & 0x00FFFFFF;
@@ -386,7 +393,7 @@ public final class OverlayManager {
             }
         }
 
-        if (quad.getColorIndex() >= 0) {
+        if (allowBlockTint && quad.getColorIndex() >= 0) {
             int argb = ClientAccessHolder.get().getMinecraft().getBlockColors().getColor(state, level, pos, quad.getColorIndex());
             return (argb == -1) ? 0xFFFFFFFF : argb;
         }

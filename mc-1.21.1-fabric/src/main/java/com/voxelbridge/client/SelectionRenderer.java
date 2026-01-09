@@ -6,10 +6,12 @@ import com.voxelbridge.export.ExportProgressTracker.ChunkState;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.WorldRenderer;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
@@ -43,6 +45,7 @@ public final class SelectionRenderer {
         if (pos1 != null && pos2 != null) {
             renderSelectionBox(matrices, consumer, pos1, pos2, 0.0f, 1.0f, 1.0f, 0.5f);
             renderChunkStatus(matrices, consumer, pos1, pos2);
+            renderProgressLabel(matrices, mc, pos1, pos2, provider);
         }
 
         matrices.pop();
@@ -115,6 +118,40 @@ public final class SelectionRenderer {
             Box chunkBox = new Box(boxMinX, boxMinY, boxMinZ, boxMaxX, boxMaxY, boxMaxZ);
             WorldRenderer.drawBox(matrices, consumer, chunkBox, r, g, b, 0.35f);
         }
+    }
+
+    private static void renderProgressLabel(MatrixStack matrices, MinecraftClient mc,
+                                            BlockPos pos1, BlockPos pos2,
+                                            VertexConsumerProvider provider) {
+        ExportProgressTracker.Progress p = ExportProgressTracker.progress();
+        if (p.total() <= 0) {
+            return;
+        }
+        String text = String.format("Export: %d/%d (%.1f%%)", p.done(), p.total(), p.percent());
+
+        double cx = (pos1.getX() + pos2.getX() + 1) * 0.5;
+        double cy = (pos1.getY() + pos2.getY() + 1) * 0.5 + 1.5;
+        double cz = (pos1.getZ() + pos2.getZ() + 1) * 0.5;
+
+        matrices.push();
+        matrices.translate(cx, cy, cz);
+        matrices.multiply(mc.getEntityRenderDispatcher().getRotation());
+        matrices.scale(-0.02f, -0.02f, 0.02f);
+
+        float x = -mc.textRenderer.getWidth(text) / 2.0f;
+        mc.textRenderer.draw(
+            Text.literal(text),
+            x,
+            0.0f,
+            0xFFFFFFFF,
+            false,
+            matrices.peek().getPositionMatrix(),
+            provider,
+            TextRenderer.TextLayerType.NORMAL,
+            0,
+            0x00F000F0
+        );
+        matrices.pop();
     }
 
 }

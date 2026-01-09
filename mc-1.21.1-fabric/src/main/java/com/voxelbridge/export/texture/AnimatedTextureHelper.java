@@ -219,6 +219,10 @@ public final class AnimatedTextureHelper {
         }
 
         try {
+            String resourceKey = ctx.getTextureAccess().spriteKeyToResourceKey(spriteKey);
+            if (resourceKey == null || !ctx.getTextureAccess().hasResource(resourceKey + ".mcmeta")) {
+                return null;
+            }
             var contents = sprite.getContents();
             var metaOpt = contents.getMetadata().decode(AnimationResourceMetadata.READER);
             AnimationResourceMetadata meta = metaOpt.orElse(null);

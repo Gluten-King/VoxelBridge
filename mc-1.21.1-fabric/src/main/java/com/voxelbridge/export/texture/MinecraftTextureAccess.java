@@ -64,6 +64,10 @@ public final class MinecraftTextureAccess implements TextureAccess<Sprite> {
             if (loc == null) {
                 return null;
             }
+            Identifier metaLoc = Identifier.tryParse(resourceKey + ".mcmeta");
+            if (metaLoc == null || rm.getResource(metaLoc).isEmpty()) {
+                return null;
+            }
             var resOpt = rm.getResource(loc);
             if (resOpt.isEmpty()) {
                 return null;

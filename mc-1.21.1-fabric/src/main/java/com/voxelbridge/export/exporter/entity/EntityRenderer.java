@@ -376,9 +376,10 @@ public final class EntityRenderer {
             ctx.registerSpriteMaterial(spriteKey, resolvedMaterialKey);
             RenderCaptureUtil.ColorModeResult colorResult =
                 RenderCaptureUtil.applyColorMode(ctx, colors, EMPTY_UV);
+            boolean doubleSided = RENDER_TYPE_RESOLVER.isDoubleSided(renderLayer);
             sceneSink.addQuad(resolvedMaterialKey, spriteKey, "voxelbridge:transparent",
                 RenderLayer.UNKNOWN, colorResult.tintMode(),
-                RENDER_TYPE_RESOLVER.isDoubleSided(renderLayer),
+                doubleSided,
                 false,
                 positions, uv0, colorResult.uv1(), NORMAL_UP, colors);
         }

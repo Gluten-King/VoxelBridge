@@ -145,8 +145,9 @@ public final class BlockExporter {
         if (model == null) return;
 
         // Occlusion culling for opaque blocks
-        boolean isTransparent = !state.isOpaqueFullCube(level, pos);
-        if (!isTransparent && isFullyOccluded(pos)) return;
+        // Use isOpaqueFullCube for visual transparency (Glass claims Solid but is NOT Opaque)
+        boolean isOpaque = state.isOpaqueFullCube(level, pos);
+        if (isOpaque && isFullyOccluded(pos)) return;
 
         // Get quads via Adapter (handles Fabric API internally)
         long seed = state.isOf(Blocks.LILY_PAD) ? computeBushSeed(pos) : computeBlockSeed(pos);
@@ -166,11 +167,16 @@ public final class BlockExporter {
         // PASS 1: Position-based CTM overlay detection
         detectCtmOverlaysByPosition(quads, state, pos, blockKey, randomOffset);
 
+        boolean hasCtmSprite = false;
+
         // PASS 1b: Detect and cache overlays
         for (BakedQuad quad : quads) {
             if (quad == null || quad.getSprite() == null) continue;
 
             String spriteKey = com.voxelbridge.adapter.Adapters.getRender().getSpriteName(quad.getSprite());
+            if (isCtmOverlaySprite(spriteKey)) {
+                hasCtmSprite = true;
+            }
 
             // Check vanilla overlay
             if (OverlayManager.isVanillaOverlay(spriteKey)) {
@@ -188,6 +194,8 @@ public final class BlockExporter {
             }
         }
 
+        boolean ctmCompactCulling = !isOpaque && hasCtmSprite;
+
         // PASS 2: Process base quads
         for (BakedQuad quad : quads) {
             if (quad == null) continue;
@@ -202,11 +210,27 @@ public final class BlockExporter {
 
             // Occlusion culling
             if (dir != null) {
-                if (!isTransparent) {
-                    // Opaque blocks: cull if neighbor is solid
+                mutablePos.set(pos).move(dir);
+                BlockState neighbor = getNeighborState(mutablePos);
+
+                // Priority 1: Force cull internal faces of the same CTM/compact block (transparent shell)
+                // This fixes cases where isSideInvisible fails (e.g. Glass vs Glass).
+                if (ctmCompactCulling && state.isOf(neighbor.getBlock())) {
+                    continue;
+                }
+
+                // Priority 2: Use isSideInvisible for CTM/compact transparent blocks.
+                // STRICTLY restrict this to neighbors that are NOT opaque.
+                // If neighbor is Opaque (e.g. Stone), we MUST keep the face (Boundary protection),
+                // unless we are also opaque (handled by Priority 3).
+                if (ctmCompactCulling && !neighbor.isOpaqueFullCube(level, mutablePos) && state.isSideInvisible(neighbor, dir)) {
+                    continue;
+                }
+
+                // Priority 3: Standard occlusion culling for opaque blocks
+                if (isOpaque) {
                     if (isFaceOccluded(pos, dir)) continue;
                 }
-                // Transparent blocks: no face culling (internal faces must remain visible)
             }
 
             // Process quad
@@ -216,10 +240,25 @@ public final class BlockExporter {
         // PASS 3: Output overlays with culling
         overlayManager.outputOverlays(sceneSink, state, dir -> {
             if (dir == null) return false;
-            if (!isTransparent) {
+
+            mutablePos.set(pos).move(dir);
+            BlockState neighbor = getNeighborState(mutablePos);
+
+            // Priority 1: Force cull internal faces of the same CTM/compact block (transparent shell)
+            if (ctmCompactCulling && state.isOf(neighbor.getBlock())) {
+                return true;
+            }
+
+            // Priority 2: Use isSideInvisible for CTM/compact transparent blocks.
+            // STRICTLY restrict this to neighbors that are NOT opaque.
+            if (ctmCompactCulling && !neighbor.isOpaqueFullCube(level, mutablePos) && state.isSideInvisible(neighbor, dir)) {
+                return true;
+            }
+
+            // Priority 3: Standard occlusion culling for opaque blocks
+            if (isOpaque) {
                 return isFaceOccluded(pos, dir);
             }
-            // Transparent blocks: no face culling for overlays
             return false;
         });
     }
@@ -271,7 +310,7 @@ public final class BlockExporter {
             group.stream()
                 .sorted(Comparator.comparingInt(QuadEntry::index))
                 .filter(q -> q.index() != minIndex)
-                .forEach(q -> overlayManager.cacheOverlay(blockKey, state, pos, q.quad(), randomOffset, q.spriteKey()));
+                .forEach(q -> overlayManager.cacheCtmOverlay(blockKey, state, pos, q.quad(), randomOffset, q.spriteKey()));
         }
     }
 
@@ -385,6 +424,18 @@ public final class BlockExporter {
             || pos.getZ() < regionMin.getZ() || pos.getZ() > regionMax.getZ();
     }
 
+    private BlockState getNeighborState(BlockPos neighbor) {
+        if (chunkCache != null) {
+            int cx = neighbor.getX() >> 4;
+            int cz = neighbor.getZ() >> 4;
+            var chunk = chunkCache.getChunk(cx, cz, ChunkStatus.FULL, false);
+            if (chunk == null || chunk.isEmpty()) return Blocks.AIR.getDefaultState();
+            return chunk.getBlockState(neighbor);
+        } else {
+            return level.getBlockState(neighbor);
+        }
+    }
+
     private boolean isNeighborSolid(BlockPos neighbor) {
         BlockState state;
         if (chunkCache != null) {
@@ -404,7 +455,7 @@ public final class BlockExporter {
             }
         }
 
-        return state.isOpaqueFullCube(level, neighbor);
+        return state.isSolidBlock(level, neighbor);
     }
 
     private long computeBushSeed(BlockPos pos) {
