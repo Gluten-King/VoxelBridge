@@ -5,6 +5,8 @@ import com.voxelbridge.adapter.QuadSource;
 import com.voxelbridge.export.quad.QuadDataUtil;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.platform.client.ClientAccessHolder;
+import com.voxelbridge.util.debug.LogModule;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.BlockModelPart;
 import net.minecraft.client.renderer.block.model.BlockStateModel;
@@ -22,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class NeoForgeRenderAdapter implements RenderAdapter {
+    private static volatile boolean loggedCollectPartsFailure;
     
     public NeoForgeRenderAdapter() {
     }
@@ -59,7 +62,9 @@ public class NeoForgeRenderAdapter implements RenderAdapter {
                 List<BakedQuad> q2 = part.getQuads(null);
                 if (q2 != null) quads.addAll(q2);
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            logCollectPartsFailure(t);
+        }
 
         return quads;
     }
@@ -77,5 +82,15 @@ public class NeoForgeRenderAdapter implements RenderAdapter {
     private TextureAtlas getBlockAtlas() {
         var modelManager = ClientAccessHolder.get().getModelManager();
         return modelManager != null ? modelManager.getAtlas(TextureAtlas.LOCATION_BLOCKS) : null;
+    }
+
+    private static void logCollectPartsFailure(Throwable t) {
+        if (loggedCollectPartsFailure) {
+            return;
+        }
+        loggedCollectPartsFailure = true;
+        VoxelBridgeLogger.warn(LogModule.EXPORT,
+            "[NeoForgeRenderAdapter] BlockStateModel quad extraction failed: "
+                + t.getClass().getSimpleName() + ": " + t.getMessage());
     }
 }
