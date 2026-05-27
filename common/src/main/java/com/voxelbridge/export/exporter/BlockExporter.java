@@ -1,7 +1,6 @@
 package com.voxelbridge.export.exporter;
 
 import com.voxelbridge.compat.BlockStateCompat;
-import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.CoordinateMode;
@@ -23,7 +22,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -56,8 +54,8 @@ public final class BlockExporter {
     // Managers for specialized tasks
     private OverlayManager overlayManager;
     private QuadProcessor quadProcessor;
+    private BlockFaceVisibility faceVisibility;
 
-    private final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
     private volatile boolean missingNeighborDetected = false;
 
     public BlockExporter(ExportContext ctx, IrSink sceneSink, Level level) {
@@ -95,6 +93,7 @@ public final class BlockExporter {
         // Initialize managers with current offsets
         this.overlayManager = new OverlayManager(ctx, level, offsetX, offsetY, offsetZ, planeOffsetTracker);
         this.quadProcessor = new QuadProcessor(ctx, level, sceneSink, offsetX, offsetY, offsetZ, planeOffsetTracker);
+        this.faceVisibility = new BlockFaceVisibility(level, chunkCache, regionMin, regionMax);
     }
 
     public void onChunkStart() {
@@ -110,7 +109,8 @@ public final class BlockExporter {
         // Check neighbor chunks are loaded only for chunk-edge blocks
         int localX = pos.getX() & 15;
         int localZ = pos.getZ() & 15;
-        if ((localX == 0 || localX == 15 || localZ == 0 || localZ == 15) && !isNeighborChunksLoadedForBlock(pos)) {
+        if ((localX == 0 || localX == 15 || localZ == 0 || localZ == 15)
+            && !faceVisibility.areNeighborChunksLoadedForBlock(pos)) {
             VoxelBridgeLogger.debug(LogModule.SAMPLER_BLOCK, "[BlockExporter] Neighbor chunks missing for block at " + pos.toShortString());
             missingNeighborDetected = true;
             return;
@@ -159,21 +159,8 @@ public final class BlockExporter {
         boolean isTransparent = !BlockStateCompat.isSolidRender(state, level, pos);
         byte[] faceOcclusionCache = null;
         if (!isTransparent) {
-            faceOcclusionCache = new byte[Direction.values().length];
-            boolean fullyOccluded = true;
-            for (Direction dir : Direction.values()) {
-                int idx = dir.ordinal();
-                mutablePos.setWithOffset(pos, dir);
-                if (isOutsideRegion(mutablePos)) {
-                    faceOcclusionCache[idx] = 2;
-                    fullyOccluded = false;
-                    continue;
-                }
-                boolean occluded = isNeighborSolid(mutablePos);
-                faceOcclusionCache[idx] = (byte) (occluded ? 1 : 2);
-                if (!occluded) fullyOccluded = false;
-            }
-            if (fullyOccluded) return;
+            faceOcclusionCache = faceVisibility.buildSolidFaceOcclusionCache(pos);
+            if (faceOcclusionCache == null) return;
         }
 
         // Get quads via Adapter (handles ModelData and Fabric API internally)
@@ -205,7 +192,7 @@ public final class BlockExporter {
             if (quad == null || sprite == null) continue;
             String spriteKey = com.voxelbridge.adapter.Adapters.getRender().getSpriteName(sprite);
             spriteKeys[i] = spriteKey;
-            if (!isCtmCompact && isContinuitySprite(spriteKey)) {
+            if (!isCtmCompact && OverlayClassifier.isContinuitySprite(spriteKey)) {
                 isCtmCompact = true;
             }
             vertexCache[i] = com.voxelbridge.export.util.geometry.VertexExtractor.extractFromQuad(
@@ -222,7 +209,10 @@ public final class BlockExporter {
 
         // PASS 1: Detect and cache overlays (position-based; avoids CTM compact splitting)
         boolean[] isOverlay = new boolean[quadCount];
-        detectOverlaysByPosition(quads, spriteKeys, vertexCache, isOverlay, state, pos, blockKey, randomOffset);
+        OverlayClassifier.classifyByPosition(
+            quads, spriteKeys, vertexCache, isOverlay, state, pos, blockKey, randomOffset,
+            offsetX, offsetY, offsetZ, overlayManager
+        );
 
         // PASS 2: Process base quads
         byte[] sameBlockOcclusionCache = null;
@@ -242,7 +232,7 @@ public final class BlockExporter {
             if (dir != null) {
                 if (!isTransparent) {
                     // Opaque blocks: cull if neighbor is solid
-                    boolean occluded = isFaceOccludedCached(pos, dir, faceOcclusionCache);
+                    boolean occluded = faceVisibility.isFaceOccludedCached(pos, dir, faceOcclusionCache);
                     if (occluded) continue;
                 } else if (isCtmCompact) {
                     // CTM compact: cull internal faces against same block to keep outer shell
@@ -253,7 +243,7 @@ public final class BlockExporter {
                     byte cached = sameBlockOcclusionCache[idx];
                     boolean occluded;
                     if (cached == 0) {
-                        occluded = isFaceOccludedBySameBlock(state, pos, dir);
+                        occluded = faceVisibility.isFaceOccludedBySameBlock(state, pos, dir);
                         sameBlockOcclusionCache[idx] = (byte) (occluded ? 1 : 2);
                     } else {
                         occluded = cached == 1;
@@ -277,244 +267,23 @@ public final class BlockExporter {
         overlayManager.outputOverlays(sceneSink, state, dir -> {
             if (dir == null) return false;
             if (!isTransparent) {
-                return isFaceOccludedCached(pos, dir, occlusionCacheFinal);
+                return faceVisibility.isFaceOccludedCached(pos, dir, occlusionCacheFinal);
             }
             if (ctmCompact) {
                 int idx = dir.ordinal();
                 if (sameBlockCacheFinal == null) {
-                    return isFaceOccludedBySameBlock(state, pos, dir);
+                    return faceVisibility.isFaceOccludedBySameBlock(state, pos, dir);
                 }
                 byte cached = sameBlockCacheFinal[idx];
                 if (cached == 1) return true;
                 if (cached == 2) return false;
-                boolean occluded = isFaceOccludedBySameBlock(state, pos, dir);
+                boolean occluded = faceVisibility.isFaceOccludedBySameBlock(state, pos, dir);
                 sameBlockCacheFinal[idx] = (byte) (occluded ? 1 : 2);
                 return occluded;
             }
             // Transparent blocks: no face culling for overlays
             return false;
         });
-    }
-
-    private boolean isContinuitySprite(String spriteKey) {
-        if (spriteKey == null) return false;
-        return spriteKey.toLowerCase(Locale.ROOT).contains("continuity");
-    }
-
-    private boolean isOverlayCandidateSprite(String spriteKey) {
-        if (spriteKey == null) return false;
-        String lower = spriteKey.toLowerCase(Locale.ROOT);
-        return lower.contains("_overlay")
-            || lower.contains("_hilight")
-            || lower.contains("/ctm/")
-            || lower.contains("ctm/")
-            || lower.contains("continuity");
-    }
-
-    private boolean isHilightOverlay(String spriteKey) {
-        if (spriteKey == null) return false;
-        return spriteKey.toLowerCase(Locale.ROOT).contains("_hilight");
-    }
-
-    private void detectOverlaysByPosition(List<QuadData> quads,
-                                          String[] spriteKeys,
-                                          com.voxelbridge.export.util.geometry.VertexExtractor.VertexData[] vertexCache,
-                                          boolean[] isOverlay,
-                                          BlockState state,
-                                          BlockPos pos,
-                                          String blockKey,
-                                          Vec3 randomOffset) {
-        record QuadEntry(int index, QuadData quad, String spriteKey, long posHash,
-                         float uMin, float uMax, float vMin, float vMax,
-                         boolean overlayCandidate, boolean hilight) {}
-
-        Map<Long, List<QuadEntry>> groups = new HashMap<>();
-
-        for (int i = 0; i < quads.size(); i++) {
-            QuadData quad = quads.get(i);
-            String spriteKey = spriteKeys[i];
-            if (quad == null || spriteKey == null) continue;
-            var vertexData = (vertexCache != null && i < vertexCache.length) ? vertexCache[i] : null;
-            if (vertexData == null) {
-                var sprite = quad.sprite();
-                if (sprite == null) continue;
-                vertexData = com.voxelbridge.export.util.geometry.VertexExtractor.extractFromQuad(
-                    quad, pos, sprite, offsetX, offsetY, offsetZ, randomOffset
-                );
-                if (vertexCache != null && i < vertexCache.length) {
-                    vertexCache[i] = vertexData;
-                }
-            }
-            float[] uv = vertexData.uvs();
-            float uMin = Math.min(Math.min(uv[0], uv[2]), Math.min(uv[4], uv[6]));
-            float uMax = Math.max(Math.max(uv[0], uv[2]), Math.max(uv[4], uv[6]));
-            float vMin = Math.min(Math.min(uv[1], uv[3]), Math.min(uv[5], uv[7]));
-            float vMax = Math.max(Math.max(uv[1], uv[3]), Math.max(uv[5], uv[7]));
-
-            long posHash = computePositionHash(vertexData.positions());
-            boolean overlayCandidate = isOverlayCandidateSprite(spriteKey);
-            boolean hilight = isHilightOverlay(spriteKey);
-            groups.computeIfAbsent(posHash, k -> new ArrayList<>())
-                .add(new QuadEntry(i, quad, spriteKey, posHash, uMin, uMax, vMin, vMax, overlayCandidate, hilight));
-        }
-
-        final float UV_EPS = 1e-4f;
-        for (List<QuadEntry> group : groups.values()) {
-            if (group.size() < 2) continue;
-            boolean hasCandidate = group.stream().anyMatch(q -> q.overlayCandidate);
-            if (!hasCandidate) continue;
-            boolean hasCtmCandidate = group.stream().anyMatch(q -> isCtmCandidateSprite(q.spriteKey));
-
-            QuadEntry first = group.get(0);
-            float du = first.uMax - first.uMin;
-            float dv = first.vMax - first.vMin;
-            boolean sameShape = group.stream().allMatch(q ->
-                Math.abs((q.uMax - q.uMin) - du) < UV_EPS &&
-                Math.abs((q.vMax - q.vMin) - dv) < UV_EPS);
-            if (!sameShape) continue;
-
-            int minIndex = group.stream().mapToInt(QuadEntry::index).min().orElse(Integer.MAX_VALUE);
-            group.sort(Comparator.comparingInt(QuadEntry::index));
-
-            String baseMaterialKey = hasCtmCandidate
-                ? blockKey
-                : (spriteKeys[minIndex] != null ? spriteKeys[minIndex] : blockKey);
-
-            for (QuadEntry entry : group) {
-                if (entry.index == minIndex) continue;
-                if (entry.hilight) {
-                    overlayManager.cacheHilight(baseMaterialKey, state, pos, entry.quad, randomOffset, entry.spriteKey);
-                } else {
-                    overlayManager.cacheOverlay(baseMaterialKey, state, pos, entry.quad, randomOffset, entry.spriteKey);
-                }
-                isOverlay[entry.index] = true;
-            }
-        }
-    }
-
-    private boolean isCtmCandidateSprite(String spriteKey) {
-        if (spriteKey == null) return false;
-        String lower = spriteKey.toLowerCase(Locale.ROOT);
-        return lower.contains("/ctm/") || lower.contains("ctm/") || lower.contains("continuity");
-    }
-
-    private long computePositionHash(float[] positions) {
-        Integer[] order = {0, 1, 2, 3};
-        java.util.Arrays.sort(order, (a, b) -> {
-            int ia = a * 3;
-            int ib = b * 3;
-            int cmpX = Float.compare(positions[ia], positions[ib]);
-            if (cmpX != 0) return cmpX;
-            int cmpY = Float.compare(positions[ia + 1], positions[ib + 1]);
-            if (cmpY != 0) return cmpY;
-            return Float.compare(positions[ia + 2], positions[ib + 2]);
-        });
-        long hash = 1125899906842597L;
-        for (int idx : order) {
-            int pi = idx * 3;
-            hash = 31 * hash + Math.round(positions[pi] * 100f);
-            hash = 31 * hash + Math.round(positions[pi + 1] * 100f);
-            hash = 31 * hash + Math.round(positions[pi + 2] * 100f);
-        }
-        return hash;
-    }
-
-    // ===== Occlusion culling helpers =====
-
-    private boolean isNeighborChunksLoadedForBlock(BlockPos pos) {
-        if (chunkCache == null) return true;
-
-        int localX = pos.getX() & 15;
-        int localZ = pos.getZ() & 15;
-        int cx = pos.getX() >> 4;
-        int cz = pos.getZ() >> 4;
-
-        if (localX == 0 && isChunkMissing(cx - 1, cz)) return false;
-        if (localX == 15 && isChunkMissing(cx + 1, cz)) return false;
-        if (localZ == 0 && isChunkMissing(cx, cz - 1)) return false;
-        return localZ != 15 || !isChunkMissing(cx, cz + 1);
-    }
-
-    private boolean isChunkMissing(int cx, int cz) {
-        var chunk = chunkCache.getChunk(cx, cz, false);
-        return chunk == null || chunk.isEmpty();
-    }
-
-    private boolean isFullyOccluded(BlockPos pos) {
-        for (Direction dir : Direction.values()) {
-            mutablePos.setWithOffset(pos, dir);
-            if (isOutsideRegion(mutablePos)) return false;
-            if (!isNeighborSolid(mutablePos)) return false;
-        }
-        return true;
-    }
-
-    private boolean isFaceOccluded(BlockPos pos, Direction face) {
-        mutablePos.setWithOffset(pos, face);
-        if (isOutsideRegion(mutablePos)) return false;
-        return isNeighborSolid(mutablePos);
-    }
-
-    private boolean isFaceOccludedCached(BlockPos pos, Direction face, byte[] cache) {
-        if (cache == null) {
-            return isFaceOccluded(pos, face);
-        }
-        int idx = face.ordinal();
-        byte cached = cache[idx];
-        if (cached == 1) return true;
-        if (cached == 2) return false;
-        boolean occluded = isFaceOccluded(pos, face);
-        cache[idx] = (byte) (occluded ? 1 : 2);
-        return occluded;
-    }
-
-    private boolean isFaceOccludedBySameBlock(BlockState state, BlockPos pos, Direction face) {
-        mutablePos.setWithOffset(pos, face);
-        if (isOutsideRegion(mutablePos)) return false;
-        return isNeighborSameBlock(state, mutablePos);
-    }
-
-    private boolean isOutsideRegion(BlockPos pos) {
-        if (regionMin == null || regionMax == null) return false;
-        return pos.getX() < regionMin.getX() || pos.getX() > regionMax.getX()
-            || pos.getY() < regionMin.getY() || pos.getY() > regionMax.getY()
-            || pos.getZ() < regionMin.getZ() || pos.getZ() > regionMax.getZ();
-    }
-
-    private boolean isNeighborSolid(BlockPos neighbor) {
-        BlockState state;
-        if (chunkCache != null) {
-            int cx = neighbor.getX() >> 4;
-            int cz = neighbor.getZ() >> 4;
-            var chunk = chunkCache.getChunk(cx, cz, false);
-            if (chunk == null || chunk.isEmpty()) return true;
-            state = chunk.getBlockState(neighbor);
-        } else {
-            state = level.getBlockState(neighbor);
-        }
-
-        // FILLCAVE: Treat any air with skylight 0 as solid for occlusion culling
-        if (ExportRuntimeConfig.isFillCaveEnabled()) {
-            if (state.isAir() && level.getBrightness(LightLayer.SKY, neighbor) == 0) {
-                return true; // Pretend ALL cave_air is solid
-            }
-        }
-
-        return BlockStateCompat.isSolidRender(state, level, neighbor);
-    }
-
-    private boolean isNeighborSameBlock(BlockState state, BlockPos neighbor) {
-        BlockState neighborState;
-        if (chunkCache != null) {
-            int cx = neighbor.getX() >> 4;
-            int cz = neighbor.getZ() >> 4;
-            var chunk = chunkCache.getChunk(cx, cz, false);
-            if (chunk == null || chunk.isEmpty()) return false;
-            neighborState = chunk.getBlockState(neighbor);
-        } else {
-            neighborState = level.getBlockState(neighbor);
-        }
-        return neighborState.getBlock() == state.getBlock();
     }
 
     public boolean hadMissingNeighborAndReset() {
