@@ -153,7 +153,9 @@ processResources {
 loom {
     runs {
         configureEach {
-            runDir = fabricRunDir.toString()
+            // Loom 1.10 treats this value as project-relative. Passing an
+            // absolute Windows path makes it prepend projectDir a second time.
+            runDir = project.relativePath(fabricRunDir)
         }
         client {
             client()

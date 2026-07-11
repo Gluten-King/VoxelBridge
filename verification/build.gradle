@@ -1,0 +1,99 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = mod_group_id
+version = mod_version
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+dependencies {
+    // Match the version already shipped by the mod projects so verification can
+    // run from the existing Gradle cache in restricted/offline environments.
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.13.4.2'
+}
+
+application {
+    mainClass = 'com.voxelbridge.verification.GoldenCli'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('goldenSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs dependency-free semantic glTF verifier tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.SemanticGltfAnalyzerTest'
+}
+
+tasks.test {
+    dependsOn 'goldenSelfTest'
+}
+
+def cliArgs = { String command ->
+    def gltf = providers.gradleProperty('gltf').orNull
+    if (!gltf) {
+        throw new GradleException('Missing -Pgltf=<path-to-gltf>')
+    }
+
+    def result = [command, '--gltf', rootProject.file(gltf).absolutePath]
+    if (command == 'generate') {
+        def snapshot = providers.gradleProperty('snapshot').orNull
+        if (!snapshot) {
+            throw new GradleException('Missing -Psnapshot=<output-snapshot>')
+        }
+        result += ['--snapshot', rootProject.file(snapshot).absolutePath]
+    } else {
+        def expected = providers.gradleProperty('expected').orNull
+        if (!expected) {
+            throw new GradleException('Missing -Pexpected=<expected-snapshot>')
+        }
+        result += ['--expected', rootProject.file(expected).absolutePath]
+        def actual = providers.gradleProperty('actual').orNull
+        if (!actual) {
+            actual = layout.buildDirectory.file('reports/golden/actual.snapshot.json').get().asFile.absolutePath
+        }
+        result += ['--actual', rootProject.file(actual).absolutePath]
+    }
+
+    result += [
+        '--scenario', providers.gradleProperty('scenario').orElse('unknown').get(),
+        '--minecraft', providers.gradleProperty('minecraftVersion').orElse('unknown').get()
+    ]
+
+    def scenarioFile = providers.gradleProperty('scenarioFile').orNull
+    if (scenarioFile) {
+        result += ['--scenario-file', rootProject.file(scenarioFile).absolutePath]
+    }
+    return result
+}
+
+tasks.register('generateGoldenSnapshot', JavaExec) {
+    group = 'verification'
+    description = 'Generates a canonical semantic snapshot from glTF and its external assets.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    doFirst {
+        args = cliArgs('generate')
+    }
+}
+
+tasks.register('verifyGoldenSnapshot', JavaExec) {
+    group = 'verification'
+    description = 'Compares a glTF semantic snapshot with a committed golden snapshot.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    doFirst {
+        args = cliArgs('verify')
+    }
+}

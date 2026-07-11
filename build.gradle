@@ -2,16 +2,233 @@ plugins {
     id 'base'
 }
 
+import groovy.json.JsonSlurper
+
 tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
 }
 
 def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
 
+def stableCompileTasks = [
+    ':fabric:1.20.1:mod:compileJava',
+    ':fabric:1.21.1:mod:compileJava',
+    ':fabric:1.21.4:mod:compileJava',
+    ':fabric:1.21.8:mod:compileJava',
+    ':neoforge:1.21.1:mod:compileJava',
+    ':neoforge:1.21.4:mod:compileJava',
+    ':neoforge:1.21.8:mod:compileJava'
+]
+
+def goldenTargets = [
+    'fabric-1.20.1'  : [projectPath: ':fabric:1.20.1:mod',   platform: 'fabric',   minecraft: '1.20.1'],
+    'fabric-1.21.1'  : [projectPath: ':fabric:1.21.1:mod',   platform: 'fabric',   minecraft: '1.21.1'],
+    'fabric-1.21.4'  : [projectPath: ':fabric:1.21.4:mod',   platform: 'fabric',   minecraft: '1.21.4'],
+    'fabric-1.21.8'  : [projectPath: ':fabric:1.21.8:mod',   platform: 'fabric',   minecraft: '1.21.8'],
+    'neoforge-1.21.1': [projectPath: ':neoforge:1.21.1:mod', platform: 'neoforge', minecraft: '1.21.1'],
+    'neoforge-1.21.4': [projectPath: ':neoforge:1.21.4:mod', platform: 'neoforge', minecraft: '1.21.4'],
+    'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8']
+]
+
+def goldenTargetName = providers.gradleProperty('goldenTarget').orNull
+def goldenTarget = goldenTargetName != null ? goldenTargets[goldenTargetName] : null
+def goldenScenario = providers.gradleProperty('goldenScenario').orElse('vanilla_smoke').get()
+def goldenWorldName = providers.gradleProperty('goldenWorld').orElse('VoxelBridgeGolden').get()
+def goldenScenarioDir = file("golden/scenarios/${goldenScenario}")
+def goldenScenarioFile = file("${goldenScenarioDir}/scene.mcfunction")
+def goldenManifestFile = file("${goldenScenarioDir}/scenario.json")
+def goldenRunRoot = goldenTargetName == null
+        ? layout.buildDirectory.dir('golden-runs/unselected').get().asFile
+        : layout.buildDirectory.dir("golden-runs/${goldenTargetName}/${goldenScenario}").get().asFile
+def goldenResultFile = new File(goldenRunRoot, 'result.json')
+def goldenExportDir = new File(goldenRunRoot, 'export')
+
+tasks.register('compileStableMatrix') {
+    group = 'verification'
+    description = 'Compiles every supported Fabric and NeoForge target.'
+    dependsOn stableCompileTasks
+}
+
+tasks.register('testFast') {
+    group = 'verification'
+    description = 'Runs JVM verification tests and compiles the stable platform matrix.'
+    dependsOn 'compileStableMatrix', ':verification:test'
+}
+
+tasks.register('verifyGolden') {
+    group = 'verification'
+    description = 'Verifies a glTF export using -Pgltf=<file> -Pexpected=<snapshot>.'
+    dependsOn ':verification:verifyGoldenSnapshot'
+}
+
+tasks.register('generateGolden') {
+    group = 'verification'
+    description = 'Generates a semantic snapshot using -Pgltf=<file> -Psnapshot=<file>.'
+    dependsOn ':verification:generateGoldenSnapshot'
+}
+
+tasks.register('prepareGoldenWorld') {
+    group = 'verification'
+    description = 'Copies a pristine versioned world into the selected loader run directory.'
+    doLast {
+        if (goldenTarget == null) {
+            throw new GradleException("Missing or invalid -PgoldenTarget. Valid values: ${goldenTargets.keySet().join(', ')}")
+        }
+        def configuredZip = providers.gradleProperty('goldenWorldZip').orNull
+        def platformWorldZip = rootProject.file("golden/worlds/${goldenTargetName}.zip")
+        def sharedWorldZip = rootProject.file("golden/worlds/${goldenTarget.minecraft}.zip")
+        def worldZip = configuredZip != null
+                ? rootProject.file(configuredZip)
+                : (platformWorldZip.isFile() ? platformWorldZip : sharedWorldZip)
+        if (!worldZip.isFile()) {
+            throw new GradleException("Missing pristine golden world: ${worldZip}. The zip root must contain level.dat.")
+        }
+
+        def saveDir = rootProject.file(
+                "run/${goldenTarget.platform}/${goldenTarget.minecraft}/saves/${goldenWorldName}")
+        delete(saveDir)
+        copy {
+            from zipTree(worldZip)
+            into saveDir
+        }
+        if (!new File(saveDir, 'level.dat').isFile()) {
+            throw new GradleException("Golden world zip must contain level.dat at its root: ${worldZip}")
+        }
+
+        delete(goldenRunRoot)
+        goldenRunRoot.mkdirs()
+    }
+}
+
+tasks.register('captureGoldenWorld', Zip) {
+    group = 'verification'
+    description = 'Packages the selected pristine development world as a reusable golden template.'
+    if (goldenTarget != null) {
+        def sourceDir = rootProject.file(
+                "run/${goldenTarget.platform}/${goldenTarget.minecraft}/saves/${goldenWorldName}")
+        from sourceDir
+        archiveFileName = providers.gradleProperty('goldenWorldArchive')
+                .orElse("${goldenTarget.minecraft}.zip")
+                .get()
+        destinationDirectory = rootProject.file('golden/worlds')
+        exclude 'session.lock',
+                'playerdata/**',
+                'advancements/**',
+                'stats/**'
+        doFirst {
+            if (!new File(sourceDir, 'level.dat').isFile()) {
+                throw new GradleException("Golden source world does not contain level.dat: ${sourceDir}")
+            }
+        }
+    } else {
+        doFirst {
+            throw new GradleException("Missing or invalid -PgoldenTarget. Valid values: ${goldenTargets.keySet().join(', ')}")
+        }
+    }
+}
+
+tasks.register('runGoldenClient') {
+    group = 'verification'
+    description = 'Starts the selected client, creates the scene, exports it, and exits.'
+    if (goldenTarget != null) {
+        dependsOn "${goldenTarget.projectPath}:runClient"
+    }
+    doFirst {
+        if (goldenTarget == null) {
+            throw new GradleException("Missing or invalid -PgoldenTarget. Valid values: ${goldenTargets.keySet().join(', ')}")
+        }
+    }
+    doLast {
+        if (!goldenResultFile.isFile()) {
+            throw new GradleException("Golden client exited without a result report: ${goldenResultFile}")
+        }
+        def result = new JsonSlurper().parse(goldenResultFile)
+        if (result.status != 'passed') {
+            throw new GradleException("Golden client failed: ${result.error}")
+        }
+        logger.lifecycle("Golden client export: ${result.gltf}")
+    }
+}
+
+tasks.register('snapshotGoldenClient') {
+    group = 'verification'
+    description = 'Runs the client export and writes an uncommitted semantic snapshot for review.'
+    dependsOn 'runGoldenClient', ':verification:classes'
+    doLast {
+        def result = new JsonSlurper().parse(goldenResultFile)
+        def actual = new File(goldenRunRoot, 'actual.snapshot.json')
+
+        javaexec {
+            classpath = project(':verification').sourceSets.main.runtimeClasspath
+            mainClass = 'com.voxelbridge.verification.GoldenCli'
+            args 'generate',
+                    '--gltf', result.gltf.toString(),
+                    '--snapshot', actual.absolutePath,
+                    '--scenario', goldenScenario,
+                    '--minecraft', goldenTarget.minecraft,
+                    '--scenario-file', goldenScenarioFile.absolutePath
+        }
+        logger.lifecycle("Golden snapshot for review: ${actual}")
+    }
+}
+
+tasks.register('verifyGoldenClient') {
+    group = 'verification'
+    description = 'Runs the complete client export and semantic golden comparison.'
+    dependsOn 'snapshotGoldenClient'
+    doLast {
+        def expectedProperty = providers.gradleProperty('goldenExpected').orNull
+        def expected = expectedProperty != null
+                ? rootProject.file(expectedProperty)
+                : rootProject.file("golden/expected/${goldenTarget.minecraft}/${goldenScenario}.snapshot.json")
+        def actual = new File(goldenRunRoot, 'actual.snapshot.json')
+        if (!expected.isFile()) {
+            throw new GradleException("Missing expected golden snapshot: ${expected}")
+        }
+        def expectedJson = new JsonSlurper().parse(expected)
+        def actualJson = new JsonSlurper().parse(actual)
+        if (expectedJson != actualJson) {
+            throw new GradleException("Golden snapshot mismatch. Expected: ${expected}; actual: ${actual}")
+        }
+        logger.lifecycle("Golden snapshot verified: ${expected}")
+    }
+}
+
+tasks.named('check').configure {
+    dependsOn 'testFast'
+}
+
 subprojects { subproj ->
     if (subproj.path.startsWith(':neoforge:mc-') && subproj.name != "mc-${activeMc}") {
         subproj.tasks.configureEach { task ->
             task.enabled = false
+        }
+    }
+}
+
+gradle.projectsEvaluated {
+    if (goldenTarget != null) {
+        if (!goldenScenarioFile.isFile() || !goldenManifestFile.isFile()) {
+            throw new GradleException("Missing golden scenario files under ${goldenScenarioDir}")
+        }
+        def manifest = new JsonSlurper().parse(goldenManifestFile)
+        def pos1 = manifest.selection.min.join(',')
+        def pos2 = manifest.selection.max.join(',')
+        def settleTicks = manifest.settleTicks as int
+        def runTask = project(goldenTarget.projectPath).tasks.named('runClient')
+        runTask.configure {
+            dependsOn rootProject.tasks.named('prepareGoldenWorld')
+            jvmArgs \
+                    "-Dvoxelbridge.golden.enabled=true", \
+                    "-Dvoxelbridge.golden.scenarioFile=${goldenScenarioFile.absolutePath}", \
+                    "-Dvoxelbridge.golden.resultFile=${goldenResultFile.absolutePath}", \
+                    "-Dvoxelbridge.golden.exportDir=${goldenExportDir.absolutePath}", \
+                    "-Dvoxelbridge.golden.pos1=${pos1}", \
+                    "-Dvoxelbridge.golden.pos2=${pos2}", \
+                    "-Dvoxelbridge.golden.settleTicks=${settleTicks}", \
+                    "-Dvoxelbridge.golden.timeoutSeconds=300", \
+                    "-Dvoxelbridge.golden.autoStop=true"
+            args '--quickPlaySingleplayer', goldenWorldName
         }
     }
 }

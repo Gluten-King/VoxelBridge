@@ -75,6 +75,14 @@ public final class ExportControl {
         currentExport = null;
     }
 
+    /**
+     * Returns the active export for automation/diagnostics, or {@code null} when idle.
+     * Callers that need the final result should retain the returned thread and join it.
+     */
+    public static ExportThread getCurrentExport() {
+        return currentExport;
+    }
+
     public static void resetAll() {
         abortExport();
         pos1 = null;

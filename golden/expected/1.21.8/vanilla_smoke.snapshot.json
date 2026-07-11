@@ -1,0 +1,167 @@
+{
+  "boundsMax" : [ 6.5, -0.124, -0.5 ],
+  "boundsMin" : [ -6.5, -3.0, -6.5002 ],
+  "geometryHash" : "4feec5826bcb620f57b3f88e06a8e6e9738d19ae8db2a4270dcea0b5f682d453",
+  "imageReferenceCount" : 13,
+  "images" : [ {
+    "height" : 64,
+    "id" : "textures/blockentity_minecraft_entity_chest_normal.png",
+    "rgbaHash" : "1c33a2978219043d4b5b4aa31e53671991aec8aff106bee80f0840f0eace3b84",
+    "width" : 64
+  }, {
+    "height" : 8192,
+    "id" : "textures/colormap/colormap_1001.png",
+    "rgbaHash" : "932dcb0089d18b94fb8d71aa4c6eef9b6dbe65cdf31901cb411d22282741fc4c",
+    "width" : 8192
+  }, {
+    "height" : 64,
+    "id" : "textures/individual/entity_minecraft_textures_entity_armorstand_wood.png.png",
+    "rgbaHash" : "b90fa8cc9e5b2eef462fbd5e3be0c6dcf6b21bc2f303b78c4100b5091e6d209a",
+    "width" : 64
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_dirt.png",
+    "rgbaHash" : "327b802852d3662bb8bded6acd1cfbd559be990d521d2609ec1a91de6f27b4c9",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_glass.png",
+    "rgbaHash" : "1a887f8f1ec788c7ad4b796e37da862440c57568a2dca643b10dafa09779178a",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_grass_block_side.png",
+    "rgbaHash" : "62c47cebea3514034a031ca1199a2ce0dfcedf4be0d3d669f0067087ffe95419",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_grass_block_side_overlay.png",
+    "rgbaHash" : "acc365a4695b2b4973f49f13bc846da4a46b4e26d89c56ed6bbd9973971c096d",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_grass_block_top.png",
+    "rgbaHash" : "31bb5d5d3c5516aadfd1fd5c605fa46252c0f0612091d753c0621ca6890549fd",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_lava_still.png",
+    "rgbaHash" : "68bef9802cacfdf6fb11e44d094c2eb73a1a46f2ff3b48b6756a20e5fc9c72a6",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_oak_leaves.png",
+    "rgbaHash" : "576b9aa6e28e2bf4f017b2940914200e0d190677f16de4fd2942477f39184320",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_oak_planks.png",
+    "rgbaHash" : "6138b0af077708bac68849ad2ea90ae403cdd4e8976d6cfddd13ccba7ad0c783",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_stone.png",
+    "rgbaHash" : "057ffefa8bfcd516c6f7828cdf33271f15a5fd429b127e8caa348d50a0787304",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_water_still.png",
+    "rgbaHash" : "1e634aee2cd0dd44b5c7ccb29661389d55382dd0a631b779135fe2c2acabbf7b",
+    "width" : 16
+  } ],
+  "materials" : [ {
+    "geometryHash" : "073d4bbddbda812fcb57eff3a948a3900c394e396a71ae15c03ecf015673e2cc",
+    "name" : "blockentity:minecraft/entity/chest/normal__blockentity_minecraft_entity_chest_normal",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "1c33a2978219043d4b5b4aa31e53671991aec8aff106bee80f0840f0eace3b84" ],
+    "triangleCount" : 36,
+    "vertexCount" : 72
+  }, {
+    "geometryHash" : "0d2bd643c06558a65fe01d34f52ebef824cd6764648fad3d60fbc0ef8e941735",
+    "name" : "entity:minecraft/textures/entity/armorstand/wood.png__entity_minecraft_textures_entity_armorstand_wood.png",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "b90fa8cc9e5b2eef462fbd5e3be0c6dcf6b21bc2f303b78c4100b5091e6d209a" ],
+    "triangleCount" : 108,
+    "vertexCount" : 216
+  }, {
+    "geometryHash" : "bde0a67c78209d28971e0a67fcb1554b698fe5f6aff707b7e1d2896471d2496d",
+    "name" : "minecraft:block/dirt__minecraft_block_dirt",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "327b802852d3662bb8bded6acd1cfbd559be990d521d2609ec1a91de6f27b4c9" ],
+    "triangleCount" : 2,
+    "vertexCount" : 4
+  }, {
+    "geometryHash" : "7979767b157d3255cf68cbdde4a540ce4f64b7e2a88a60c294f86da2f4b1bdd8",
+    "name" : "minecraft:block/glass__minecraft_block_glass",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "1a887f8f1ec788c7ad4b796e37da862440c57568a2dca643b10dafa09779178a" ],
+    "triangleCount" : 12,
+    "vertexCount" : 24
+  }, {
+    "geometryHash" : "5c8701ea64525d63dfb59b45e56439cf2f705a726c8e5576aa1e5402116ccc02",
+    "name" : "minecraft:block/grass_block_side__minecraft_block_grass_block_side",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "62c47cebea3514034a031ca1199a2ce0dfcedf4be0d3d669f0067087ffe95419" ],
+    "triangleCount" : 8,
+    "vertexCount" : 16
+  }, {
+    "geometryHash" : "71bdbfd4804b283f2869dd3e9031e364f1b0a80f9f403c4ca577addec9956039",
+    "name" : "minecraft:block/grass_block_side_overlay_overlay__minecraft_block_grass_block_side_overlay",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "acc365a4695b2b4973f49f13bc846da4a46b4e26d89c56ed6bbd9973971c096d" ],
+    "triangleCount" : 8,
+    "vertexCount" : 16
+  }, {
+    "geometryHash" : "bb1d6bb08ca700cc02b3cfa54425926f59d41bbbd017cea913c7683a19b40973",
+    "name" : "minecraft:block/grass_block_top__minecraft_block_grass_block_top",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "31bb5d5d3c5516aadfd1fd5c605fa46252c0f0612091d753c0621ca6890549fd" ],
+    "triangleCount" : 2,
+    "vertexCount" : 4
+  }, {
+    "geometryHash" : "facd3a3833de09a92a4779b2440a3d807e2f7572004af0e42c45519546e908e0",
+    "name" : "minecraft:block/lava_still__minecraft_block_lava_still",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "68bef9802cacfdf6fb11e44d094c2eb73a1a46f2ff3b48b6756a20e5fc9c72a6" ],
+    "triangleCount" : 4,
+    "vertexCount" : 8
+  }, {
+    "geometryHash" : "8774f97b5cf820e4708015f11c5d56c91e4d06f1b14e994a791326002311c6d5",
+    "name" : "minecraft:block/oak_leaves__minecraft_block_oak_leaves",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "576b9aa6e28e2bf4f017b2940914200e0d190677f16de4fd2942477f39184320" ],
+    "triangleCount" : 12,
+    "vertexCount" : 24
+  }, {
+    "geometryHash" : "fa39598a95ed3605be747da73238ada7c94774c6c326741cfedcc9aa08c9ad22",
+    "name" : "minecraft:block/oak_planks__minecraft_block_oak_planks",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "6138b0af077708bac68849ad2ea90ae403cdd4e8976d6cfddd13ccba7ad0c783" ],
+    "triangleCount" : 46,
+    "vertexCount" : 92
+  }, {
+    "geometryHash" : "d58bf3c8af644caa1dfc166b110cf1adc2e72fc289cee392c408b9077a49a704",
+    "name" : "minecraft:block/stone__minecraft_block_stone",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "057ffefa8bfcd516c6f7828cdf33271f15a5fd429b127e8caa348d50a0787304" ],
+    "triangleCount" : 196,
+    "vertexCount" : 392
+  }, {
+    "geometryHash" : "0e0325fb9be22afe15cf96a12a25bd9abb338ba7cab4ff416b42c8f2b9d74a99",
+    "name" : "minecraft:block/water_still__minecraft_block_water_still",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "1e634aee2cd0dd44b5c7ccb29661389d55382dd0a631b779135fe2c2acabbf7b" ],
+    "triangleCount" : 2,
+    "vertexCount" : 4
+  } ],
+  "meshCount" : 12,
+  "minecraftVersion" : "1.21.8",
+  "nodeCount" : 12,
+  "primitiveCount" : 12,
+  "scenario" : "vanilla_smoke",
+  "scenarioHash" : "8577aced55c7ce68bab99db92703103ecf414d8824afe6b2b1f86f3b227f86aa",
+  "sceneCount" : 1,
+  "schemaVersion" : 1,
+  "triangleCount" : 436,
+  "vertexCount" : 872
+}

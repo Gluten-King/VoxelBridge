@@ -19,6 +19,13 @@ public final class IOUtil {
      * Ensures the export root exists and returns the timestamped sub directory path.
      */
     public static Path ensureExportDir() throws IOException {
+        String testExportDir = System.getProperty("voxelbridge.golden.exportDir", "").trim();
+        if (!testExportDir.isEmpty()) {
+            Path deterministicDir = Path.of(testExportDir).toAbsolutePath().normalize();
+            Files.createDirectories(deterministicDir);
+            return deterministicDir;
+        }
+
         Path exportRoot = Path.of("export");
         if (!Files.exists(exportRoot)) {
             Files.createDirectories(exportRoot);

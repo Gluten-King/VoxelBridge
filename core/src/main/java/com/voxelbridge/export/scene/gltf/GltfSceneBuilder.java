@@ -24,7 +24,9 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Streaming geometry processing pipeline (refactored)
@@ -54,6 +56,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
     // Changed to Object to support both single QuadBatch and BulkQuadBatch
     private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(4096); // Capacity can be lower since items are now batches
     private final AtomicBoolean writerStarted = new AtomicBoolean(false);
+    private final AtomicReference<Throwable> writerFailure = new AtomicReference<>();
     private Thread writerThread;
 
     // Temporary quad data structure (for queue)
@@ -134,17 +137,13 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         
         startWriterThread();
 
-        try {
-            queue.put(new BulkQuadBatch(
-                null, // Bucket key resolved per quad in writer
-                materialGroupKey,
-                spriteKeys, overlaySpriteKeys, 
-                flatPositions, flatUv0s, flatUv1s, flatNormals, flatColors, 
-                quadFlags
-            ));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        enqueue(new BulkQuadBatch(
+            null, // Bucket key resolved per quad in writer
+            materialGroupKey,
+            spriteKeys, overlaySpriteKeys,
+            flatPositions, flatUv0s, flatUv1s, flatNormals, flatColors,
+            quadFlags
+        ));
     }
 
     @Override
@@ -181,15 +180,10 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         // Start writer thread
         startWriterThread();
 
-        // Enqueue
-        try {
-            queue.put(new QuadBatch(
-                materialKey, spriteKey, overlaySpriteKey, quadFlags,
-                positions, uv0, uv1, normal, colors, bucketKey
-            ));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        enqueue(new QuadBatch(
+            materialKey, spriteKey, overlaySpriteKey, quadFlags,
+            positions, uv0, uv1, normal, colors, bucketKey
+        ));
     }
 
     public Path write(SceneWriteRequest request) throws IOException {
@@ -201,7 +195,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             long tFinalizeSampling = VoxelBridgeLogger.now();
 
             try {
-                queue.put(POISON_PILL);
+                enqueue(POISON_PILL);
                 if (writerThread != null) {
                     writerThread.join();
                 }
@@ -209,6 +203,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 Thread.currentThread().interrupt();
                 throw new IOException("Export interrupted during writer thread join", e);
             }
+            throwIfWriterFailed();
 
             streamingWriter.finalizeWrite();
 
@@ -334,12 +329,37 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                         }
                     }
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                writerFailure.compareAndSet(null, e);
                 VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
                 e.printStackTrace();
             }
         }, "VoxelBridge-StreamingWriter");
         writerThread.start();
+    }
+
+    private void enqueue(Object item) {
+        while (true) {
+            Throwable failure = writerFailure.get();
+            if (failure != null) {
+                throw new IllegalStateException("glTF writer thread failed", failure);
+            }
+            try {
+                if (queue.offer(item, 100, TimeUnit.MILLISECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while enqueueing glTF geometry", e);
+            }
+        }
+    }
+
+    private void throwIfWriterFailed() throws IOException {
+        Throwable failure = writerFailure.get();
+        if (failure != null) {
+            throw new IOException("glTF writer thread failed", failure);
+        }
     }
 
     /**

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "vanilla_smoke",
+  "settleTicks": 40,
+  "selection": {
+    "min": [0, 60, 0],
+    "max": [15, 72, 15]
+  },
+  "export": {
+    "threadCount": 1,
+    "atlasMode": "individual"
+  },
+  "features": [
+    "opaque_block",
+    "non_cube_block",
+    "cutout_block",
+    "translucent_block",
+    "biome_tint",
+    "fluid",
+    "block_entity",
+    "entity"
+  ]
+}

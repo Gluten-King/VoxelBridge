@@ -13,6 +13,7 @@ public class KeyInputHandler {
 
     public static void onClientTick() {
         var mc = ClientAccessHolder.get().getMinecraft();
+        GoldenTestController.onClientTick(mc);
         if (mc.player == null || mc.level == null) {
             return;
         }

@@ -17,6 +17,9 @@ public class ExportThread extends Thread {
     private final Level level;
     private final BlockPos pos1, pos2;
     private final Path outDir;
+    private volatile Path resultFile;
+    private volatile Throwable failure;
+    private volatile boolean aborted;
 
     public ExportThread(Level level, BlockPos pos1, BlockPos pos2, Path outDir) {
         this.level = level;
@@ -34,6 +37,7 @@ public class ExportThread extends Thread {
 
             Path file;
             file = GltfExportService.exportRegion(level, pos1, pos2, outDir);
+            resultFile = file;
 
             long time = System.currentTimeMillis() - start;
             String msg = String.format("[VoxelBridge] Export completed! File: %s (%.2fs)",
@@ -49,6 +53,7 @@ public class ExportThread extends Thread {
 
         } catch (Throwable e) {
             if (Thread.currentThread().isInterrupted()) {
+                aborted = true;
                 VoxelBridgeLogger.warn(LogModule.EXPORT, "[Export] Export aborted.");
                 mc.execute(() -> {
                     if (mc.player != null) {
@@ -57,6 +62,7 @@ public class ExportThread extends Thread {
                 });
                 return;
             }
+            failure = e;
             e.printStackTrace();
             StringWriter sw = new StringWriter();
             e.printStackTrace(new PrintWriter(sw));
@@ -71,5 +77,17 @@ public class ExportThread extends Thread {
             com.voxelbridge.export.exporter.blockentity.BlockEntityRenderer.clearSessionCaches();
             com.voxelbridge.export.ExportControl.clearActiveExport(this);
         }
+    }
+
+    public Path getResultFile() {
+        return resultFile;
+    }
+
+    public Throwable getFailure() {
+        return failure;
+    }
+
+    public boolean wasAborted() {
+        return aborted;
     }
 }
