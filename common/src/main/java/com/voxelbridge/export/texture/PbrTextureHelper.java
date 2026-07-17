@@ -4,7 +4,7 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
@@ -23,12 +23,12 @@ public final class PbrTextureHelper {
     public static final int DEFAULT_SPECULAR_COLOR = 0x00000000; // Transparent black - no specularity
 
     public record PbrResult(BufferedImage normalImage, BufferedImage specularImage,
-                            ResourceLocation normalLocation, ResourceLocation specularLocation) {}
+                            Identifier normalLocation, Identifier specularLocation) {}
 
     /**
      * Internal result type for PBR texture loading with location tracking.
      */
-    private record PbrLoadResult(BufferedImage image, ResourceLocation location) {}
+    private record PbrLoadResult(BufferedImage image, Identifier location) {}
 
     /**
      * Attempts to locate and cache normal/specular maps for the given sprite.
@@ -53,12 +53,12 @@ public final class PbrTextureHelper {
             ctx.cacheSpriteImage(specKey, specImg);
         }
 
-        ResourceLocation normalLoc = null;
-        ResourceLocation specLoc = null;
+        Identifier normalLoc = null;
+        Identifier specLoc = null;
 
         // Load normal if missing
         if (normalImg == null && sprite != null && sprite.contents() != null) {
-            ResourceLocation baseLoc = sprite.contents().name();
+            Identifier baseLoc = sprite.contents().name();
             PbrLoadResult normalResult = tryLoadPbrResourceRobustWithLocation(ctx, baseLoc, "_n");
             if (normalResult.image != null) {
                 normalImg = sanitizeMissingNo(normalResult.image, DEFAULT_NORMAL_COLOR, normalKey);
@@ -72,7 +72,7 @@ public final class PbrTextureHelper {
 
         // Load specular if missing
         if (specImg == null && sprite != null && sprite.contents() != null) {
-            ResourceLocation baseLoc = sprite.contents().name();
+            Identifier baseLoc = sprite.contents().name();
             PbrLoadResult specResult = tryLoadPbrResourceRobustWithLocation(ctx, baseLoc, "_s");
             if (specResult.image != null) {
                 specImg = sanitizeMissingNo(specResult.image, DEFAULT_SPECULAR_COLOR, specKey);
@@ -90,9 +90,9 @@ public final class PbrTextureHelper {
     /**
      * Enhanced PBR texture lookup with fallback strategies.
      * Handles non-standard resource pack layouts by trying multiple candidate paths.
-     * Returns both the loaded image and its ResourceLocation.
+     * Returns both the loaded image and its Identifier.
      */
-    private static PbrLoadResult tryLoadPbrResourceRobustWithLocation(ExportContext ctx, ResourceLocation spriteName, String suffix) {
+    private static PbrLoadResult tryLoadPbrResourceRobustWithLocation(ExportContext ctx, Identifier spriteName, String suffix) {
         if (spriteName == null || suffix == null) return new PbrLoadResult(null, null);
 
         String namespace = spriteName.getNamespace();
@@ -132,7 +132,7 @@ public final class PbrTextureHelper {
 
         // Try each candidate
         for (String candidate : candidates) {
-            ResourceLocation loc = ResourceLocation.fromNamespaceAndPath(namespace, candidate);
+            Identifier loc = Identifier.fromNamespaceAndPath(namespace, candidate);
             BufferedImage result = ctx.getTextureAccess().readTexture(loc.toString());
             if (result != null) {
                 VoxelBridgeLogger.info(LogModule.TEXTURE_ATLAS, String.format("[PBR] Found %s at: %s", suffix, loc));

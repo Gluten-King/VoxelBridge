@@ -1,7 +1,7 @@
 package com.voxelbridge.export.texture;
 
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 /**
  * SpriteKeyResolver creates stable keys for atlas sprites across versions.
@@ -14,7 +14,7 @@ public final class SpriteKeyResolver {
      * Maps a {@link TextureAtlasSprite} to a deterministic key (e.g. minecraft:block/grass_block_top).
      */
     public static String resolve(TextureAtlasSprite sprite) {
-        ResourceLocation name = sprite.contents().name();
+        Identifier name = sprite.contents().name();
         return name != null ? name.toString() : "minecraft:block/unknown";
     }
 }

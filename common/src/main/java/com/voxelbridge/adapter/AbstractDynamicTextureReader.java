@@ -10,7 +10,7 @@ import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.Dumpable;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -38,7 +38,7 @@ public abstract class AbstractDynamicTextureReader {
     /**
      * Complete dynamic texture resolution chain. Not overridable.
      */
-    public final Optional<NativeImage> readTexture(ResourceLocation location) {
+    public final Optional<NativeImage> readTexture(Identifier location) {
         if (location == null) {
             return Optional.empty();
         }
@@ -97,13 +97,13 @@ public abstract class AbstractDynamicTextureReader {
      *   <li>1.21.4+: {@code mc.getMapTextureManager().update(id, data)}</li>
      * </ul>
      */
-    protected abstract void preheatMapTexture(ResourceLocation location);
+    protected abstract void preheatMapTexture(Identifier location);
 
     /**
      * Reads map pixels directly from the map renderer via mixin accessors.
      * Returns {@link Optional#empty()} on versions where this is not available.
      */
-    protected abstract Optional<NativeImage> loadMapPixels(ResourceLocation location);
+    protected abstract Optional<NativeImage> loadMapPixels(Identifier location);
 
     /**
      * Extracts NativeImage pixels from an AbstractTexture if it is a DynamicTexture.
@@ -125,7 +125,7 @@ public abstract class AbstractDynamicTextureReader {
      * Loads a texture that implements the {@link Dumpable} interface (font atlas pages, etc.)
      * by dumping to a temporary directory and reading back the PNG file.
      */
-    protected Optional<NativeImage> loadDumpableTexture(AbstractTexture texture, ResourceLocation location) {
+    protected Optional<NativeImage> loadDumpableTexture(AbstractTexture texture, Identifier location) {
         if (!(texture instanceof Dumpable dumpable) || location == null) {
             return Optional.empty();
         }
@@ -152,7 +152,7 @@ public abstract class AbstractDynamicTextureReader {
         }
     }
 
-    protected Optional<NativeImage> loadFromResourceManager(ResourceLocation location) {
+    protected Optional<NativeImage> loadFromResourceManager(Identifier location) {
         try {
             var resource = Minecraft.getInstance().getResourceManager().getResource(location);
             if (resource.isPresent()) {

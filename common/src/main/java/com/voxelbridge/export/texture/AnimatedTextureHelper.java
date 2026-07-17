@@ -219,7 +219,7 @@ public final class AnimatedTextureHelper {
 
         try {
             var contents = sprite.contents();
-            var meta = AnimationMetadataUtil.readSection(contents.metadata());
+            var meta = contents.getAdditionalMetadata(net.minecraft.client.resources.metadata.animation.AnimationMetadataSection.TYPE).orElse(null);
             if (meta == null) {
                 return null; // No animation metadata
             }

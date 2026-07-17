@@ -7,8 +7,8 @@ package com.voxelbridge.adapter;
 public interface PlatformRenderHelper {
 
     // RenderType helpers
-    net.minecraft.resources.ResourceLocation getRenderTypeTexture(net.minecraft.client.renderer.RenderType renderType);
-    boolean isRenderTypeDoubleSided(net.minecraft.client.renderer.RenderType renderType);
+    net.minecraft.resources.Identifier getRenderTypeTexture(net.minecraft.client.renderer.rendertype.RenderType renderType);
+    boolean isRenderTypeDoubleSided(net.minecraft.client.renderer.rendertype.RenderType renderType);
 
     // RenderSystem helpers
     boolean isOnRenderThread();
@@ -19,13 +19,13 @@ public interface PlatformRenderHelper {
     boolean isSolidRender(net.minecraft.world.level.block.state.BlockState state, net.minecraft.world.level.Level level, net.minecraft.core.BlockPos pos);
 
     // GUI Pose helpers
-    com.mojang.blaze3d.vertex.PoseStack getGuiPose(net.minecraft.client.gui.GuiGraphics gfx);
+    com.mojang.blaze3d.vertex.PoseStack getGuiPose(net.minecraft.client.gui.GuiGraphicsExtractor gfx);
     void pushPose(com.mojang.blaze3d.vertex.PoseStack pose);
     void popPose(com.mojang.blaze3d.vertex.PoseStack pose);
     void translatePose(com.mojang.blaze3d.vertex.PoseStack pose, float x, float y, float z);
 
     // GUI draw helpers
-    int drawString(net.minecraft.client.gui.GuiGraphics gfx,
+    int drawString(net.minecraft.client.gui.GuiGraphicsExtractor gfx,
                    net.minecraft.client.gui.Font font,
                    java.lang.String text,
                    int x,
@@ -33,7 +33,7 @@ public interface PlatformRenderHelper {
                    int color,
                    boolean shadow);
 
-    int drawString(net.minecraft.client.gui.GuiGraphics gfx,
+    int drawString(net.minecraft.client.gui.GuiGraphicsExtractor gfx,
                    net.minecraft.client.gui.Font font,
                    net.minecraft.network.chat.Component text,
                    int x,

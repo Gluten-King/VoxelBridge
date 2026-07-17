@@ -191,7 +191,7 @@ public final class GltfExportService {
             mc.execute(() -> {
                 if (mc.player != null) {
                     String userMsg = "§cExport failed: " + e.getMessage();
-                    mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(userMsg), false);
+                    mc.player.sendSystemMessage(net.minecraft.network.chat.Component.literal(userMsg));
                 }
             });
 

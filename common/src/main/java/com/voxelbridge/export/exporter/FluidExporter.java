@@ -3,14 +3,13 @@ package com.voxelbridge.export.exporter;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.export.ExportContext;
-import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.level.BlockAndTintGetter;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.BlockAndLightGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
@@ -50,16 +49,16 @@ public final class FluidExporter {
         // This ensures all water faces are merged into one mesh, regardless of texture variants (still/flow)
         String fluidKey = BuiltInRegistries.FLUID.getKey(fs.getType()).toString();
 
-        BlockRenderDispatcher dispatcher = ctx.getMc().getBlockRenderer();
-
-        // Create a vertex consumer that forwards quads to the scene sink with coordinate offset
         QuadCollector collector = new QuadCollector(
             sceneSink, ctx, pos, sprites,
             offsetX, offsetY, offsetZ,
             regionMin, regionMax, fluidKey
         );
 
-        dispatcher.renderLiquid(pos, level, collector, state, fs);
+        net.minecraft.client.renderer.block.FluidRenderer fluidRenderer = new net.minecraft.client.renderer.block.FluidRenderer(
+            ctx.getMc().getModelManager().getFluidStateModelSet());
+        net.minecraft.client.renderer.block.FluidRenderer.Output output = layer -> collector;
+        fluidRenderer.tesselate((net.minecraft.client.renderer.block.BlockAndTintGetter) level, pos, output, state, fs);
         collector.flush();
     }
 
@@ -67,7 +66,7 @@ public final class FluidExporter {
      * Resolves fluid sprites using the same cache vanilla uses, with fallbacks.
      */
     private static TextureAtlasSprite[] getFluidSprites(ExportContext ctx,
-                                                        BlockAndTintGetter level,
+                                                        BlockAndLightGetter level,
                                                         BlockPos pos,
                                                         FluidState fs) {
         // Primary path: platform-specific fluid sprite resolver (supports custom fluids)
@@ -77,7 +76,7 @@ public final class FluidExporter {
                 TextureAtlasSprite still = sprites[0];
                 TextureAtlasSprite flow = sprites[1];
                 // Normalize nulls to missing sprite to avoid early bail-out
-                TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+                TextureAtlas atlas = ctx.getMc().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS);
                 TextureAtlasSprite missing = atlas.getSprite(MissingTextureAtlasSprite.getLocation());
                 if (still == null) still = missing;
                 if (flow == null) flow = missing;
@@ -88,7 +87,7 @@ public final class FluidExporter {
 
         // Fallback: manual atlas lookup
         try {
-            TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            TextureAtlas atlas = ctx.getMc().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS);
             String fluidName = fs.getType().toString();
             if (fluidName.startsWith("flowing_")) {
                 fluidName = fluidName.substring("flowing_".length());
@@ -113,8 +112,8 @@ public final class FluidExporter {
             };
 
             for (String[] pair : pairs) {
-                ResourceLocation stillLoc = ResourceLocation.fromNamespaceAndPath(namespace, pair[0]);
-                ResourceLocation flowLoc = ResourceLocation.fromNamespaceAndPath(namespace, pair[1]);
+                Identifier stillLoc = Identifier.fromNamespaceAndPath(namespace, pair[0]);
+                Identifier flowLoc = Identifier.fromNamespaceAndPath(namespace, pair[1]);
                 TextureAtlasSprite still = atlas.getSprite(stillLoc);
                 TextureAtlasSprite flow = atlas.getSprite(flowLoc);
                 String stillKey = ctx.getTextureAccess().resolveSpriteKey(still);
@@ -131,7 +130,7 @@ public final class FluidExporter {
 
         // Last resort: use missing texture so geometry still exports
         try {
-            TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
+            TextureAtlas atlas = ctx.getMc().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS);
             TextureAtlasSprite missing = atlas.getSprite(MissingTextureAtlasSprite.getLocation());
             return new TextureAtlasSprite[]{missing, missing};
         } catch (Throwable ignored) {

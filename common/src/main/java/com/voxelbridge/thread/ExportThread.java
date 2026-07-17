@@ -42,7 +42,7 @@ public class ExportThread extends Thread {
             // In-game notification.
             mc.execute(() -> {
                 if (mc.player != null)
-                    mc.player.displayClientMessage(Component.literal(msg), false);
+                    mc.player.sendSystemMessage(Component.literal(msg));
             });
 
             VoxelBridgeLogger.info(LogModule.EXPORT, msg);
@@ -52,7 +52,7 @@ public class ExportThread extends Thread {
                 VoxelBridgeLogger.warn(LogModule.EXPORT, "[Export] Export aborted.");
                 mc.execute(() -> {
                     if (mc.player != null) {
-                        mc.player.displayClientMessage(Component.literal("[VoxelBridge] Export aborted."), false);
+                        mc.player.sendSystemMessage(Component.literal("[VoxelBridge] Export aborted."));
                     }
                 });
                 return;
@@ -64,7 +64,7 @@ public class ExportThread extends Thread {
             VoxelBridgeLogger.error(LogModule.EXPORT, sw.toString());
             mc.execute(() -> {
                 if (mc.player != null)
-                    mc.player.displayClientMessage(Component.literal("[VoxelBridge] Export failed: " + e.getMessage()), false);
+                    mc.player.sendSystemMessage(Component.literal("[VoxelBridge] Export failed: " + e.getMessage()));
             });
         } finally {
             com.voxelbridge.export.exporter.entity.EntityRenderer.clearSessionCaches();

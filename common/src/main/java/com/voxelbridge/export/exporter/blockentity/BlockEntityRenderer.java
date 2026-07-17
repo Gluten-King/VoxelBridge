@@ -21,10 +21,10 @@ import com.voxelbridge.platform.render.capture.RenderCapture;
 import com.voxelbridge.platform.render.capture.RenderCaptureUtil;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -132,7 +132,7 @@ public final class BlockEntityRenderer {
     ) {
         com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Attempting to render BlockEntity: " + blockEntity.getClass().getSimpleName() + " at " + blockEntity.getBlockPos());
         BlockEntityRenderDispatcher dispatcher = ctx.getMc().getBlockEntityRenderDispatcher();
-        net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer =
+        net.minecraft.client.renderer.blockentity.BlockEntityRenderer<?, ?> renderer =
                 dispatcher.getRenderer(blockEntity);
 
         if (renderer == null) {
@@ -158,7 +158,7 @@ public final class BlockEntityRenderer {
         double offsetY,
         double offsetZ,
         TextureOverrideMap overrides,
-        net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer,
+        net.minecraft.client.renderer.blockentity.BlockEntityRenderer<?, ?> renderer,
         int chunkX,
         int chunkZ
     ) {
@@ -205,7 +205,7 @@ public final class BlockEntityRenderer {
         private final double offsetY;
         private final double offsetZ;
         private final TextureOverrideMap overrides;
-        private final net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer;
+        private final net.minecraft.client.renderer.blockentity.BlockEntityRenderer<?, ?> renderer;
         private final int chunkX;
         private final int chunkZ;
         private boolean success;
@@ -218,7 +218,7 @@ public final class BlockEntityRenderer {
             double offsetY,
             double offsetZ,
             TextureOverrideMap overrides,
-            net.minecraft.client.renderer.blockentity.BlockEntityRenderer<BlockEntity> renderer,
+            net.minecraft.client.renderer.blockentity.BlockEntityRenderer<?, ?> renderer,
             int chunkX,
             int chunkZ
         ) {
@@ -348,7 +348,7 @@ public final class BlockEntityRenderer {
             RenderCaptureUtil.UvStats uvStats,
             float[] positions
         ) {
-            ResourceLocation rtTexture = renderType != null ? RENDER_TYPE_RESOLVER.resolve(renderType) : null;
+            Identifier rtTexture = renderType != null ? RENDER_TYPE_RESOLVER.resolve(renderType) : null;
             if (rtTexture == null) {
                 logTextRenderTypeMissingTexture(renderType);
             }
@@ -413,11 +413,11 @@ public final class BlockEntityRenderer {
             if (!isTextRenderType(renderType)) {
                 return textureRes;
             }
-            ResourceLocation current = textureRes != null ? textureRes.texture() : null;
+            Identifier current = textureRes != null ? textureRes.texture() : null;
             if (!isDefaultOrMissingLike(current)) {
                 return textureRes;
             }
-            ResourceLocation selected = extractFontTextureFromRenderType(renderType);
+            Identifier selected = extractFontTextureFromRenderType(renderType);
             if (selected == null) {
                 selected = pickBestFontPage(ctx, uvStats);
             }
@@ -429,7 +429,7 @@ public final class BlockEntityRenderer {
             return new ResolvedTexture(selected, 0f, 1f, 0f, 1f, false, null, null);
         }
 
-        private ResourceLocation pickBestFontPage(ExportContext ctx, RenderCaptureUtil.UvStats uvStats) {
+        private Identifier pickBestFontPage(ExportContext ctx, RenderCaptureUtil.UvStats uvStats) {
             return null;
         }
 
@@ -449,7 +449,7 @@ public final class BlockEntityRenderer {
             return loaded;
         }
 
-        private boolean isDefaultOrMissingLike(ResourceLocation loc) {
+        private boolean isDefaultOrMissingLike(Identifier loc) {
             return TextRenderTypeUtil.isDefaultOrMissingLike(loc);
         }
 
@@ -457,7 +457,7 @@ public final class BlockEntityRenderer {
             return TextRenderTypeUtil.isTextRenderType(renderType);
         }
 
-        private ResourceLocation extractFontTextureFromRenderType(RenderType renderType) {
+        private Identifier extractFontTextureFromRenderType(RenderType renderType) {
             return TextRenderTypeUtil.extractFontTexture(renderType);
         }
 

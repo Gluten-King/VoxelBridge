@@ -2,8 +2,8 @@ package com.voxelbridge.platform.render;
 
 import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
 import com.voxelbridge.adapter.Adapters;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
 
 /**
  * Resolves texture resource locations from RenderType instances.
@@ -17,7 +17,7 @@ public final class RenderTypeTextureResolver implements RenderTypeResolver {
     }
 
     @Override
-    public ResourceLocation resolve(RenderType renderType) {
+    public Identifier resolve(RenderType renderType) {
         return Adapters.getPlatformRenderHelper().getRenderTypeTexture(renderType);
     }
 

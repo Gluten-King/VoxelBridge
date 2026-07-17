@@ -4,12 +4,11 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.texture.EntityTextureManager;
 import com.voxelbridge.core.util.color.ColorUtil;
 import com.voxelbridge.core.util.image.ImageUtil;
-import net.minecraft.client.renderer.Sheets;
-import net.minecraft.client.resources.model.ModelBakery;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.level.block.entity.BannerBlockEntity;
+import net.minecraft.world.level.block.entity.BannerPattern;
 import net.minecraft.world.level.block.entity.BannerPatternLayers;
 
 import java.awt.image.BufferedImage;
@@ -21,11 +20,16 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 final class BannerTextureBaker {
-    private static final ResourceLocation FLAG_ONLY_TEXTURE = ResourceLocation.withDefaultNamespace("entity/banner/base");
-    private static final ResourceLocation BASE_WITH_POLE_TEXTURE = ResourceLocation.withDefaultNamespace("entity/banner_base");
+    private static final Identifier FLAG_ONLY_TEXTURE = Identifier.withDefaultNamespace("entity/banner/base");
+    private static final Identifier BASE_WITH_POLE_TEXTURE = Identifier.withDefaultNamespace("entity/banner_base");
     private static final float[] NO_TINT = new float[]{1.0f, 1.0f, 1.0f};
 
     private BannerTextureBaker() {
+    }
+
+    private static Identifier patternTexture(net.minecraft.core.Holder<BannerPattern> pattern) {
+        Identifier asset = pattern.value().assetId();
+        return Identifier.fromNamespaceAndPath(asset.getNamespace(), "entity/banner/" + asset.getPath());
     }
 
     static BannerTextures bake(ExportContext ctx, BannerBlockEntity banner) {
@@ -36,23 +40,23 @@ final class BannerTextureBaker {
 
         BannerTextureOverrides overrides = new BannerTextureOverrides();
         overrides.setBakedHandle(bakedHandle);
-        ResourceLocation bannerBaseTexture = ModelBakery.BANNER_BASE.texture();
-        ResourceLocation sheetsBannerBaseTexture = Sheets.BANNER_BASE.texture();
+        Identifier bannerBaseTexture = BASE_WITH_POLE_TEXTURE;
+        Identifier sheetsBannerBaseTexture = FLAG_ONLY_TEXTURE;
         overrides.map(bannerBaseTexture, bakedHandle);
         overrides.map(BASE_WITH_POLE_TEXTURE, bakedHandle);
         overrides.mapAndSkip(sheetsBannerBaseTexture, bakedHandle);
-        ResourceLocation altBase1 = ResourceLocation.fromNamespaceAndPath("minecraft", "entity/banner_base");
-        ResourceLocation altBase2 = ResourceLocation.fromNamespaceAndPath("minecraft", "entity/banner/base");
+        Identifier altBase1 = Identifier.fromNamespaceAndPath("minecraft", "entity/banner_base");
+        Identifier altBase2 = Identifier.fromNamespaceAndPath("minecraft", "entity/banner/base");
         overrides.map(altBase1, bakedHandle);
         overrides.mapAndSkip(altBase2, bakedHandle);
         overrides.skipSprite(FLAG_ONLY_TEXTURE);
         for (BannerPatternLayers.Layer layer : banner.getPatterns().layers()) {
-            ResourceLocation sprite = Sheets.getBannerMaterial(layer.pattern()).texture();
+            Identifier sprite = patternTexture(layer.pattern());
             overrides.mapAndSkip(sprite, bakedHandle);
             String patternPath = sprite.getPath();
             if (patternPath.contains("/")) {
                 String altPath = patternPath.replace("entity/banner/", "entity/banner_");
-                ResourceLocation altSprite = ResourceLocation.fromNamespaceAndPath(sprite.getNamespace(), altPath);
+                Identifier altSprite = Identifier.fromNamespaceAndPath(sprite.getNamespace(), altPath);
                 overrides.mapAndSkip(altSprite, bakedHandle);
             }
         }
@@ -64,12 +68,12 @@ final class BannerTextureBaker {
         BufferedImage result = ImageUtil.copy(base);
         BannerTextureBaker.applyTinted(ctx, result, FLAG_ONLY_TEXTURE, banner.getBaseColor());
         for (BannerPatternLayers.Layer layer : banner.getPatterns().layers()) {
-            BannerTextureBaker.applyTinted(ctx, result, Sheets.getBannerMaterial(layer.pattern()).texture(), layer.color());
+            BannerTextureBaker.applyTinted(ctx, result, patternTexture(layer.pattern()), layer.color());
         }
         return result;
     }
 
-    private static void applyTinted(ExportContext ctx, BufferedImage target, ResourceLocation sprite, DyeColor color) {
+    private static void applyTinted(ExportContext ctx, BufferedImage target, Identifier sprite, DyeColor color) {
         BufferedImage texture = BannerTextureBaker.loadSprite(ctx, sprite);
         if (texture == null) {
             return;
@@ -100,7 +104,7 @@ final class BannerTextureBaker {
         }
     }
 
-    private static BufferedImage loadSprite(ExportContext ctx, ResourceLocation sprite) {
+    private static BufferedImage loadSprite(ExportContext ctx, Identifier sprite) {
         String resourceKey = ctx.getTextureAccess().spriteKeyToResourceKey(sprite.toString());
         return ctx.getTextureAccess().readTexture(resourceKey);
     }
@@ -110,7 +114,7 @@ final class BannerTextureBaker {
         sb.append(banner.getBaseColor().getSerializedName());
         int index = 0;
         for (BannerPatternLayers.Layer layer : banner.getPatterns().layers()) {
-            ResourceLocation id = layer.pattern().unwrapKey().map(ResourceKey::location).orElseGet(() -> layer.pattern().value().assetId());
+            Identifier id = layer.pattern().unwrapKey().map(ResourceKey::identifier).orElseGet(() -> layer.pattern().value().assetId());
             String colorName = layer.color() != null ? layer.color().getSerializedName() : "none";
             sb.append("__").append(index++).append(":").append(id).append("@").append(colorName);
         }
@@ -164,29 +168,29 @@ final class BannerTextureBaker {
     }
 
     private static final class BannerTextureOverrides implements TextureOverrideMap {
-        private final Map<ResourceLocation, EntityTextureManager.TextureHandle> overrides = new HashMap<>();
-        private final Set<ResourceLocation> skipSprites = new HashSet<>();
+        private final Map<Identifier, EntityTextureManager.TextureHandle> overrides = new HashMap<>();
+        private final Set<Identifier> skipSprites = new HashSet<>();
         private EntityTextureManager.TextureHandle bakedHandle;
 
         void setBakedHandle(EntityTextureManager.TextureHandle handle) {
             this.bakedHandle = handle;
         }
 
-        void map(ResourceLocation sprite, EntityTextureManager.TextureHandle handle) {
+        void map(Identifier sprite, EntityTextureManager.TextureHandle handle) {
             this.overrides.put(sprite, handle);
         }
 
-        void mapAndSkip(ResourceLocation sprite, EntityTextureManager.TextureHandle handle) {
+        void mapAndSkip(Identifier sprite, EntityTextureManager.TextureHandle handle) {
             this.map(sprite, handle);
             this.skipSprite(sprite);
         }
 
-        void skipSprite(ResourceLocation sprite) {
+        void skipSprite(Identifier sprite) {
             this.skipSprites.add(sprite);
         }
 
         @Override
-        public EntityTextureManager.TextureHandle resolve(ResourceLocation spriteName) {
+        public EntityTextureManager.TextureHandle resolve(Identifier spriteName) {
             EntityTextureManager.TextureHandle mapped = this.overrides.get(spriteName);
             if (mapped != null) {
                 return mapped;
@@ -195,7 +199,7 @@ final class BannerTextureBaker {
         }
 
         @Override
-        public boolean skipQuad(ResourceLocation spriteName, float[] localU, float[] localV) {
+        public boolean skipQuad(Identifier spriteName, float[] localU, float[] localV) {
             return spriteName != null && this.skipSprites.contains(spriteName);
         }
     }

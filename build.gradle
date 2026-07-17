@@ -5,13 +5,3 @@ plugins {
 tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
 }
-
-def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
-
-subprojects { subproj ->
-    if (subproj.path.startsWith(':neoforge:mc-') && subproj.name != "mc-${activeMc}") {
-        subproj.tasks.configureEach { task ->
-            task.enabled = false
-        }
-    }
-}

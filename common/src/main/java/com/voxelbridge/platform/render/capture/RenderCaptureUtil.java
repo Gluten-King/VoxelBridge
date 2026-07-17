@@ -9,7 +9,7 @@ import com.voxelbridge.export.exporter.resolve.AtlasLocator;
 import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.List;
 
@@ -88,7 +88,7 @@ public final class RenderCaptureUtil {
     public static ResolvedTexture resolveAtlasSprite(ResolvedTexture textureRes,
                                                      AtlasLocator locator,
                                                      UvStats uvStats,
-                                                     ResourceLocation atlasLocation) {
+                                                     Identifier atlasLocation) {
         if (textureRes == null || locator == null || uvStats == null) {
             return textureRes;
         }
@@ -97,7 +97,7 @@ public final class RenderCaptureUtil {
         }
         float centerU = average(uvStats.wrappedU());
         float centerV = average(uvStats.wrappedV());
-        ResourceLocation atlas = atlasLocation != null ? atlasLocation : textureRes.texture();
+        Identifier atlas = atlasLocation != null ? atlasLocation : textureRes.texture();
         TextureAtlasSprite located = locator.find(atlas, centerU, centerV);
         if (located == null) {
             return textureRes;

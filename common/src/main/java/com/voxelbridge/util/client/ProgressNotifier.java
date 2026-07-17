@@ -5,7 +5,7 @@ import com.voxelbridge.compat.GuiPoseCompat;
 import com.voxelbridge.export.ExportProgressTracker;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 
@@ -35,7 +35,7 @@ public final class ProgressNotifier {
             // Enhanced Action Bar: [VoxelBridge] 50.0% (Sampling) | Chunks: 10/20
             String text = String.format("[VoxelBridge] %.1f%% (%s) | Chunks: %d/%d",
                     percent, format, processed, total);
-            mc.player.displayClientMessage(Component.literal(text), true);
+            mc.player.sendOverlayMessage(Component.literal(text));
         });
     }
 
@@ -98,7 +98,7 @@ public final class ProgressNotifier {
         return (detail != null && !detail.isEmpty()) ? detail : stageBase(stage);
     }
 
-    public static void renderOverlay(Minecraft mc, GuiGraphics gfx) {
+    public static void renderOverlay(Minecraft mc, GuiGraphicsExtractor gfx) {
         if (mc == null) {
             return;
         }

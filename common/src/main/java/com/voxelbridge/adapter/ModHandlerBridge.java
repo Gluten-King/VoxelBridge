@@ -1,7 +1,7 @@
 package com.voxelbridge.adapter;
 
 import com.voxelbridge.export.ExportContext;
-import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;

@@ -9,7 +9,7 @@ import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -54,12 +54,12 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
         WoodType woodType = signBlock.type();
         String woodName = woodType.name();
         
-        ResourceLocation baseTextureLoc;
+        Identifier baseTextureLoc;
         if (woodName.contains(":")) {
              String[] parts = woodName.split(":");
-             baseTextureLoc = ResourceLocation.fromNamespaceAndPath(parts[0], "textures/entity/signs/" + parts[1] + ".png");
+             baseTextureLoc = Identifier.fromNamespaceAndPath(parts[0], "textures/entity/signs/" + parts[1] + ".png");
         } else {
-             baseTextureLoc = ResourceLocation.fromNamespaceAndPath("minecraft", "textures/entity/signs/" + woodName + ".png");
+             baseTextureLoc = Identifier.fromNamespaceAndPath("minecraft", "textures/entity/signs/" + woodName + ".png");
         }
 
         SignText front = sign.getFrontText();
@@ -120,7 +120,7 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
         sb.append(text.hasGlowingText());
     }
 
-    private void generateSignTexture(ExportContext ctx, ResourceLocation baseLoc, SignText front, SignText back, EntityTextureManager.TextureHandle handle) {
+    private void generateSignTexture(ExportContext ctx, Identifier baseLoc, SignText front, SignText back, EntityTextureManager.TextureHandle handle) {
         BufferedImage base = BlockEntityTextureManager.getTexture(ctx, baseLoc.toString());
         if (base == null) {
              VoxelBridgeLogger.warn(LogModule.BLOCKENTITY, "Could not load base sign texture: " + baseLoc);
@@ -188,19 +188,19 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
     }
 
     private static class MapBasedTextureOverride implements TextureOverrideMap {
-        private final Map<ResourceLocation, EntityTextureManager.TextureHandle> overrides = new HashMap<>();
+        private final Map<Identifier, EntityTextureManager.TextureHandle> overrides = new HashMap<>();
 
-        public void put(ResourceLocation key, EntityTextureManager.TextureHandle value) {
+        public void put(Identifier key, EntityTextureManager.TextureHandle value) {
             overrides.put(key, value);
         }
 
         @Override
-        public EntityTextureManager.TextureHandle resolve(ResourceLocation spriteName) {
+        public EntityTextureManager.TextureHandle resolve(Identifier spriteName) {
             return overrides.get(spriteName);
         }
 
         @Override
-        public boolean skipQuad(ResourceLocation spriteName, float[] localU, float[] localV) {
+        public boolean skipQuad(Identifier spriteName, float[] localU, float[] localV) {
             return false;
         }
     }

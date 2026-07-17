@@ -3,9 +3,9 @@ package com.voxelbridge.adapter;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
 import java.util.Collection;
 import java.util.Optional;
@@ -33,10 +33,10 @@ public interface PlatformTextureHelper {
     Collection<TextureAtlasSprite> getAllSprites(TextureAtlas atlas);
 
     /**
-     * Reads a texture from a ResourceLocation into a NativeImage.
+     * Reads a texture from a Identifier into a NativeImage.
      * Should handle DynamicTexture, HttpTexture, and fallback layers.
      */
-    Optional<NativeImage> readTexture(ResourceLocation location);
+    Optional<NativeImage> readTexture(Identifier location);
 
     /**
      * copy NativeImage from src to dst.

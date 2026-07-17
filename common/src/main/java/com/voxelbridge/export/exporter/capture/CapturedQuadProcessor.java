@@ -9,7 +9,7 @@ import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
 import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
 import com.voxelbridge.platform.render.capture.RenderCapture;
 import com.voxelbridge.platform.render.capture.RenderCaptureUtil;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.List;
 

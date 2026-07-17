@@ -240,7 +240,8 @@ public final class QuadProcessor {
     private int computeTintColor(BlockState state, BlockPos pos, QuadData quad) {
         int tintIndex = quad.tintIndex();
         if (tintIndex < 0) return -1;
-        return ClientAccessHolder.get().getMinecraft().getBlockColors().getColor(state, level, pos, tintIndex);
+        var tintSource = ClientAccessHolder.get().getMinecraft().getBlockColors().getTintSource(state, tintIndex);
+        return tintSource != null ? tintSource.colorInWorld(state, (net.minecraft.client.renderer.block.BlockAndTintGetter) level, pos) : -1;
     }
 
     /**

@@ -2,7 +2,7 @@ package com.voxelbridge.export.texture;
 
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.awt.image.BufferedImage;
 
@@ -29,24 +29,24 @@ public final class DynamicTextureUtil {
         UNKNOWN
     }
 
-    public record NormalizedTexture(ResourceLocation location, DynamicTextureKind kind) {}
+    public record NormalizedTexture(Identifier location, DynamicTextureKind kind) {}
 
     /**
      * Classify and normalize a texture location in a single pass.
      * The returned location is the canonical key usable with TextureManager.
      */
-    public static NormalizedTexture normalizeAll(ResourceLocation location) {
+    public static NormalizedTexture normalizeAll(Identifier location) {
         if (location == null) {
             return new NormalizedTexture(null, DynamicTextureKind.UNKNOWN);
         }
 
-        ResourceLocation mapNorm = normalizeDynamicMapLocation(location);
+        Identifier mapNorm = normalizeDynamicMapLocation(location);
         if (mapNorm != null) {
             debug("Normalized map: " + location + " -> " + mapNorm);
             return new NormalizedTexture(mapNorm, DynamicTextureKind.MAP);
         }
 
-        ResourceLocation glyphNorm = normalizeGlyphLocation(location);
+        Identifier glyphNorm = normalizeGlyphLocation(location);
         if (glyphNorm != null) {
             debug("Normalized glyph: " + location + " -> " + glyphNorm);
             return new NormalizedTexture(glyphNorm, DynamicTextureKind.GLYPH);
@@ -63,7 +63,7 @@ public final class DynamicTextureUtil {
     // Map path normalization (inlined — no version-specific API needed)
     // =========================================================================
 
-    public static ResourceLocation normalizeDynamicMapLocation(ResourceLocation location) {
+    public static Identifier normalizeDynamicMapLocation(Identifier location) {
         if (location == null) {
             return null;
         }
@@ -74,7 +74,7 @@ public final class DynamicTextureUtil {
         return makeResourceLocation(location.getNamespace(), "map/" + id);
     }
 
-    public static int parseMapId(ResourceLocation location) {
+    public static int parseMapId(Identifier location) {
         if (location == null) {
             return -1;
         }
@@ -124,7 +124,7 @@ public final class DynamicTextureUtil {
      *
      * @return the normalized location, or {@code null} if this is not a glyph path
      */
-    public static ResourceLocation normalizeGlyphLocation(ResourceLocation location) {
+    public static Identifier normalizeGlyphLocation(Identifier location) {
         if (location == null) {
             return null;
         }
@@ -185,13 +185,13 @@ public final class DynamicTextureUtil {
     // Helpers
     // =========================================================================
 
-    private static boolean isLikelyStatic(ResourceLocation location) {
+    private static boolean isLikelyStatic(Identifier location) {
         String path = location.getPath();
         return path != null && path.startsWith("textures/") && path.endsWith(".png");
     }
 
-    private static ResourceLocation makeResourceLocation(String namespace, String path) {
-        return ResourceLocation.tryParse(namespace + ":" + path);
+    private static Identifier makeResourceLocation(String namespace, String path) {
+        return Identifier.tryParse(namespace + ":" + path);
     }
 
     private static int parseInt(String value) {
