@@ -1,7 +1,7 @@
 package com.voxelbridge.export.exporter.resolve;
 
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
 
 import java.util.Locale;
 import java.util.Set;
@@ -61,7 +61,7 @@ public final class TextRenderTypeUtil {
      * Returns true if the location looks like a missing/default texture that should
      * trigger font texture fallback resolution.
      */
-    public static boolean isDefaultOrMissingLike(ResourceLocation loc) {
+    public static boolean isDefaultOrMissingLike(Identifier loc) {
         if (loc == null || loc.getPath() == null) return true;
         String p = loc.getPath().toLowerCase(Locale.ROOT);
         return p.startsWith("default/")
@@ -72,19 +72,19 @@ public final class TextRenderTypeUtil {
     }
 
     /**
-     * Attempts to extract a font texture ResourceLocation from the render type's
+     * Attempts to extract a font texture Identifier from the render type's
      * string representation (e.g. {@code minecraft:font/default}).
      *
-     * @return the parsed ResourceLocation, or {@code null} if not found
+     * @return the parsed Identifier, or {@code null} if not found
      */
-    public static ResourceLocation extractFontTexture(RenderType renderType) {
+    public static Identifier extractFontTexture(RenderType renderType) {
         if (renderType == null) return null;
         String raw = renderType.toString();
         if (raw == null || raw.isEmpty()) return null;
         Matcher m = FONT_PATTERN.matcher(raw.toLowerCase(Locale.ROOT));
         if (m.find()) {
             try {
-                return ResourceLocation.tryParse(m.group(1));
+                return Identifier.tryParse(m.group(1));
             } catch (Exception ignored) {
             }
         }

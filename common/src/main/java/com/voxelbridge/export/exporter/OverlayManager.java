@@ -276,7 +276,8 @@ public final class OverlayManager {
 
         int tintIndex = quad.tintIndex();
         if (tintIndex >= 0) {
-            int argb = ClientAccessHolder.get().getMinecraft().getBlockColors().getColor(state, level, pos, tintIndex);
+            var tintSource = ClientAccessHolder.get().getMinecraft().getBlockColors().getTintSource(state, tintIndex);
+            int argb = tintSource != null ? tintSource.colorInWorld(state, (net.minecraft.client.renderer.block.BlockAndTintGetter) level, pos) : -1;
             return (argb == -1) ? 0xFFFFFFFF : argb;
         }
 

@@ -3,7 +3,7 @@ package com.voxelbridge.export.exporter.resolve;
 import com.voxelbridge.platform.client.ClientAccess;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 /**
  * Finds the sprite inside an atlas that contains a given UV coordinate.
@@ -16,7 +16,7 @@ public final class DefaultAtlasLocator implements AtlasLocator {
     }
 
     @Override
-    public TextureAtlasSprite find(ResourceLocation atlasLocation, float u, float v) {
+    public TextureAtlasSprite find(Identifier atlasLocation, float u, float v) {
         if (atlasLocation == null) {
             return null;
         }

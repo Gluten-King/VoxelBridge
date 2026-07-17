@@ -7,7 +7,7 @@ import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
@@ -22,14 +22,14 @@ public final class TextureLoader {
     /**
      * Loads a PNG texture, honoring resource-pack overrides and returning only the first animation frame.
      */
-    public static BufferedImage readTexture(ResourceLocation png) {
+    public static BufferedImage readTexture(Identifier png) {
         return readTexture(png, ExportRuntimeConfig.isAnimationEnabled());
     }
 
     /**
      * Loads a PNG texture with optional preservation of animation strips.
      */
-    public static BufferedImage readTexture(ResourceLocation png, boolean preserveAnimationStrip) {
+    public static BufferedImage readTexture(Identifier png, boolean preserveAnimationStrip) {
         boolean logResolve = VoxelBridgeLogger.isDebugEnabled(LogModule.TEXTURE);
         if (logResolve) {
             VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, String.format("[TextureLoader] Resolving %s", png));
@@ -212,8 +212,8 @@ public final class TextureLoader {
     /**
      * Converts a sprite key (e.g. "minecraft:block/grass_block_top") to a PNG resource location.
      */
-    public static ResourceLocation spriteKeyToTexturePNG(String spriteKey) {
-        // Normalize/sanitize first to ensure a valid ResourceLocation layout.
+    public static Identifier spriteKeyToTexturePNG(String spriteKey) {
+        // Normalize/sanitize first to ensure a valid Identifier layout.
         spriteKey = com.voxelbridge.util.ResourceLocationUtil.sanitizeKey(spriteKey);
 
         int separator = spriteKey.indexOf(':');
@@ -237,13 +237,13 @@ public final class TextureLoader {
 
             actualPath = sanitizePath(ensurePngExtension(actualPath));
             actualNamespace = sanitizeNamespace(actualNamespace);
-            return ResourceLocation.fromNamespaceAndPath(actualNamespace, actualPath);
+            return Identifier.fromNamespaceAndPath(actualNamespace, actualPath);
         }
 
         String normalizedPath = normalizeSpritePath(rawPath);
         normalizedPath = sanitizePath(normalizedPath);
         String safeNamespace = sanitizePath(namespace);
-        return ResourceLocation.fromNamespaceAndPath(safeNamespace, normalizedPath);
+        return Identifier.fromNamespaceAndPath(safeNamespace, normalizedPath);
     }
 
     private static String normalizeSpritePath(String rawPath) {

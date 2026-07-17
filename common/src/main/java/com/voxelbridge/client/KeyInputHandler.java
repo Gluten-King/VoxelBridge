@@ -21,34 +21,32 @@ public class KeyInputHandler {
             BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
             if (hit == null) {
                 hit = mc.player.blockPosition();
-                mc.player.displayClientMessage(
-                        Component.literal("[VoxelBridge] No block targeted, use current position: " + hit.toShortString()),
-                        false);
+                mc.player.sendSystemMessage(
+                        Component.literal("[VoxelBridge] No block targeted, use current position: " + hit.toShortString()));
             }
             ExportControl.setPos1(hit);
-            mc.player.displayClientMessage(Component.literal("[VoxelBridge] pos1 set to " + hit.toShortString()), false);
+            mc.player.sendSystemMessage(Component.literal("[VoxelBridge] pos1 set to " + hit.toShortString()));
         }
 
         if (KeyBindings.KEY_SET_POS2.consumeClick()) {
             BlockPos hit = RayCastUtil.getLookingAt(mc, 20.0);
             if (hit == null) {
                 hit = mc.player.blockPosition();
-                mc.player.displayClientMessage(
-                        Component.literal("[VoxelBridge] No block targeted, use current position: " + hit.toShortString()),
-                        false);
+                mc.player.sendSystemMessage(
+                        Component.literal("[VoxelBridge] No block targeted, use current position: " + hit.toShortString()));
             }
             ExportControl.setPos2(hit);
-            mc.player.displayClientMessage(Component.literal("[VoxelBridge] pos2 set to " + hit.toShortString()), false);
+            mc.player.sendSystemMessage(Component.literal("[VoxelBridge] pos2 set to " + hit.toShortString()));
         }
 
         if (KeyBindings.KEY_CLEAR.consumeClick()) {
             ExportControl.clearSelection();
-            mc.player.displayClientMessage(Component.literal("[VoxelBridge] Selection cleared."), false);
+            mc.player.sendSystemMessage(Component.literal("[VoxelBridge] Selection cleared."));
         }
 
         if (KeyBindings.KEY_EXPORT.consumeClick()) {
             ExportControl.ExportResult result = ExportControl.startExport(mc.level);
-            mc.player.displayClientMessage(Component.literal("[VoxelBridge] " + result.message()), false);
+            mc.player.sendSystemMessage(Component.literal("[VoxelBridge] " + result.message()));
         }
 
         if (KeyBindings.KEY_CONFIG.consumeClick()) {

@@ -3,9 +3,8 @@ package com.voxelbridge.platform.client;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureManager;
-import net.minecraft.client.resources.PaintingTextureManager;
 import net.minecraft.client.resources.model.ModelManager;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 
 import java.util.function.Function;
@@ -35,12 +34,16 @@ public final class MinecraftClientAccess implements ClientAccess {
     }
 
     @Override
-    public Function<ResourceLocation, TextureAtlasSprite> getTextureAtlas(ResourceLocation atlas) {
-        return Minecraft.getInstance().getTextureAtlas(atlas);
+    public Function<Identifier, TextureAtlasSprite> getTextureAtlas(Identifier atlas) {
+        Identifier atlasId = atlasDefinitionId(atlas);
+        return id -> Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(atlasId).getSprite(id);
     }
 
-    @Override
-    public PaintingTextureManager getPaintingTextures() {
-        return Minecraft.getInstance().getPaintingTextures();
+    private static Identifier atlasDefinitionId(Identifier textureId) {
+        String path = textureId.getPath();
+        if (path.startsWith("textures/atlas/") && path.endsWith(".png")) {
+            path = path.substring("textures/atlas/".length(), path.length() - ".png".length());
+        }
+        return Identifier.fromNamespaceAndPath(textureId.getNamespace(), path);
     }
 }

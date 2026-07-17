@@ -5,7 +5,7 @@ import com.voxelbridge.core.texture.TextureAccess;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.texture.TextureLoader;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
@@ -40,8 +40,8 @@ public final class MinecraftTextureAccess implements TextureAccess<TextureAtlasS
             return null;
         }
         try {
-            ResourceLocation loc = ResourceLocation.parse(resourceKey);
-            ResourceLocation normalized = MapTextureUtil.normalizeDynamicMapLocation(loc);
+            Identifier loc = Identifier.parse(resourceKey);
+            Identifier normalized = MapTextureUtil.normalizeDynamicMapLocation(loc);
             if (normalized != null) {
                 loc = normalized;
             }
@@ -68,7 +68,7 @@ public final class MinecraftTextureAccess implements TextureAccess<TextureAtlasS
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            ResourceLocation loc = ResourceLocation.parse(resourceKey);
+            Identifier loc = Identifier.parse(resourceKey);
             var resOpt = rm.getResource(loc);
             if (resOpt.isEmpty()) {
                 return null;
@@ -79,7 +79,7 @@ public final class MinecraftTextureAccess implements TextureAccess<TextureAtlasS
                 return AnimationMetadataUtil.toCoreMetadata(meta);
             }
 
-            ResourceLocation metaLoc = ResourceLocation.parse(resourceKey + ".mcmeta");
+            Identifier metaLoc = Identifier.parse(resourceKey + ".mcmeta");
             var metaResOpt = rm.getResource(metaLoc);
             if (metaResOpt.isEmpty()) {
                 return null;
@@ -103,7 +103,7 @@ public final class MinecraftTextureAccess implements TextureAccess<TextureAtlasS
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            return rm.getResource(ResourceLocation.parse(resourceKey)).isPresent();
+            return rm.getResource(Identifier.parse(resourceKey)).isPresent();
         } catch (Exception ignored) {
             return false;
         }
@@ -120,7 +120,7 @@ public final class MinecraftTextureAccess implements TextureAccess<TextureAtlasS
             return rm.listResources(cleanPath, loc -> loc.getPath().endsWith(".png"))
                 .keySet()
                 .stream()
-                .map(ResourceLocation::toString)
+                .map(Identifier::toString)
                 .collect(Collectors.toSet());
         } catch (Exception ignored) {
             return Set.of();
@@ -134,7 +134,7 @@ public final class MinecraftTextureAccess implements TextureAccess<TextureAtlasS
         }
         try {
             var rm = ClientAccessHolder.get().getResourceManager();
-            var resOpt = rm.getResource(ResourceLocation.parse(resourceKey));
+            var resOpt = rm.getResource(Identifier.parse(resourceKey));
             if (resOpt.isEmpty()) {
                 return null;
             }

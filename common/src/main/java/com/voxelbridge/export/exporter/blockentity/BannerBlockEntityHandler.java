@@ -54,12 +54,12 @@ final class BannerBlockEntityHandler implements BlockEntityHandler {
             TextureOverrideMap delegate = textures.overrides();
             overrideWrapper = new TextureOverrideMap() {
                 @Override
-                public com.voxelbridge.export.texture.EntityTextureManager.TextureHandle resolve(net.minecraft.resources.ResourceLocation spriteName) {
+                public com.voxelbridge.export.texture.EntityTextureManager.TextureHandle resolve(net.minecraft.resources.Identifier spriteName) {
                     return delegate.resolve(spriteName) != null ? finalHandle : null;
                 }
 
                 @Override
-                public boolean skipQuad(net.minecraft.resources.ResourceLocation spriteName, float[] localU, float[] localV) {
+                public boolean skipQuad(net.minecraft.resources.Identifier spriteName, float[] localU, float[] localV) {
                     return delegate.skipQuad(spriteName, localU, localV);
                 }
             };

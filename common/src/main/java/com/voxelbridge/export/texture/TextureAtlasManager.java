@@ -12,7 +12,7 @@ import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -436,8 +436,8 @@ public final class TextureAtlasManager {
         }
         // Try atlas sprite first to leverage SpriteContents metadata
         try {
-            TextureAtlas atlas = ctx.getMc().getModelManager().getAtlas(TextureAtlas.LOCATION_BLOCKS);
-            ResourceLocation spriteLoc = com.voxelbridge.util.ResourceLocationUtil.sanitize(spriteKey);
+            TextureAtlas atlas = ctx.getMc().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS);
+            Identifier spriteLoc = com.voxelbridge.util.ResourceLocationUtil.sanitize(spriteKey);
             TextureAtlasSprite sprite = atlas.getSprite(spriteLoc);
             if (sprite != null) {
                 AnimatedTextureHelper.extractFromSprite(ctx, spriteKey, sprite, ctx.getTextureRepository());

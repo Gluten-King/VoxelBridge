@@ -112,6 +112,20 @@ final class QuadCollector implements VertexConsumer {
     }
 
     @Override
+    public VertexConsumer setColor(int color) {
+        int a = (color >> 24) & 0xFF;
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+        return setColor(r, g, b, a);
+    }
+
+    @Override
+    public VertexConsumer setLineWidth(float width) {
+        return this;
+    }
+
+    @Override
     public VertexConsumer setUv(float u, float v) {
         uvs[vertexIndex * 2] = u;
         uvs[vertexIndex * 2 + 1] = v;

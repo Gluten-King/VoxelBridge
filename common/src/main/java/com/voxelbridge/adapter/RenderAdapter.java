@@ -1,10 +1,10 @@
 package com.voxelbridge.adapter;
 
 import com.voxelbridge.export.quad.QuadDataUtil;
-import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.BlockAndTintGetter;
+import net.minecraft.world.level.BlockAndLightGetter;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.List;
@@ -26,13 +26,13 @@ public interface RenderAdapter {
      * 2. Fabric/NeoForge API extensions (CTM, Indigo, etc.)
      * 3. ModelData handling
      */
-    List<BakedQuad> getQuads(Object model, BlockState state, BlockPos pos, BlockAndTintGetter level, long seed);
+    List<BakedQuad> getQuads(Object model, BlockState state, BlockPos pos, BlockAndLightGetter level, long seed);
 
     /**
      * Extracts quads and tags their source for downstream routing.
      * Implementations may override to provide richer source info.
      */
-    default QuadBatch getQuadBatch(Object model, BlockState state, BlockPos pos, BlockAndTintGetter level, long seed) {
+    default QuadBatch getQuadBatch(Object model, BlockState state, BlockPos pos, BlockAndLightGetter level, long seed) {
         return new QuadBatch(QuadDataUtil.wrapBakedQuads(getQuads(model, state, pos, level, seed)), QuadSource.PLATFORM_DEFAULT);
     }
 

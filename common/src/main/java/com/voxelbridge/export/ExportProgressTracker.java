@@ -70,7 +70,7 @@ public final class ExportProgressTracker {
         int maxChunkZ = Math.max(pos1.getZ(), pos2.getZ()) >> 4;
         for (int cx = minChunkX; cx <= maxChunkX; cx++) {
             for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
-                chunkStates.put(ChunkPos.asLong(cx, cz), ChunkState.PENDING);
+                chunkStates.put(ChunkPos.pack(cx, cz), ChunkState.PENDING);
             }
         }
         total = chunkStates.size();
@@ -113,7 +113,7 @@ public final class ExportProgressTracker {
     }
 
     public static void markRunning(int cx, int cz) {
-        long key = ChunkPos.asLong(cx, cz);
+        long key = ChunkPos.pack(cx, cz);
         chunkStates.putIfAbsent(key, ChunkState.PENDING);
         ChunkState prev = chunkStates.put(key, ChunkState.RUNNING);
         if (prev != ChunkState.RUNNING) {
@@ -124,7 +124,7 @@ public final class ExportProgressTracker {
     }
 
     public static void markDone(int cx, int cz) {
-        long key = ChunkPos.asLong(cx, cz);
+        long key = ChunkPos.pack(cx, cz);
         ChunkState prev = chunkStates.getOrDefault(key, ChunkState.PENDING);
         if (prev == ChunkState.DONE) {
             return;
@@ -140,7 +140,7 @@ public final class ExportProgressTracker {
     }
 
     public static void markFailed(int cx, int cz) {
-        long key = ChunkPos.asLong(cx, cz);
+        long key = ChunkPos.pack(cx, cz);
         ChunkState prev = chunkStates.getOrDefault(key, ChunkState.PENDING);
         if (prev == ChunkState.FAILED) {
             return;
@@ -159,7 +159,7 @@ public final class ExportProgressTracker {
      * Explicitly reset a chunk back to PENDING (used when it is outside the active/visible window).
      */
     public static void markPending(int cx, int cz) {
-        long key = ChunkPos.asLong(cx, cz);
+        long key = ChunkPos.pack(cx, cz);
         ChunkState prev = chunkStates.getOrDefault(key, ChunkState.PENDING);
         if (prev == ChunkState.PENDING) {
             return;
@@ -177,7 +177,7 @@ public final class ExportProgressTracker {
     public static Set<ChunkPos> getPendingChunks() {
         return chunkStates.entrySet().stream()
             .filter(e -> e.getValue() == ChunkState.PENDING)
-            .map(e -> new ChunkPos(e.getKey()))
+            .map(e -> ChunkPos.unpack(e.getKey()))
             .collect(java.util.stream.Collectors.toSet());
     }
 

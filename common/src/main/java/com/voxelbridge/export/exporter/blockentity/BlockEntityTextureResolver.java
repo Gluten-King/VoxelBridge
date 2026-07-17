@@ -5,9 +5,9 @@ import com.voxelbridge.export.exporter.resolve.TextureResolver;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.render.RenderTypeTextureResolver;
 import com.voxelbridge.util.debug.LogModule;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.Sheets;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.*;
@@ -34,7 +34,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
      */
     @Override
     public ResolvedTexture resolve(BlockEntity blockEntity, RenderType renderType) {
-        ResourceLocation base = RenderTypeTextureResolver.INSTANCE.resolve(renderType);
+        Identifier base = RenderTypeTextureResolver.INSTANCE.resolve(renderType);
 
         if (isTextRenderType(renderType)) {
             base = normalizeTextTexture(base, renderType);
@@ -59,20 +59,20 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
      * Generic method to resolve a texture and detect if it's in an atlas.
      * This works for any BlockEntity without needing entity-specific code.
      */
-    private static ResolvedTexture resolveTextureWithAtlasDetection(ResourceLocation texture) {
+    private static ResolvedTexture resolveTextureWithAtlasDetection(Identifier texture) {
         // List of known atlas locations to check
-        ResourceLocation[] knownAtlases = {
+        Identifier[] knownAtlases = {
             Sheets.CHEST_SHEET,
             Sheets.BED_SHEET,
             Sheets.SIGN_SHEET,
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/decorated_pot.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/shulker_boxes.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/banner_patterns.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/shield_patterns.png")
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/decorated_pot.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/shulker_boxes.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/banner_patterns.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/shield_patterns.png")
         };
 
         // Try each atlas to see if the texture is there
-        for (ResourceLocation atlas : knownAtlases) {
+        for (Identifier atlas : knownAtlases) {
             try {
                 var atlasGetter = ClientAccessHolder.get().getTextureAtlas(atlas);
                 if (atlasGetter != null) {
@@ -116,9 +116,9 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
             || name.contains("glyph");
     }
 
-    private static ResourceLocation normalizeTextTexture(ResourceLocation base, RenderType renderType) {
+    private static Identifier normalizeTextTexture(Identifier base, RenderType renderType) {
         // Try extracting concrete font page from RenderType string first.
-        ResourceLocation fromRenderType = extractFontTextureFromRenderType(renderType);
+        Identifier fromRenderType = extractFontTextureFromRenderType(renderType);
         if (fromRenderType != null) {
             return fromRenderType;
         }
@@ -132,7 +132,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
         return base;
     }
 
-    private static ResourceLocation extractFontTextureFromRenderType(RenderType renderType) {
+    private static Identifier extractFontTextureFromRenderType(RenderType renderType) {
         if (renderType == null) {
             return null;
         }
@@ -147,7 +147,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
             .matcher(s);
         if (dyn.find()) {
             try {
-                return ResourceLocation.parse(dyn.group(1));
+                return Identifier.parse(dyn.group(1));
             } catch (Exception ignored) {
             }
         }
@@ -163,14 +163,14 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
      * For most BlockEntities, the generic atlas detection in resolveTextureWithAtlasDetection
      * is sufficient.
      */
-    private static ResolvedTexture resolveFromBlockEntity(BlockEntity blockEntity, ResourceLocation current) {
+    private static ResolvedTexture resolveFromBlockEntity(BlockEntity blockEntity, Identifier current) {
         if (blockEntity == null) {
             return null;
         }
 
         // Chest family - need to determine variant (normal/trapped/christmas, left/right/single)
         if (blockEntity instanceof EnderChestBlockEntity) {
-            ResourceLocation tex = ResourceLocation.fromNamespaceAndPath("minecraft", "entity/chest/ender");
+            Identifier tex = Identifier.fromNamespaceAndPath("minecraft", "entity/chest/ender");
             return resolveTextureInAtlas(Sheets.CHEST_SHEET, tex);
         }
         if (blockEntity instanceof ChestBlockEntity chest) {
@@ -180,7 +180,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
         // Beds - need to determine color
         if (blockEntity instanceof BedBlockEntity bed) {
             DyeColor color = bed.getColor();
-            ResourceLocation tex = ResourceLocation.fromNamespaceAndPath("minecraft", "entity/bed/" + color.getName());
+            Identifier tex = Identifier.fromNamespaceAndPath("minecraft", "entity/bed/" + color.getName());
             return resolveTextureInAtlas(Sheets.BED_SHEET, tex);
         }
 
@@ -201,7 +201,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
 
         // Ender chest already handled above, but keep a guard here in case the block entity leaks through.
         if (block instanceof EnderChestBlock) {
-            return resolveTextureInAtlas(Sheets.CHEST_SHEET, ResourceLocation.fromNamespaceAndPath("minecraft", "entity/chest/ender"));
+            return resolveTextureInAtlas(Sheets.CHEST_SHEET, Identifier.fromNamespaceAndPath("minecraft", "entity/chest/ender"));
         }
 
         boolean isTrapped = block instanceof TrappedChestBlock;
@@ -218,7 +218,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
             default -> "";
         };
 
-        return resolveTextureInAtlas(Sheets.CHEST_SHEET, ResourceLocation.fromNamespaceAndPath("minecraft", "entity/chest/" + base + suffix));
+        return resolveTextureInAtlas(Sheets.CHEST_SHEET, Identifier.fromNamespaceAndPath("minecraft", "entity/chest/" + base + suffix));
     }
 
     private static ResolvedTexture resolveSignTexture(Block block, boolean hanging) {
@@ -227,12 +227,12 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
             return null;
         }
 
-        ResourceLocation woodId = ResourceLocation.tryParse(woodType.name());
+        Identifier woodId = Identifier.tryParse(woodType.name());
         String namespace = woodId != null ? woodId.getNamespace() : "minecraft";
         String path = woodId != null ? woodId.getPath() : woodType.name();
 
         String prefix = hanging ? "entity/signs/hanging/" : "entity/signs/";
-        ResourceLocation texture = ResourceLocation.fromNamespaceAndPath(namespace, prefix + path);
+        Identifier texture = Identifier.fromNamespaceAndPath(namespace, prefix + path);
         // Both normal and hanging signs use the same SIGN_SHEET atlas
         return resolveTextureInAtlas(Sheets.SIGN_SHEET, texture);
     }
@@ -263,7 +263,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
     /**
      * Resolve a texture within a specific atlas.
      */
-    private static ResolvedTexture resolveTextureInAtlas(ResourceLocation atlas, ResourceLocation texture) {
+    private static ResolvedTexture resolveTextureInAtlas(Identifier atlas, Identifier texture) {
         if (atlas == null || texture == null) {
             com.voxelbridge.util.debug.VoxelBridgeLogger.info(LogModule.TEXTURE_RESOLVE, "[BlockEntityTextureResolver] Null atlas or texture, using fallback");
             return new ResolvedTexture(texture, 0f, 1f, 0f, 1f, false, null, atlas);

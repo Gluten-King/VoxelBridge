@@ -1,12 +1,12 @@
 package com.voxelbridge.export.exporter.resolve;
 
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
 
 /**
  * Resolves texture and culling hints from RenderType.
  */
 public interface RenderTypeResolver {
-    ResourceLocation resolve(RenderType renderType);
+    Identifier resolve(RenderType renderType);
     boolean isDoubleSided(RenderType renderType);
 }

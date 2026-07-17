@@ -25,11 +25,11 @@ import com.voxelbridge.platform.texture.TextureLoader;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.player.AbstractClientPlayer;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
 
@@ -398,7 +398,7 @@ public final class EntityRenderer {
             RenderCaptureUtil.UvStats uvStats,
             float[] positions
         ) {
-            ResourceLocation rtTexture = renderType != null ? RENDER_TYPE_RESOLVER.resolve(renderType) : null;
+            Identifier rtTexture = renderType != null ? RENDER_TYPE_RESOLVER.resolve(renderType) : null;
             if (rtTexture == null) {
                 logTextRenderTypeMissingTexture(renderType);
             }
@@ -422,7 +422,7 @@ public final class EntityRenderer {
                 textureRes = RenderCaptureUtil.resolveAtlasSprite(textureRes, ATLAS_LOCATOR, atlasUvStats, textureRes.atlasLocation());
             }
 
-            if (source instanceof net.minecraft.world.entity.decoration.Painting painting
+            if (source instanceof net.minecraft.world.entity.decoration.painting.Painting painting
                 && textureRes != null && textureRes.isAtlasTexture() && textureRes.sprite() != null) {
                 textureRes = selectPaintingTexture(painting, textureRes, positions);
             }
@@ -488,11 +488,11 @@ public final class EntityRenderer {
             if (!isTextRenderType(renderType)) {
                 return textureRes;
             }
-            ResourceLocation current = textureRes != null ? textureRes.texture() : null;
+            Identifier current = textureRes != null ? textureRes.texture() : null;
             if (!isDefaultOrMissingLike(current)) {
                 return textureRes;
             }
-            ResourceLocation selected = extractFontTextureFromRenderType(renderType);
+            Identifier selected = extractFontTextureFromRenderType(renderType);
             if (selected == null) {
                 selected = pickBestFontPage(ctx, uvStats);
             }
@@ -504,7 +504,7 @@ public final class EntityRenderer {
             return new ResolvedTexture(selected, 0f, 1f, 0f, 1f, false, null, null);
         }
 
-        private ResourceLocation pickBestFontPage(ExportContext ctx, RenderCaptureUtil.UvStats uvStats) {
+        private Identifier pickBestFontPage(ExportContext ctx, RenderCaptureUtil.UvStats uvStats) {
             return null;
         }
 
@@ -524,7 +524,7 @@ public final class EntityRenderer {
             return loaded;
         }
 
-        private boolean isDefaultOrMissingLike(ResourceLocation loc) {
+        private boolean isDefaultOrMissingLike(Identifier loc) {
             return TextRenderTypeUtil.isDefaultOrMissingLike(loc);
         }
 
@@ -532,11 +532,11 @@ public final class EntityRenderer {
             return TextRenderTypeUtil.isTextRenderType(renderType);
         }
 
-        private ResourceLocation extractFontTextureFromRenderType(RenderType renderType) {
+        private Identifier extractFontTextureFromRenderType(RenderType renderType) {
             return TextRenderTypeUtil.extractFontTexture(renderType);
         }
 
-        private boolean isFontTexture(ResourceLocation loc) {
+        private boolean isFontTexture(Identifier loc) {
             if (loc == null || loc.getPath() == null) {
                 return false;
             }
@@ -634,32 +634,19 @@ public final class EntityRenderer {
         }
 
         private ResolvedTexture selectPaintingTexture(
-            net.minecraft.world.entity.decoration.Painting painting,
+            net.minecraft.world.entity.decoration.painting.Painting painting,
             ResolvedTexture current,
             float[] positions
         ) {
             ResolvedTexture normalized = normalizePaintingTexture(current);
-            if (isPaintingFrontQuad(painting, positions)) {
-                return normalized;
-            }
-
-            TextureAtlasSprite backSprite = ClientAccessHolder.get().getPaintingTextures().getBackSprite();
-            if (backSprite == null || isMissingSprite(backSprite)) {
-                return normalized;
-            }
-
-            ResourceLocation spriteName = backSprite.contents() != null ? backSprite.contents().name() : normalized.texture();
-            spriteName = normalizePaintingSpriteName(spriteName);
-            ResourceLocation atlas = backSprite.atlasLocation();
-            return new ResolvedTexture(spriteName, backSprite.getU0(), backSprite.getU1(),
-                backSprite.getV0(), backSprite.getV1(), true, backSprite, atlas);
+            return normalized;
         }
 
         private ResolvedTexture normalizePaintingTexture(ResolvedTexture current) {
             if (current == null || current.texture() == null) {
                 return current;
             }
-            ResourceLocation normalized = normalizePaintingSpriteName(current.texture());
+            Identifier normalized = normalizePaintingSpriteName(current.texture());
             if (normalized.equals(current.texture())) {
                 return current;
             }
@@ -667,7 +654,7 @@ public final class EntityRenderer {
                 current.v0(), current.v1(), current.isAtlasTexture(), current.sprite(), current.atlasLocation());
         }
 
-        private boolean isPaintingFrontQuad(net.minecraft.world.entity.decoration.Painting painting, float[] positions) {
+        private boolean isPaintingFrontQuad(net.minecraft.world.entity.decoration.painting.Painting painting, float[] positions) {
             Direction direction = painting.getDirection();
             if (direction == null) {
                 return true;
@@ -706,7 +693,7 @@ public final class EntityRenderer {
             return Math.abs(center - frontCoord) <= 1e-3f;
         }
 
-        private ResourceLocation normalizePaintingSpriteName(ResourceLocation spriteName) {
+        private Identifier normalizePaintingSpriteName(Identifier spriteName) {
             if (spriteName == null) {
                 return null;
             }
@@ -714,7 +701,7 @@ public final class EntityRenderer {
             if (path.startsWith("textures/painting/") || path.startsWith("painting/")) {
                 return spriteName;
             }
-            return ResourceLocation.fromNamespaceAndPath(spriteName.getNamespace(), "painting/" + path);
+            return Identifier.fromNamespaceAndPath(spriteName.getNamespace(), "painting/" + path);
         }
 
         private boolean isMissingSprite(TextureAtlasSprite sprite) {
@@ -727,7 +714,7 @@ public final class EntityRenderer {
         if (uvStats == null || renderType == null) {
             return uvStats;
         }
-        ResourceLocation texture = RENDER_TYPE_RESOLVER.resolve(renderType);
+        Identifier texture = RENDER_TYPE_RESOLVER.resolve(renderType);
         if (texture == null || texture.getPath() == null || !texture.getPath().contains("map_decorations")) {
             return uvStats;
         }
@@ -751,7 +738,7 @@ public final class EntityRenderer {
         return normalized != null ? normalized : uvStats;
     }
 
-    private static int[] getMapDecorAtlasSize(ResourceLocation atlasLoc) {
+    private static int[] getMapDecorAtlasSize(Identifier atlasLoc) {
         int[] cached = MAP_DECOR_ATLAS_SIZE;
         if (cached != null) {
             return cached;
@@ -818,7 +805,7 @@ public final class EntityRenderer {
     private static EntityTextureManager.TextureHandle tryRegisterPlayerAttachmentTexture(
         ExportContext ctx,
         AbstractClientPlayer player,
-        ResourceLocation texture
+        Identifier texture
     ) {
         String type = detectPlayerAttachmentType(texture);
         if (type == null) {
@@ -828,13 +815,13 @@ public final class EntityRenderer {
         if (image == null) {
             return null;
         }
-        String playerName = sanitizePlayerName(player.getGameProfile().getName());
+        String playerName = sanitizePlayerName(player.getGameProfile().name());
         String key = "entity:player/" + type + "/" + playerName;
         String relativePath = "textures/entity_textures/player/" + playerName + "_" + type + ".png";
         return EntityTextureManager.registerGenerated(ctx, key, relativePath, image);
     }
 
-    private static String detectPlayerAttachmentType(ResourceLocation texture) {
+    private static String detectPlayerAttachmentType(Identifier texture) {
         if (texture == null) {
             return null;
         }
@@ -848,19 +835,19 @@ public final class EntityRenderer {
         return null;
     }
 
-    private static BufferedImage readTextureWithFallback(ResourceLocation texture) {
+    private static BufferedImage readTextureWithFallback(Identifier texture) {
         BufferedImage image = TextureLoader.readTexture(texture, ExportRuntimeConfig.isAnimationEnabled());
         if (image != null) {
             return image;
         }
-        ResourceLocation fallback = resolveTexturePathFallback(texture);
+        Identifier fallback = resolveTexturePathFallback(texture);
         if (!fallback.equals(texture)) {
             return TextureLoader.readTexture(fallback, ExportRuntimeConfig.isAnimationEnabled());
         }
         return null;
     }
 
-    private static ResourceLocation resolveTexturePathFallback(ResourceLocation texture) {
+    private static Identifier resolveTexturePathFallback(Identifier texture) {
         String path = texture.getPath();
         if (path.startsWith("skins/") || path.startsWith("skin/")) {
             return texture;
@@ -871,7 +858,7 @@ public final class EntityRenderer {
         if (!path.endsWith(".png")) {
             path = path + ".png";
         }
-        return ResourceLocation.fromNamespaceAndPath(texture.getNamespace(), path);
+        return Identifier.fromNamespaceAndPath(texture.getNamespace(), path);
     }
 
     private static String sanitizePlayerName(String name) {

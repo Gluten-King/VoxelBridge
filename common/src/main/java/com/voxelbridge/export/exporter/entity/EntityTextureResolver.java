@@ -6,10 +6,10 @@ import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.export.texture.MapTextureUtil;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.render.RenderTypeTextureResolver;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.decoration.ItemFrame;
 
@@ -31,7 +31,7 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
         }
 
         // Fall back to generic RenderType-based resolution
-        ResourceLocation base = RenderTypeTextureResolver.INSTANCE.resolve(renderType);
+        Identifier base = RenderTypeTextureResolver.INSTANCE.resolve(renderType);
         if (base == null) {
             return null;
         }
@@ -40,7 +40,7 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
         }
         // Some renderers produce paths with an extra ':' inside (e.g. "textures:models/...").
         if (base.getPath().contains(":")) {
-            base = ResourceLocation.fromNamespaceAndPath(base.getNamespace(), base.getPath().replace(':', '/'));
+            base = Identifier.fromNamespaceAndPath(base.getNamespace(), base.getPath().replace(':', '/'));
         }
         return resolveTextureWithAtlasDetection(base);
     }
@@ -51,13 +51,13 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
             if (map != null) {
                 return map;
             }
-            ResourceLocation base = RenderTypeTextureResolver.INSTANCE.resolve(renderType);
+            Identifier base = RenderTypeTextureResolver.INSTANCE.resolve(renderType);
             if (base != null) {
                 if (isTextRenderType(renderType)) {
                     base = normalizeTextTexture(base, renderType);
                 }
                 if (base.getPath().contains(":")) {
-                    base = ResourceLocation.fromNamespaceAndPath(base.getNamespace(), base.getPath().replace(':', '/'));
+                    base = Identifier.fromNamespaceAndPath(base.getNamespace(), base.getPath().replace(':', '/'));
                 }
                 return resolveTextureWithAtlasDetection(base);
             }
@@ -66,20 +66,20 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
         return Adapters.getTextureHelper().resolveEntityTexture(entity, renderType);
     }
 
-    private static ResolvedTexture resolveTextureWithAtlasDetection(ResourceLocation texture) {
+    private static ResolvedTexture resolveTextureWithAtlasDetection(Identifier texture) {
         // Handle known atlases first (chest/sign/bed, etc.) although entities rarely use them.
-        ResourceLocation[] knownAtlases = {
+        Identifier[] knownAtlases = {
             Sheets.CHEST_SHEET,
             Sheets.BED_SHEET,
             Sheets.SIGN_SHEET,
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/decorated_pot.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/map_decorations.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/shulker_boxes.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/banner_patterns.png"),
-            ResourceLocation.fromNamespaceAndPath("minecraft", "textures/atlas/shield_patterns.png")
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/decorated_pot.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/map_decorations.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/shulker_boxes.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/banner_patterns.png"),
+            Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/shield_patterns.png")
         };
 
-        for (ResourceLocation atlas : knownAtlases) {
+        for (Identifier atlas : knownAtlases) {
             try {
                 var atlasGetter = ClientAccessHolder.get().getTextureAtlas(atlas);
                 if (atlasGetter != null) {
@@ -115,8 +115,8 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
             || name.contains("glyph");
     }
 
-    private static ResourceLocation normalizeTextTexture(ResourceLocation base, RenderType renderType) {
-        ResourceLocation fromRenderType = extractFontTextureFromRenderType(renderType);
+    private static Identifier normalizeTextTexture(Identifier base, RenderType renderType) {
+        Identifier fromRenderType = extractFontTextureFromRenderType(renderType);
         if (fromRenderType != null) {
             return fromRenderType;
         }
@@ -130,7 +130,7 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
         return base;
     }
 
-    private static ResourceLocation extractFontTextureFromRenderType(RenderType renderType) {
+    private static Identifier extractFontTextureFromRenderType(RenderType renderType) {
         if (renderType == null) {
             return null;
         }
@@ -145,7 +145,7 @@ public final class EntityTextureResolver implements TextureResolver<Entity> {
             .matcher(s);
         if (dyn.find()) {
             try {
-                return ResourceLocation.parse(dyn.group(1));
+                return Identifier.parse(dyn.group(1));
             } catch (Exception ignored) {
             }
         }

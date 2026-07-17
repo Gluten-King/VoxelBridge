@@ -1,7 +1,6 @@
 pluginManagement {
     repositories {
         gradlePluginPortal()
-        maven { url = 'https://maven.neoforged.net/releases' }
         maven { url = 'https://maven.fabricmc.net' }
     }
 }
@@ -17,35 +16,7 @@ project(':shared').projectDir = file('shared')
 project(':shared:core').projectDir = file('core')
 project(':shared:common').projectDir = file('common')
 
-include 'neoforge:1.21.1:mod', 'neoforge:1.21.4:mod', 'neoforge:1.21.8:mod'
-project(':neoforge:1.21.1:mod').projectDir = file('neoforge/1.21.1/mod')
-project(':neoforge:1.21.4:mod').projectDir = file('neoforge/1.21.4/mod')
-project(':neoforge:1.21.8:mod').projectDir = file('neoforge/1.21.8/mod')
-
-if (file('fabric/1.21.1/mod').exists()) {
-    include 'fabric:1.21.1:mod'
-    project(':fabric:1.21.1:mod').projectDir = file('fabric/1.21.1/mod')
-
-    // Fabric version sources live under fabric/<version>/src
-}
-
-if (file('fabric/1.21.4/mod').exists()) {
-    include 'fabric:1.21.4:mod'
-    project(':fabric:1.21.4:mod').projectDir = file('fabric/1.21.4/mod')
-
-    // Fabric version sources live under fabric/<version>/src
-}
-
-if (file('fabric/1.21.8/mod').exists()) {
-    include 'fabric:1.21.8:mod'
-    project(':fabric:1.21.8:mod').projectDir = file('fabric/1.21.8/mod')
-
-    // Fabric version sources live under fabric/<version>/src
-}
-
-if (file('fabric/1.20.1/mod').exists()) {
-    include 'fabric:1.20.1:mod'
-    project(':fabric:1.20.1:mod').projectDir = file('fabric/1.20.1/mod')
-
-    // Fabric version sources live under fabric/<version>/src
+if (file('fabric/26.1.2/mod').exists()) {
+    include 'fabric:26.1.2:mod'
+    project(':fabric:26.1.2:mod').projectDir = file('fabric/26.1.2/mod')
 }

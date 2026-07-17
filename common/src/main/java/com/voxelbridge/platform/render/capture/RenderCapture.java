@@ -2,7 +2,7 @@ package com.voxelbridge.platform.render.capture;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.*;
 
@@ -83,6 +83,15 @@ public final class RenderCapture implements MultiBufferSource {
         }
 
         @Override
+        public VertexConsumer setColor(int color) {
+            Vertex last = vertices.peekLast();
+            if (last != null) {
+                last.color = color;
+            }
+            return this;
+        }
+
+        @Override
         public VertexConsumer setUv(float u, float v) {
             Vertex last = vertices.peekLast();
             if (last != null) {
@@ -104,6 +113,11 @@ public final class RenderCapture implements MultiBufferSource {
                 debugSink.onSetNormal(renderType, vertices.size());
             }
             emitReadyPrimitives(false);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setLineWidth(float width) {
             return this;
         }
 

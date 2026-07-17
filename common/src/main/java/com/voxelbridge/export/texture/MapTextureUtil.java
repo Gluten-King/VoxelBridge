@@ -4,9 +4,9 @@ import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
 import com.voxelbridge.platform.render.RenderTypeTextureResolver;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.core.component.DataComponents;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.decoration.ItemFrame;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.MapItem;
@@ -38,7 +38,7 @@ public final class MapTextureUtil {
             debug("ItemFrame map id not found.");
             return null;
         }
-        ResourceLocation mapLoc = ResourceLocation.fromNamespaceAndPath("minecraft", "map/" + mapId);
+        Identifier mapLoc = Identifier.fromNamespaceAndPath("minecraft", "map/" + mapId);
         debug("Resolved ItemFrame map: id=" + mapId + " loc=" + mapLoc);
         return new ResolvedTexture(mapLoc, 0f, 1f, 0f, 1f, false, null, null);
     }
@@ -48,7 +48,7 @@ public final class MapTextureUtil {
             return false;
         }
         try {
-            ResourceLocation tex = RenderTypeTextureResolver.INSTANCE.resolve(type);
+            Identifier tex = RenderTypeTextureResolver.INSTANCE.resolve(type);
             if (tex == null) {
                 debug("RenderType resolved texture is null.");
                 return false;
@@ -73,15 +73,15 @@ public final class MapTextureUtil {
         return -1;
     }
 
-    public static ResourceLocation normalizeDynamicMapLocation(ResourceLocation location) {
-        ResourceLocation normalized = DynamicTextureUtil.normalizeDynamicMapLocation(location);
+    public static Identifier normalizeDynamicMapLocation(Identifier location) {
+        Identifier normalized = DynamicTextureUtil.normalizeDynamicMapLocation(location);
         if (normalized != null) {
             debug("Normalize dynamic map location: " + location + " -> " + normalized);
         }
         return normalized;
     }
 
-    public static int parseMapId(ResourceLocation location) {
+    public static int parseMapId(Identifier location) {
         return DynamicTextureUtil.parseMapId(location);
     }
 

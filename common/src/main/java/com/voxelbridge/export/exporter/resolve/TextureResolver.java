@@ -1,6 +1,6 @@
 package com.voxelbridge.export.exporter.resolve;
 
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderType;
 
 /**
  * Resolves textures for rendered primitives based on RenderType and source object.
