@@ -39,6 +39,14 @@ public interface PlatformTextureHelper {
     Optional<NativeImage> readTexture(ResourceLocation location);
 
     /**
+     * Captures an owned copy of Minecraft's current 16x16 light texture.
+     * Platforms without a stable accessor may return an empty result.
+     */
+    default Optional<NativeImage> captureLightmap() {
+        return Optional.empty();
+    }
+
+    /**
      * copy NativeImage from src to dst.
      */
     void copyNativeImage(NativeImage src, NativeImage dst);

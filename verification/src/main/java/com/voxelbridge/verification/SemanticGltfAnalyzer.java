@@ -75,8 +75,18 @@ public final class SemanticGltfAnalyzer {
                         .thenComparing(ImageSnapshot::rgbaHash))
                 .distinct()
                 .toList();
+        validateVoxelBridgeLightmap(root, imageInfos);
 
         JsonNode meshes = array(root, "meshes");
+        boolean voxelBridgeSceneContract = containsText(
+                array(root, "extensionsUsed"), "VOXELBRIDGE_minecraft_scene");
+        JsonNode voxelBridgeScene = root.path("extensions").path("VOXELBRIDGE_minecraft_scene");
+        int voxelBridgeSceneVersion = voxelBridgeScene.path("version").asInt(1);
+        boolean standardSemanticTexCoords =
+                voxelBridgeSceneContract && voxelBridgeSceneVersion >= 2;
+        if (voxelBridgeSceneContract && standardSemanticTexCoords) {
+            validateSemanticTexCoordContract(voxelBridgeScene);
+        }
         Map<String, MaterialAccumulator> materialData = new TreeMap<>();
         List<TriangleGeometry> triangleGeometry = new ArrayList<>();
         List<PrimitiveAttributeStats> primitiveAttributeStats = new ArrayList<>();
@@ -103,13 +113,111 @@ public final class SemanticGltfAnalyzer {
                     throw new IOException("POSITION accessor must use VEC3");
                 }
                 AccessorData normals = optionalAccessor(accessors, attributes, "NORMAL");
+                AccessorData tangents = optionalAccessor(accessors, attributes, "TANGENT");
                 AccessorData uv0 = optionalAccessor(accessors, attributes, "TEXCOORD_0");
                 AccessorData uv1 = optionalAccessor(accessors, attributes, "TEXCOORD_1");
+                AccessorData uv2 = optionalAccessor(accessors, attributes, "TEXCOORD_2");
+                AccessorData uv3 = optionalAccessor(accessors, attributes, "TEXCOORD_3");
+                AccessorData uv4 = optionalAccessor(accessors, attributes, "TEXCOORD_4");
                 AccessorData colors = optionalAccessor(accessors, attributes, "COLOR_0");
+                AccessorData lightUv = standardSemanticTexCoords
+                        ? uv2
+                        : optionalAccessor(
+                                accessors, attributes, "_VOXELBRIDGE_LIGHT_UV");
+                AccessorData midTexCoord = standardSemanticTexCoords
+                        ? uv3
+                        : optionalAccessor(
+                                accessors, attributes, "_VOXELBRIDGE_MID_TEX_COORD");
+                AccessorData midBlock = optionalAccessor(
+                        accessors, attributes, "_VOXELBRIDGE_MID_BLOCK");
+                AccessorData materialIdentity = standardSemanticTexCoords
+                        ? uv4
+                        : optionalAccessor(
+                                accessors, attributes, "_VOXELBRIDGE_MATERIAL_ID");
                 validateAttributeCount(positions, normals, "NORMAL");
+                validateAttributeCount(positions, tangents, "TANGENT");
                 validateAttributeCount(positions, uv0, "TEXCOORD_0");
                 validateAttributeCount(positions, uv1, "TEXCOORD_1");
+                validateAttributeCount(positions, uv2, "TEXCOORD_2");
+                validateAttributeCount(positions, uv3, "TEXCOORD_3");
+                validateAttributeCount(positions, uv4, "TEXCOORD_4");
                 validateAttributeCount(positions, colors, "COLOR_0");
+                validateAttributeCount(
+                        positions, lightUv,
+                        standardSemanticTexCoords
+                                ? "TEXCOORD_2"
+                                : "_VOXELBRIDGE_LIGHT_UV");
+                validateAttributeCount(
+                        positions, midTexCoord,
+                        standardSemanticTexCoords
+                                ? "TEXCOORD_3"
+                                : "_VOXELBRIDGE_MID_TEX_COORD");
+                validateAttributeCount(positions, midBlock, "_VOXELBRIDGE_MID_BLOCK");
+                validateAttributeCount(
+                        positions, materialIdentity,
+                        standardSemanticTexCoords
+                                ? "TEXCOORD_4"
+                                : "_VOXELBRIDGE_MATERIAL_ID");
+                if (voxelBridgeSceneContract) {
+                    if (normals == null) {
+                        throw new IOException(
+                                "VOXELBRIDGE_minecraft_scene primitive is missing NORMAL");
+                    }
+                    if (tangents == null || tangents.components() != 4) {
+                        throw new IOException(
+                                "VOXELBRIDGE_minecraft_scene primitive requires VEC4 TANGENT");
+                    }
+                    validateTangents(tangents);
+                    if (standardSemanticTexCoords
+                            && (uv1 == null || uv1.components() != 2)) {
+                        throw new IOException(
+                                "VOXELBRIDGE_minecraft_scene v2 primitive requires VEC2 "
+                                        + "TEXCOORD_1");
+                    }
+                    if (lightUv == null || lightUv.components() != 2) {
+                        throw new IOException(
+                                "VOXELBRIDGE_minecraft_scene primitive requires VEC2 "
+                                        + (standardSemanticTexCoords
+                                                ? "TEXCOORD_2"
+                                                : "_VOXELBRIDGE_LIGHT_UV"));
+                    }
+                    validateLightUv(lightUv, standardSemanticTexCoords);
+                    if (voxelBridgeScene.has(standardSemanticTexCoords
+                            ? "midTexCoordTexCoord"
+                            : "midTexCoordAttribute")) {
+                        if (midTexCoord == null || midTexCoord.components() != 2) {
+                            throw new IOException(
+                                    "VOXELBRIDGE_minecraft_scene primitive requires VEC2 "
+                                            + (standardSemanticTexCoords
+                                                    ? "TEXCOORD_3"
+                                                    : "_VOXELBRIDGE_MID_TEX_COORD"));
+                        }
+                        validateMidTexCoord(uv0, midTexCoord);
+                    }
+                    if (voxelBridgeScene.has("midBlockAttribute")
+                            && (midBlock == null || midBlock.components() != 4)) {
+                        throw new IOException(
+                                "VOXELBRIDGE_minecraft_scene primitive requires VEC4 "
+                                        + "_VOXELBRIDGE_MID_BLOCK");
+                    }
+                    int identityId = primitive.path("extensions")
+                            .path("VOXELBRIDGE_minecraft_material")
+                            .path("materialIdentity")
+                            .asInt(-1);
+                    if (identityId >= 0) {
+                        JsonNode identities = array(voxelBridgeScene, "materialIdentities");
+                        if (identityId >= identities.size()) {
+                            throw new IOException(
+                                    "primitive materialIdentity is outside materialIdentities");
+                        }
+                        validateMaterialIdentity(
+                                materialIdentity, identityId, standardSemanticTexCoords);
+                        if ("terrain".equals(
+                                identities.get(identityId).path("objectClass").asText())) {
+                            validateMidBlock(positions, midBlock);
+                        }
+                    }
+                }
 
                 long[] indices = primitive.has("indices")
                         ? accessors.readIndices(primitive.path("indices").asInt(-1))
@@ -219,6 +327,197 @@ public final class SemanticGltfAnalyzer {
         if (attribute != null && attribute.count() != positions.count()) {
             throw new IOException(name + " count does not match POSITION count");
         }
+    }
+
+    private static void validateVoxelBridgeLightmap(
+            JsonNode root, List<ImageInfo> imageInfos) throws IOException {
+        JsonNode scene = root.path("extensions").path("VOXELBRIDGE_minecraft_scene");
+        if (!scene.has("lightmapTexture")) {
+            return;
+        }
+        if (!"minecraft-light-texture-16x16".equals(
+                scene.path("lightmapEncoding").asText())) {
+            throw new IOException("VoxelBridge lightmap has an unknown encoding");
+        }
+        if (!"linear".equals(scene.path("lightmapColorSpace").asText())) {
+            throw new IOException("VoxelBridge lightmap must declare linear color space");
+        }
+        int textureIndex = scene.path("lightmapTexture").asInt(-1);
+        JsonNode textures = array(root, "textures");
+        if (textureIndex < 0 || textureIndex >= textures.size()) {
+            throw new IOException("VoxelBridge lightmapTexture index is out of range");
+        }
+        int source = textures.get(textureIndex).path("source").asInt(-1);
+        if (source < 0 || source >= imageInfos.size()) {
+            throw new IOException("VoxelBridge lightmap image source is out of range");
+        }
+        ImageSnapshot snapshot = imageInfos.get(source).snapshot();
+        if (snapshot.width() != 16 || snapshot.height() != 16) {
+            throw new IOException(
+                    "VoxelBridge lightmap must be 16x16, got "
+                            + snapshot.width() + "x" + snapshot.height());
+        }
+    }
+
+    private static void validateSemanticTexCoordContract(JsonNode scene) throws IOException {
+        if (scene.path("version").asInt(-1) != 2
+                || scene.path("colorUvTexCoord").asInt(-1) != 1
+                || scene.path("lightUvTexCoord").asInt(-1) != 2
+                || scene.path("midTexCoordTexCoord").asInt(-1) != 3
+                || scene.path("materialIdentityTexCoord").asInt(-1) != 4
+                || !"normalized-minecraft-0-240".equals(
+                        scene.path("lightUvEncoding").asText())
+                || !"index-in-u-into-materialIdentities".equals(
+                        scene.path("materialIdentityEncoding").asText())) {
+            throw new IOException(
+                    "VOXELBRIDGE_minecraft_scene v2 has an unsupported TEXCOORD layout");
+        }
+    }
+
+    private static void validateLightUv(
+            AccessorData lightUv, boolean normalized) throws IOException {
+        String semantic = normalized ? "TEXCOORD_2 light UV" : "_VOXELBRIDGE_LIGHT_UV";
+        double upperBound = normalized ? 1.0 : 240.0;
+        for (double[] value : lightUv.values()) {
+            for (double component : value) {
+                double finite = requireFinite(component, semantic);
+                if (finite < 0.0 || finite > upperBound) {
+                    throw new IOException(
+                            semantic + " must be within 0.." + upperBound);
+                }
+            }
+        }
+    }
+
+    private static void validateTangents(AccessorData tangents) throws IOException {
+        for (double[] tangent : tangents.values()) {
+            double lengthSquared = 0.0;
+            for (int component = 0; component < 3; component++) {
+                double value = requireFinite(tangent[component], "TANGENT");
+                lengthSquared += value * value;
+            }
+            double handedness = requireFinite(tangent[3], "TANGENT.w");
+            if (Math.abs(lengthSquared - 1.0) > 1.0e-3) {
+                throw new IOException("TANGENT.xyz must be normalized");
+            }
+            if (Math.abs(Math.abs(handedness) - 1.0) > 1.0e-6) {
+                throw new IOException("TANGENT.w must be -1 or 1");
+            }
+        }
+    }
+
+    private static void validateMidTexCoord(
+            AccessorData uv0, AccessorData midTexCoord) throws IOException {
+        if (uv0 == null || uv0.components() != 2) {
+            throw new IOException(
+                    "_VOXELBRIDGE_MID_TEX_COORD requires VEC2 TEXCOORD_0");
+        }
+        if (uv0.count() % 4 != 0) {
+            throw new IOException(
+                    "_VOXELBRIDGE_MID_TEX_COORD requires quad-expanded vertices");
+        }
+        for (int base = 0; base < uv0.count(); base += 4) {
+            double expectedU = 0.0;
+            double expectedV = 0.0;
+            for (int vertex = 0; vertex < 4; vertex++) {
+                expectedU += requireFinite(
+                        uv0.values()[base + vertex][0], "TEXCOORD_0");
+                expectedV += requireFinite(
+                        uv0.values()[base + vertex][1], "TEXCOORD_0");
+            }
+            expectedU *= 0.25;
+            expectedV *= 0.25;
+            for (int vertex = 0; vertex < 4; vertex++) {
+                double[] actual = midTexCoord.values()[base + vertex];
+                if (Math.abs(requireFinite(
+                            actual[0], "_VOXELBRIDGE_MID_TEX_COORD") - expectedU) > 1.0e-5
+                        || Math.abs(requireFinite(
+                            actual[1], "_VOXELBRIDGE_MID_TEX_COORD") - expectedV) > 1.0e-5) {
+                    throw new IOException(
+                            "_VOXELBRIDGE_MID_TEX_COORD is not the quad UV center");
+                }
+            }
+        }
+    }
+
+    private static void validateMaterialIdentity(
+            AccessorData materialIdentity, int expectedId, boolean standardTexCoord)
+            throws IOException {
+        int expectedComponents = standardTexCoord ? 2 : 1;
+        String semantic = standardTexCoord
+                ? "TEXCOORD_4 material identity"
+                : "_VOXELBRIDGE_MATERIAL_ID";
+        if (materialIdentity == null
+                || materialIdentity.components() != expectedComponents) {
+            throw new IOException(
+                    "materialIdentity primitive requires "
+                            + (standardTexCoord ? "VEC2 TEXCOORD_4" : "scalar "
+                                    + "_VOXELBRIDGE_MATERIAL_ID"));
+        }
+        for (double[] value : materialIdentity.values()) {
+            double actual = requireFinite(value[0], semantic);
+            if (actual != expectedId) {
+                throw new IOException(
+                        semantic + " does not match primitive identity");
+            }
+            if (standardTexCoord
+                    && requireFinite(value[1], semantic + ".y") != 0.0) {
+                throw new IOException(
+                        "TEXCOORD_4 material identity must reserve y as zero");
+            }
+        }
+    }
+
+    private static void validateMidBlock(
+            AccessorData positions, AccessorData midBlock) throws IOException {
+        if (positions.count() % 4 != 0) {
+            throw new IOException("_VOXELBRIDGE_MID_BLOCK requires quad-expanded vertices");
+        }
+        for (int base = 0; base < positions.count(); base += 4) {
+            double[] expectedCenter = new double[3];
+            for (int component = 0; component < 3; component++) {
+                expectedCenter[component] =
+                        requireFinite(positions.values()[base][component], "POSITION")
+                                + requireFinite(
+                                    midBlock.values()[base][component],
+                                    "_VOXELBRIDGE_MID_BLOCK") / 64.0;
+            }
+            double emission = requireFinite(
+                    midBlock.values()[base][3], "_VOXELBRIDGE_MID_BLOCK.w");
+            if (emission < 0.0 || emission > 15.0 || emission != Math.rint(emission)) {
+                throw new IOException(
+                        "_VOXELBRIDGE_MID_BLOCK.w must be an integer in 0..15");
+            }
+            for (int vertex = 0; vertex < 4; vertex++) {
+                for (int component = 0; component < 3; component++) {
+                    double center =
+                            requireFinite(
+                                positions.values()[base + vertex][component], "POSITION")
+                                    + requireFinite(
+                                        midBlock.values()[base + vertex][component],
+                                        "_VOXELBRIDGE_MID_BLOCK") / 64.0;
+                    if (Math.abs(center - expectedCenter[component]) > 1.0e-5) {
+                        throw new IOException(
+                                "_VOXELBRIDGE_MID_BLOCK vertices disagree on block center");
+                    }
+                }
+                if (requireFinite(
+                        midBlock.values()[base + vertex][3],
+                        "_VOXELBRIDGE_MID_BLOCK.w") != emission) {
+                    throw new IOException(
+                            "_VOXELBRIDGE_MID_BLOCK emission varies within a quad");
+                }
+            }
+        }
+    }
+
+    private static boolean containsText(JsonNode values, String expected) {
+        for (JsonNode value : values) {
+            if (expected.equals(value.asText())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static long[] sequentialIndices(int count) {

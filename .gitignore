@@ -9,6 +9,7 @@
 *.zip
 !/golden/worlds/*.zip
 *.jar
+!/gradle/wrapper/gradle-wrapper.jar
 *.war
 *.ear
 *.apk

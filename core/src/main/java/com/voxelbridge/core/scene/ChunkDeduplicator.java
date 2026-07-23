@@ -15,6 +15,7 @@ final class ChunkDeduplicator {
     private final List<Float> positions;
     private final List<Float> uv0;
     private final List<Float> uv1;
+    private final List<Float> lightUv;
     private final List<Float> colors;
 
     // Vertex dedup lookup table.
@@ -35,10 +36,12 @@ final class ChunkDeduplicator {
     record DeduplicatedQuad(
         String spriteKey,
         String overlaySpriteKey,
+        QuadSemantic semantic,
         RenderLayer renderLayer,
         TintMode tintMode,
         boolean emissive,
         int[] vertexIndices,  // Indices of the 4 vertices in the deduped arrays.
+        float[] midBlock,
         float[] normal,
         boolean doubleSided
     ) {}
@@ -48,6 +51,7 @@ final class ChunkDeduplicator {
         this.positions = new ArrayList<>(1000 * 3);
         this.uv0 = new ArrayList<>(1000 * 2);
         this.uv1 = new ArrayList<>(1000 * 2);
+        this.lightUv = new ArrayList<>(1000 * 2);
         this.colors = new ArrayList<>(1000 * 4);
         this.vertexLookup = new TObjectIntHashMap<>(1000, 0.5f, -1);
         this.quads = new ArrayList<>(500);
@@ -74,6 +78,7 @@ final class ChunkDeduplicator {
             float[] pos = quad.positions();
             float[] uv = quad.uv0();
             float[] uv1Array = quad.uv1();
+            float[] lightArray = quad.lightUv();
             float[] col = quad.colors();
 
             // Populate reusable probe
@@ -84,6 +89,8 @@ final class ChunkDeduplicator {
                 uv[oi * 2], uv[oi * 2 + 1],
                 uv1Array != null ? uv1Array[oi * 2] : 0f,
                 uv1Array != null ? uv1Array[oi * 2 + 1] : 0f,
+                lightArray != null ? lightArray[oi * 2] : 240f,
+                lightArray != null ? lightArray[oi * 2 + 1] : 240f,
                 col[oi * 4], col[oi * 4 + 1], col[oi * 4 + 2], col[oi * 4 + 3]
             );
 
@@ -113,6 +120,7 @@ final class ChunkDeduplicator {
                 positions.add(temp.px); positions.add(temp.py); positions.add(temp.pz);
                 uv0.add(temp.u); uv0.add(temp.v);
                 uv1.add(temp.u1); uv1.add(temp.v1);
+                lightUv.add(temp.lightU); lightUv.add(temp.lightV);
                 colors.add(temp.r); colors.add(temp.g); colors.add(temp.b); colors.add(temp.a);
             }
         }
@@ -128,10 +136,12 @@ final class ChunkDeduplicator {
         quads.add(new DeduplicatedQuad(
             quad.spriteKey(),
             quad.overlaySpriteKey(),
+            quad.semantic(),
             quad.renderLayer(),
             quad.tintMode(),
             quad.emissive(),
             verts,
+            reorder(quad.midBlock(), order, 4),
             quad.normal(),
             quad.doubleSided()
         ));
@@ -145,10 +155,13 @@ final class ChunkDeduplicator {
             int count = quads.size();
             List<String> spriteKeys = new ArrayList<>(count);
             List<String> overlaySpriteKeys = new ArrayList<>(count);
+            List<QuadSemantic> semantics = new ArrayList<>(count);
 
             float[] flatPositions = new float[count * 12];
             float[] flatUv0s = new float[count * 8];
             float[] flatUv1s = new float[count * 8];
+            float[] flatLightUvs = new float[count * 8];
+            float[] flatMidBlocks = new float[count * 16];
             float[] flatNormals = new float[count * 3];
             float[] flatColors = new float[count * 16];
             int[] quadFlags = new int[count];
@@ -159,6 +172,7 @@ final class ChunkDeduplicator {
                 int uvBase = i * 8;
                 int normBase = i * 3;
                 int colBase = i * 16;
+                int midBlockBase = i * 16;
 
                 for (int v = 0; v < 4; v++) {
                     int vertIdx = quad.vertexIndices()[v];
@@ -172,11 +186,18 @@ final class ChunkDeduplicator {
 
                     flatUv1s[uvBase + v * 2]     = uv1.get(vertIdx * 2);
                     flatUv1s[uvBase + v * 2 + 1] = uv1.get(vertIdx * 2 + 1);
+                    flatLightUvs[uvBase + v * 2] = lightUv.get(vertIdx * 2);
+                    flatLightUvs[uvBase + v * 2 + 1] = lightUv.get(vertIdx * 2 + 1);
 
                     flatColors[colBase + v * 4]     = colors.get(vertIdx * 4);
                     flatColors[colBase + v * 4 + 1] = colors.get(vertIdx * 4 + 1);
                     flatColors[colBase + v * 4 + 2] = colors.get(vertIdx * 4 + 2);
                     flatColors[colBase + v * 4 + 3] = colors.get(vertIdx * 4 + 3);
+                }
+
+                float[] midBlock = quad.midBlock();
+                if (midBlock != null && midBlock.length >= 16) {
+                    System.arraycopy(midBlock, 0, flatMidBlocks, midBlockBase, 16);
                 }
 
                 float[] norm = quad.normal();
@@ -192,6 +213,7 @@ final class ChunkDeduplicator {
 
                 spriteKeys.add(quad.spriteKey());
                 overlaySpriteKeys.add(quad.overlaySpriteKey());
+                semantics.add(quad.semantic());
                 quadFlags[i] = IrFlags.encode(quad.renderLayer(), quad.tintMode(), quad.doubleSided(), quad.emissive());
             }
 
@@ -199,9 +221,12 @@ final class ChunkDeduplicator {
                 materialKey,
                 spriteKeys,
                 overlaySpriteKeys,
+                semantics,
                 flatPositions,
                 flatUv0s,
                 flatUv1s,
+                flatLightUvs,
+                flatMidBlocks,
                 flatNormals,
                 flatColors,
                 quadFlags
@@ -213,6 +238,8 @@ final class ChunkDeduplicator {
             float[] quadPositions = new float[12];
             float[] quadUv0 = new float[8];
             float[] quadUv1 = new float[8];
+            float[] quadLightUv = new float[8];
+            float[] quadMidBlock = quad.midBlock();
             float[] quadColors = new float[16];
 
             for (int i = 0; i < 4; i++) {
@@ -227,6 +254,8 @@ final class ChunkDeduplicator {
 
                 quadUv1[i * 2] = uv1.get(vertIdx * 2);
                 quadUv1[i * 2 + 1] = uv1.get(vertIdx * 2 + 1);
+                quadLightUv[i * 2] = lightUv.get(vertIdx * 2);
+                quadLightUv[i * 2 + 1] = lightUv.get(vertIdx * 2 + 1);
 
                 quadColors[i * 4] = colors.get(vertIdx * 4);
                 quadColors[i * 4 + 1] = colors.get(vertIdx * 4 + 1);
@@ -238,6 +267,7 @@ final class ChunkDeduplicator {
                 materialKey,
                 quad.spriteKey(),
                 quad.overlaySpriteKey(),
+                quad.semantic(),
                 quad.renderLayer(),
                 quad.tintMode(),
                 quad.doubleSided(),
@@ -245,6 +275,8 @@ final class ChunkDeduplicator {
                 quadPositions,
                 quadUv0,
                 quadUv1,
+                quadLightUv,
+                quadMidBlock,
                 quad.normal(),
                 quadColors
             );
@@ -270,6 +302,17 @@ final class ChunkDeduplicator {
                lower.contains("portal") || lower.contains("stained_glass");
     }
 
+    private static float[] reorder(float[] values, int[] order, int components) {
+        if (values == null || values.length < order.length * components) {
+            return null;
+        }
+        float[] result = new float[order.length * components];
+        for (int i = 0; i < order.length; i++) {
+            System.arraycopy(values, order[i] * components, result, i * components, components);
+        }
+        return result;
+    }
+
     private int quantize(float v) { return Math.round(v * 10000f); }
     private int quantizeUV(float v) { return Math.round(v * 100000f); }
     private int quantizeColor(float v) { return Math.round(v * 100f); }
@@ -277,16 +320,18 @@ final class ChunkDeduplicator {
     // Mutable holder for vertex data + key logic
     // Extends VertexKey so it can be used as a query key for TObjectIntHashMap
     private class TempVertex extends VertexKey {
-        float px, py, pz, u, v, u1, v1, r, g, b, a;
+        float px, py, pz, u, v, u1, v1, lightU, lightV, r, g, b, a;
 
         void set(int spriteHash,
                  float px, float py, float pz,
                  float u, float v,
                  float u1, float v1,
+                 float lightU, float lightV,
                  float r, float g, float b, float a) {
             this.px = px; this.py = py; this.pz = pz;
             this.u = u; this.v = v;
             this.u1 = u1; this.v1 = v1;
+            this.lightU = lightU; this.lightV = lightV;
             this.r = r; this.g = g; this.b = b; this.a = a;
             
             // Update key fields
@@ -294,6 +339,7 @@ final class ChunkDeduplicator {
             this.k_px = quantize(px); this.k_py = quantize(py); this.k_pz = quantize(pz);
             this.k_u = quantizeUV(u); this.k_v = quantizeUV(v);
             this.k_u1 = quantizeUV(u1); this.k_v1 = quantizeUV(v1);
+            this.k_lightU = Math.round(lightU); this.k_lightV = Math.round(lightV);
             this.k_r = quantizeColor(r); this.k_g = quantizeColor(g);
             this.k_b = quantizeColor(b); this.k_a = quantizeColor(a);
         }
@@ -305,6 +351,7 @@ final class ChunkDeduplicator {
         int spriteHash;
         int k_px, k_py, k_pz;
         int k_u, k_v, k_u1, k_v1;
+        int k_lightU, k_lightV;
         int k_r, k_g, k_b, k_a;
 
         VertexKey() {}
@@ -314,6 +361,7 @@ final class ChunkDeduplicator {
             this.k_px = other.k_px; this.k_py = other.k_py; this.k_pz = other.k_pz;
             this.k_u = other.k_u; this.k_v = other.k_v;
             this.k_u1 = other.k_u1; this.k_v1 = other.k_v1;
+            this.k_lightU = other.k_lightU; this.k_lightV = other.k_lightV;
             this.k_r = other.k_r; this.k_g = other.k_g;
             this.k_b = other.k_b; this.k_a = other.k_a;
         }
@@ -328,6 +376,8 @@ final class ChunkDeduplicator {
             result = 31 * result + k_v;
             result = 31 * result + k_u1;
             result = 31 * result + k_v1;
+            result = 31 * result + k_lightU;
+            result = 31 * result + k_lightV;
             result = 31 * result + k_r;
             result = 31 * result + k_g;
             result = 31 * result + k_b;
@@ -343,6 +393,7 @@ final class ChunkDeduplicator {
                 k_px == other.k_px && k_py == other.k_py && k_pz == other.k_pz &&
                 k_u == other.k_u && k_v == other.k_v &&
                 k_u1 == other.k_u1 && k_v1 == other.k_v1 &&
+                k_lightU == other.k_lightU && k_lightV == other.k_lightV &&
                 k_r == other.k_r && k_g == other.k_g &&
                 k_b == other.k_b && k_a == other.k_a;
         }

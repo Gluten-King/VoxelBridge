@@ -15,6 +15,7 @@ final class TextureRegistry {
     private final ExportState state;
     private final Map<String, String> spriteRelativePaths = new HashMap<>();
     private final Map<String, Integer> spriteTextureIndices = new HashMap<>();
+    private final Map<String, Integer> pathTextureIndices = new HashMap<>();
 
     TextureRegistry(ExportState state) {
         this.state = state;
@@ -40,6 +41,21 @@ final class TextureRegistry {
             String rel = spriteRelativePaths.get(key);
             Image image = new Image();
             image.setUri(rel);
+            images.add(image);
+            Texture texture = new Texture();
+            texture.setSource(images.size() - 1);
+            texture.setSampler(0);
+            textures.add(texture);
+            return textures.size() - 1;
+        });
+    }
+
+    synchronized int ensurePathTexture(String relativePath,
+                                       List<Texture> textures,
+                                       List<Image> images) {
+        return pathTextureIndices.computeIfAbsent(relativePath, path -> {
+            Image image = new Image();
+            image.setUri(path);
             images.add(image);
             Texture texture = new Texture();
             texture.setSource(images.size() - 1);

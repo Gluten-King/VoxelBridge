@@ -3,9 +3,11 @@ package com.voxelbridge.export.exporter.blockentity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.QuadSemantic;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import com.voxelbridge.export.exporter.resolve.AtlasLocator;
 import com.voxelbridge.export.exporter.resolve.DefaultAtlasLocator;
 import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
@@ -257,6 +259,7 @@ public final class BlockEntityRenderer {
         private static final Set<String> LOGGED_TEXT_MISSING_TEXTURE = ConcurrentHashMap.newKeySet();
         private static final ConcurrentHashMap<String, BufferedImage> TEXTURE_IMAGE_CACHE = new ConcurrentHashMap<>();
         private final BlockEntity blockEntity;
+        private final QuadSemantic semantic;
         private final TextureOverrideMap overrides;
         private final PlaneOffsetTracker planeOffset;
 
@@ -267,6 +270,7 @@ public final class BlockEntityRenderer {
                 }
             });
             this.blockEntity = blockEntity;
+            this.semantic = MinecraftQuadSemantic.blockEntity(blockEntity);
             this.overrides = OVERRIDES.get();
             this.planeOffset = CHUNK_PLANE_OFFSETS.computeIfAbsent(
                 chunkKey(chunkX, chunkZ),
@@ -330,6 +334,7 @@ public final class BlockEntityRenderer {
                 uv0,
                 blockEntity,
                 materialGroupKey,
+                semantic,
                 this::resolveTexture,
                 this::writeUvs,
                 (tracker, quadPositions, faceNormal) -> tracker.applyOffset(quadPositions, faceNormal, approximateDirection(faceNormal)),

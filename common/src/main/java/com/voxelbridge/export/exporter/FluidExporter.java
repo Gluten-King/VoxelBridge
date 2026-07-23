@@ -3,6 +3,7 @@ package com.voxelbridge.export.exporter;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.export.ExportContext;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -56,7 +57,9 @@ public final class FluidExporter {
         QuadCollector collector = new QuadCollector(
             sceneSink, ctx, pos, sprites,
             offsetX, offsetY, offsetZ,
-            regionMin, regionMax, fluidKey
+            regionMin, regionMax, fluidKey,
+            MinecraftQuadSemantic.terrain(state),
+            state.getLightEmission()
         );
 
         dispatcher.renderLiquid(pos, level, collector, state, fs);

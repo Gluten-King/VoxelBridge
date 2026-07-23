@@ -10,9 +10,12 @@ public interface IrBulkQuadSink {
     void addBatch(String materialGroupKey,
                   List<String> spriteKeys,
                   List<String> overlaySpriteKeys,
+                  List<QuadSemantic> semantics,
                   float[] flatPositions,
                   float[] flatUv0s,
                   float[] flatUv1s,
+                  float[] flatLightUvs,
+                  float[] flatMidBlocks,
                   float[] flatNormals,
                   float[] flatColors,
                   int[] quadFlags);

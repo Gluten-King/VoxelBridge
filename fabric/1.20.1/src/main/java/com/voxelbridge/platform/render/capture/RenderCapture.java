@@ -22,6 +22,7 @@ public final class RenderCapture implements MultiBufferSource {
     public static final class Vertex {
         public float x, y, z;
         public float u, v;
+        public float lightU = 240f, lightV = 240f;
         public int color = 0xFFFFFFFF;
 
         public Vertex(float x, float y, float z) {
@@ -96,7 +97,14 @@ public final class RenderCapture implements MultiBufferSource {
         public VertexConsumer overlayCoords(int u, int v) { return this; }
 
         @Override
-        public VertexConsumer uv2(int u, int v) { return this; }
+        public VertexConsumer uv2(int u, int v) {
+            Vertex last = vertices.peekLast();
+            if (last != null) {
+                last.lightU = u;
+                last.lightV = v;
+            }
+            return this;
+        }
 
         @Override
         public VertexConsumer normal(float nx, float ny, float nz) {

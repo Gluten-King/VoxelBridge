@@ -95,6 +95,8 @@ public final class ExportConfigStore {
         data.loggingEnabled = ExportRuntimeConfig.isLoggingEnabled();
         data.exportDoubleSidedEnabled = ExportRuntimeConfig.isExportDoubleSidedEnabled();
         data.nonsolidCullingEnabled = ExportRuntimeConfig.isNonsolidCullingEnabled();
+        data.lightmapExportEnabled = ExportRuntimeConfig.isLightmapExportEnabled();
+        data.materialIdentityMode = ExportRuntimeConfig.getMaterialIdentityMode().name();
         return data;
     }
 
@@ -139,6 +141,17 @@ public final class ExportConfigStore {
         } else if (data.cullNonsolidAgainstSolidEnabled != null) {
             ExportRuntimeConfig.setNonsolidCullingEnabled(data.cullNonsolidAgainstSolidEnabled);
         }
+        if (data.lightmapExportEnabled != null) {
+            ExportRuntimeConfig.setLightmapExportEnabled(data.lightmapExportEnabled);
+        }
+        if (data.materialIdentityMode != null) {
+            try {
+                ExportRuntimeConfig.setMaterialIdentityMode(
+                    ExportRuntimeConfig.MaterialIdentityMode.valueOf(data.materialIdentityMode)
+                );
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
     }
 
     private static Path getConfigPath() {
@@ -163,6 +176,8 @@ public final class ExportConfigStore {
         boolean loggingEnabled;
         Boolean exportDoubleSidedEnabled;
         Boolean nonsolidCullingEnabled;
+        Boolean lightmapExportEnabled;
+        String materialIdentityMode;
         // Backward compatibility for older config key.
         Boolean cullNonsolidAgainstSolidEnabled;
     }

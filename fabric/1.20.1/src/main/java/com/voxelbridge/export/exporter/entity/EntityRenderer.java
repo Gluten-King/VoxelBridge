@@ -346,6 +346,7 @@ public final class EntityRenderer {
                 uv0,
                 entity,
                 materialGroupKey,
+                com.voxelbridge.export.semantic.MinecraftQuadSemantic.entity(entity),
                 this::resolveTexture,
                 this::writeUvs,
                 (tracker, quadPositions, faceNormal) ->

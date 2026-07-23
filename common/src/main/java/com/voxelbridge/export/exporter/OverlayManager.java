@@ -10,6 +10,7 @@ import com.voxelbridge.core.util.image.ImageSampling;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.quad.QuadData;
 import com.voxelbridge.export.util.geometry.VertexExtractor;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import com.voxelbridge.util.pool.ObjectPool;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import net.minecraft.core.BlockPos;
@@ -49,7 +50,8 @@ public final class OverlayManager {
      * @param materialSuffix Suffix to append to materialKey (e.g., "_overlay", "_hilight", or null)
      */
         private record OverlayQuadData(float[] positions, float[] normal, float[] uv, String spriteKey, int color,
-                                       Direction direction, String materialKey, String materialSuffix) {
+                                       Direction direction, BlockPos blockPos,
+                                       String materialKey, String materialSuffix) {
     }
 
     public OverlayManager(ExportContext ctx, Level level, double offsetX, double offsetY, double offsetZ, PlaneOffsetTracker planeOffset) {
@@ -185,7 +187,7 @@ public final class OverlayManager {
             }
             OverlayQuadData data = new OverlayQuadData(
                 positions.clone(), normal, uv0.clone(),
-                spriteKey, overlayColor, dir, baseMaterialKey, effectiveSuffix
+                spriteKey, overlayColor, dir, pos.immutable(), baseMaterialKey, effectiveSuffix
             );
             overlayCache.add(data);
         } finally {
@@ -224,6 +226,8 @@ public final class OverlayManager {
     public void outputOverlays(IrSink sceneSink, BlockState state, CullChecker cullChecker) {
         if (overlayCache.isEmpty()) return;
 
+        com.voxelbridge.core.ir.QuadSemantic semantic =
+            MinecraftQuadSemantic.terrain(state);
         for (OverlayQuadData overlay : overlayCache) {
             // Use suffix if provided (e.g., "_overlay", "_hilight"), otherwise use base materialKey
             // Logic updated: Append suffix to base key, ensuring we don't strip _emissive from base key
@@ -256,8 +260,17 @@ public final class OverlayManager {
                 ? TintMode.COLORMAP
                 : TintMode.VERTEX_COLOR;
             sceneSink.addQuad(overlayMaterialKey, overlay.spriteKey, overlay.spriteKey,
-                RenderLayer.UNKNOWN, tintMode, doubleSided, false,
-                overlay.positions, overlay.uv, overlayColorData.uv1(), overlay.normal,
+                semantic,
+                RenderLayer.CUTOUT, tintMode, doubleSided, state.getLightEmission() > 0,
+                overlay.positions, overlay.uv, overlayColorData.uv1(),
+                com.voxelbridge.export.semantic.MinecraftLightSampler.sampleFace(
+                    level, overlay.blockPos, overlay.direction, state.getLightEmission()
+                ),
+                MinecraftQuadSemantic.atMidBlock(
+                    overlay.blockPos, offsetX, offsetY, offsetZ, overlay.positions,
+                    state.getLightEmission()
+                ),
+                overlay.normal,
                 overlayColorData.colors());
         }
     }

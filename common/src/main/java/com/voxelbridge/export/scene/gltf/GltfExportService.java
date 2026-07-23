@@ -19,6 +19,9 @@ import net.minecraft.world.level.Level;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * glTF-specific export service that orchestrates:
@@ -119,6 +122,25 @@ public final class GltfExportService {
             }
         };
         GltfSceneBuilder sceneBuilder = new GltfSceneBuilder(ctx.state(), gltfDir, reporter);
+        if (ExportRuntimeConfig.isLightmapExportEnabled()) {
+            var capturedLightmap = captureLightmapOnClientThread(mc);
+            if (capturedLightmap.isPresent()) {
+                Path lightmapPath = gltfDir.resolve("lightmap.png");
+                try (var image = capturedLightmap.get()) {
+                    image.writeToFile(lightmapPath);
+                }
+                sceneBuilder.setSceneLightmapRelativePath("lightmap.png");
+                VoxelBridgeLogger.info(
+                        LogModule.GLTF,
+                        "[GLTF] Captured Minecraft lightmap: " + lightmapPath
+                );
+            } else {
+                VoxelBridgeLogger.warn(
+                        LogModule.GLTF,
+                        "[GLTF] Lightmap export enabled but this platform did not provide a capture"
+                );
+            }
+        }
         IrSink irSink = sceneBuilder;
         long tSampling = VoxelBridgeLogger.now();
         StreamingRegionSampler.sampleRegion(level, pos1, pos2, irSink, ctx);
@@ -203,5 +225,29 @@ public final class GltfExportService {
 
         // Return the glTF output path (write completed).
         return outputPath;
+    }
+
+    private static Optional<com.mojang.blaze3d.platform.NativeImage>
+            captureLightmapOnClientThread(net.minecraft.client.Minecraft mc)
+            throws IOException {
+        if (mc.isSameThread()) {
+            return com.voxelbridge.adapter.Adapters.getTextureHelper().captureLightmap();
+        }
+        CompletableFuture<Optional<com.mojang.blaze3d.platform.NativeImage>> future =
+                new CompletableFuture<>();
+        mc.execute(() -> {
+            try {
+                future.complete(
+                        com.voxelbridge.adapter.Adapters.getTextureHelper().captureLightmap()
+                );
+            } catch (Throwable throwable) {
+                future.completeExceptionally(throwable);
+            }
+        });
+        try {
+            return future.get(10, TimeUnit.SECONDS);
+        } catch (Exception exception) {
+            throw new IOException("Timed out capturing Minecraft lightmap", exception);
+        }
     }
 }

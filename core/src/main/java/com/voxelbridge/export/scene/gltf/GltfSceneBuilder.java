@@ -24,8 +24,10 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -41,16 +43,20 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
     private final TextureRegistry textureRegistry;
     private final ProgressReporter progressReporter;
     private final ExportOptions options;
-    private static final int BYTES_PER_QUAD_GEOMETRY = 140;
-    private static final int BYTES_PER_QUAD_UV = 64;
+    private String sceneLightmapRelativePath;
 
     // Streaming writer
     private final StreamingGeometryWriter streamingWriter;
     private final SpriteIndex spriteIndex;
     private final GeometryIndex geometryIndex;
+    private final Map<String, String> bucketVisualMaterialKeys = new ConcurrentHashMap<>();
+    private final Map<String, QuadSemantic> bucketSemantics = new ConcurrentHashMap<>();
+    private final Map<QuadSemantic, Integer> internalSemanticIds = new ConcurrentHashMap<>();
+    private final AtomicInteger nextInternalSemanticId = new AtomicInteger();
 
     // Thread communication
-    private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, 0, null, null, null, null, null, null);
+    private static final QuadBatch POISON_PILL =
+        new QuadBatch(null, null, null, null, 0, null, null, null, null, null, null, null, null);
     // OPTIMIZATION: Increased queue capacity 4x to reduce sampling thread blocking
     // Large scenes with many quads benefit from larger producer-consumer buffer
     // Changed to Object to support both single QuadBatch and BulkQuadBatch
@@ -64,10 +70,13 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         String materialGroupKey,
         String spriteKey,
         String overlaySpriteKey,
+        QuadSemantic semantic,
         int quadFlags,
         float[] positions,
         float[] uv0,
         float[] uv1,
+        float[] lightUv,
+        float[] midBlock,
         float[] normal,
         float[] colors,
         String bucketKey
@@ -80,9 +89,12 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         // Arrays of arrays/data
         List<String> spriteKeys,
         List<String> overlaySpriteKeys,
+        List<QuadSemantic> semantics,
         float[] flatPositions,
         float[] flatUv0s,
         float[] flatUv1s,
+        float[] flatLightUvs,
+        float[] flatMidBlocks,
         float[] flatNormals,
         float[] flatColors,
         int[] quadFlags
@@ -118,6 +130,10 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Initialized streaming geometry pipeline (Paged)");
     }
 
+    public void setSceneLightmapRelativePath(String relativePath) {
+        this.sceneLightmapRelativePath = relativePath;
+    }
+
     /**
      * Optimized batch addition.
      * Called by ChunkDeduplicator to reduce queue lock contention.
@@ -126,9 +142,12 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
     public void addBatch(String materialGroupKey,
                          List<String> spriteKeys,
                          List<String> overlaySpriteKeys,
+                         List<QuadSemantic> semantics,
                          float[] flatPositions,
                          float[] flatUv0s,
                          float[] flatUv1s,
+                         float[] flatLightUvs,
+                         float[] flatMidBlocks,
                          float[] flatNormals,
                          float[] flatColors,
                          int[] quadFlags) {
@@ -140,8 +159,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         enqueue(new BulkQuadBatch(
             null, // Bucket key resolved per quad in writer
             materialGroupKey,
-            spriteKeys, overlaySpriteKeys,
-            flatPositions, flatUv0s, flatUv1s, flatNormals, flatColors,
+            spriteKeys, overlaySpriteKeys, semantics,
+            flatPositions, flatUv0s, flatUv1s, flatLightUvs, flatMidBlocks, flatNormals, flatColors,
             quadFlags
         ));
     }
@@ -150,6 +169,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
     public void addQuad(String materialKey,
                         String spriteKey,
                         String overlaySpriteKey,
+                        QuadSemantic semantic,
                         RenderLayer renderLayer,
                         TintMode tintMode,
                         boolean doubleSided,
@@ -157,11 +177,14 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                         float[] positions,
                         float[] uv0,
                         float[] uv1,
+                        float[] lightUv,
+                        float[] midBlock,
                         float[] normal,
                         float[] colors) {
         if (materialKey == null || spriteKey == null) return;
         int quadFlags = IrFlags.encode(renderLayer, tintMode, doubleSided, emissive);
-        String bucketKey = resolveBucketKey(materialKey, spriteKey);
+        semantic = exportSemantic(semantic);
+        String bucketKey = resolveSemanticBucketKey(materialKey, spriteKey, semantic);
 
         // Colormap mode: all quads must have TEXCOORD_1; non-tinted points to reserved white slot
         if (options.colorMode() != null && options.colorMode().usesColormap()) {
@@ -181,8 +204,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         startWriterThread();
 
         enqueue(new QuadBatch(
-            materialKey, spriteKey, overlaySpriteKey, quadFlags,
-            positions, uv0, uv1, normal, colors, bucketKey
+            materialKey, spriteKey, overlaySpriteKey, semantic, quadFlags,
+            positions, uv0, uv1, lightUv, midBlock, normal, colors, bucketKey
         ));
     }
 
@@ -275,6 +298,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                             batch.positions,
                             batch.uv0,
                             batch.uv1,
+                            batch.lightUv,
+                            batch.midBlock,
                             batch.normal,
                             batch.colors
                         );
@@ -300,7 +325,12 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                         int[] flags = bulk.quadFlags();
                         for (int i = 0; i < count; i++) {
                             String spriteKey = bulk.spriteKeys().get(i);
-                            String bucketKey = resolveBucketKey(bulk.materialGroupKey(), spriteKey);
+                            QuadSemantic semantic = bulk.semantics() != null && i < bulk.semantics().size()
+                                ? exportSemantic(bulk.semantics().get(i))
+                                : QuadSemantic.NONE;
+                            String bucketKey = resolveSemanticBucketKey(
+                                bulk.materialGroupKey(), spriteKey, semantic
+                            );
                             
                             // Determine UV1 source and offset
                             float[] currentUv1 = bulk.flatUv1s();
@@ -323,6 +353,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                                 bulk.flatPositions(), i * 12,
                                 bulk.flatUv0s(), i * 8,
                                 currentUv1, currentUv1Offset,
+                                bulk.flatLightUvs(), i * 8,
+                                bulk.flatMidBlocks(), i * 16,
                                 bulk.flatNormals(), i * 3,
                                 bulk.flatColors(), i * 16
                             );
@@ -487,6 +519,24 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             asset.setVersion("2.0");
             asset.setGenerator("VoxelBridge");
             gltf.setAsset(asset);
+            gltf.setExtensionsUsed(List.of(
+                "VOXELBRIDGE_minecraft_scene",
+                "VOXELBRIDGE_minecraft_material"
+            ));
+            Map<String, Object> sceneContract = new LinkedHashMap<>();
+            sceneContract.put("version", 2);
+            sceneContract.put("minecraftVersion", "1.21.1");
+            sceneContract.put("colorUvTexCoord", 1);
+            sceneContract.put("lightUvTexCoord", 2);
+            sceneContract.put("lightUvEncoding", "normalized-minecraft-0-240");
+            sceneContract.put("midTexCoordTexCoord", 3);
+            sceneContract.put("midTexCoordSemantic", "mc_midTexCoord");
+            sceneContract.put("midBlockAttribute", "_VOXELBRIDGE_MID_BLOCK");
+            sceneContract.put("midBlockEncoding", "iris-offset-to-block-center-times-64-emission-w");
+            sceneContract.put("materialIdentityTexCoord", 4);
+            sceneContract.put("materialIdentityEncoding", "index-in-u-into-materialIdentities");
+            Map<QuadSemantic, Integer> semanticIds = buildSemanticDictionary(sceneContract);
+            gltf.setExtensions(Map.of("VOXELBRIDGE_minecraft_scene", sceneContract));
 
         Path binPath = request.outputDir().resolve(request.baseName() + ".bin");
         Path uvBinPath = request.outputDir().resolve(request.baseName() + ".uv.bin");
@@ -506,7 +556,26 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             sampler.setWrapS(10497);
             sampler.setWrapT(10497);
             samplers.add(sampler);
+            Sampler lightmapSampler = new Sampler();
+            lightmapSampler.setMagFilter(9729);
+            lightmapSampler.setMinFilter(9729);
+            lightmapSampler.setWrapS(33071);
+            lightmapSampler.setWrapT(33071);
+            samplers.add(lightmapSampler);
             gltf.setSamplers(samplers);
+
+            if (sceneLightmapRelativePath != null) {
+                Image lightmapImage = new Image();
+                lightmapImage.setUri(sceneLightmapRelativePath);
+                images.add(lightmapImage);
+                Texture lightmapTexture = new Texture();
+                lightmapTexture.setSource(images.size() - 1);
+                lightmapTexture.setSampler(1);
+                textures.add(lightmapTexture);
+                sceneContract.put("lightmapTexture", textures.size() - 1);
+                sceneContract.put("lightmapEncoding", "minecraft-light-texture-16x16");
+                sceneContract.put("lightmapColorSpace", "linear");
+            }
 
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Registering colormap textures...");
             List<Integer> colorMapIndices = registerColorMapTextures(request.outputDir(), textures, images, 0);
@@ -544,7 +613,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                                 matKey, matChunk,
                                 mappedReader, // Pass mapped reader instead of channel
                                 gltf, chunk, uvChunk,
-                                materials, meshes, nodes, textures, images, colorMapIndices
+                                materials, meshes, nodes, textures, images, colorMapIndices,
+                                semanticIds
                             );
 
                             processedMaterials++;
@@ -672,7 +742,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         List<Node> nodes,
         List<Texture> textures,
         List<Image> images,
-        List<Integer> colorMapIndices
+        List<Integer> colorMapIndices,
+        Map<QuadSemantic, Integer> semanticIds
     ) throws IOException {
         if (matChunk == null || matChunk.quadCount() == 0) return;
 
@@ -685,19 +756,30 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         float[] posArray = new float[maxVertexCount * 3];
         float[] uv0Array = new float[maxVertexCount * 2];
         float[] uv1Array = new float[maxVertexCount * 2];
+        float[] lightUvArray = new float[maxVertexCount * 2];
+        float[] midTexCoordArray = new float[maxVertexCount * 2];
+        float[] midBlockArray = new float[maxVertexCount * 4];
+        float[] normalArray = new float[maxVertexCount * 3];
         float[] colorArray = new float[maxVertexCount * 4];
         int[] indexArray = new int[maxIndexCount];
         
         int posIdx = 0;
         int uv0Idx = 0;
         int uv1Idx = 0;
+        int lightUvIdx = 0;
+        int midTexCoordIdx = 0;
+        int midBlockIdx = 0;
+        int normalIdx = 0;
         int colIdx = 0;
         int idxIdx = 0;
         
         boolean doubleSided = false;
+        boolean emissive = false;
+        RenderLayer materialRenderLayer = RenderLayer.UNKNOWN;
 
         // 64KB Page Buffer (Interleaved Data)
-        // Format: [Hash(4), Sprite(4), Overlay(4), Flags(4), Pos(48), Norm(12), Color(64), UV0(32), UV1(32)] = 204 bytes
+        // Format: [Hash(4), Sprite(4), Overlay(4), Flags(4), Pos(48), Norm(12),
+        // Color(64), UV0(32), UV1(32), LightUV(32), at_midBlock(64)] = 300 bytes
         ByteBuffer pageBuffer = ByteBuffer.allocateDirect(64 * 1024).order(ByteOrder.LITTLE_ENDIAN);
         
         int materialHashValue = matKey.hashCode();
@@ -715,7 +797,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             
             // Seek and read page from MAPPED READER
             pageBuffer.clear();
-            pageBuffer.limit(quadsInPage * 204);
+            pageBuffer.limit(quadsInPage * StreamingGeometryWriter.BYTES_PER_QUAD);
             mappedReader.read(pageOffset, pageBuffer);
             pageBuffer.flip();
             
@@ -728,8 +810,9 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 
                 // Validate Hash
                 if (materialHash != materialHashValue) {
-                    // Skip remaining 188 bytes of this quad
-                    pageBuffer.position(pageBuffer.position() + 188);
+                    pageBuffer.position(
+                        pageBuffer.position() + StreamingGeometryWriter.BYTES_PER_QUAD - 16
+                    );
                     skippedMismatches++;
                     continue;
                 }
@@ -738,8 +821,14 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 // Pos (12 floats)
                 for (int j=0; j<12; j++) posArray[posIdx++] = pageBuffer.getFloat();
                 
-                // Normal (3 floats) - Skipped as we don't currently write normals to glTF accessors
-                pageBuffer.position(pageBuffer.position() + 12); 
+                float nx = pageBuffer.getFloat();
+                float ny = pageBuffer.getFloat();
+                float nz = pageBuffer.getFloat();
+                for (int vertex = 0; vertex < 4; vertex++) {
+                    normalArray[normalIdx++] = nx;
+                    normalArray[normalIdx++] = ny;
+                    normalArray[normalIdx++] = nz;
+                }
                 
                 // Color (16 floats)
                 for (int j=0; j<16; j++) colorArray[colIdx++] = pageBuffer.getFloat();
@@ -749,6 +838,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 float[] qUv1 = new float[8];
                 for (int j=0; j<8; j++) qUv0[j] = pageBuffer.getFloat();
                 for (int j=0; j<8; j++) qUv1[j] = pageBuffer.getFloat();
+                for (int j=0; j<8; j++) lightUvArray[lightUvIdx++] = pageBuffer.getFloat();
+                for (int j=0; j<16; j++) midBlockArray[midBlockIdx++] = pageBuffer.getFloat();
                 
                 // --- ON-THE-FLY UV REMAP ---
                 if (atlasEnabled) {
@@ -781,6 +872,18 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 // Store UVs
                 for (float f : qUv0) uv0Array[uv0Idx++] = f;
                 for (float f : qUv1) uv1Array[uv1Idx++] = f;
+                float midU = 0f;
+                float midV = 0f;
+                for (int vertex = 0; vertex < 4; vertex++) {
+                    midU += qUv0[vertex * 2];
+                    midV += qUv0[vertex * 2 + 1];
+                }
+                midU *= 0.25f;
+                midV *= 0.25f;
+                for (int vertex = 0; vertex < 4; vertex++) {
+                    midTexCoordArray[midTexCoordIdx++] = midU;
+                    midTexCoordArray[midTexCoordIdx++] = midV;
+                }
                 
                 // Indices
                 indexArray[idxIdx++] = currentVertexBase;
@@ -793,6 +896,11 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 currentVertexBase += 4;
                 
                 if (IrFlags.isDoubleSided(flags)) doubleSided = true;
+                if (IrFlags.isEmissive(flags)) emissive = true;
+                RenderLayer quadLayer = IrFlags.decodeRenderLayer(flags);
+                if (renderLayerPriority(quadLayer) > renderLayerPriority(materialRenderLayer)) {
+                    materialRenderLayer = quadLayer;
+                }
             }
         }
 
@@ -811,12 +919,19 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
              posArray = Arrays.copyOf(posArray, posIdx);
              uv0Array = Arrays.copyOf(uv0Array, uv0Idx);
              uv1Array = Arrays.copyOf(uv1Array, uv1Idx);
+             lightUvArray = Arrays.copyOf(lightUvArray, lightUvIdx);
+             midTexCoordArray = Arrays.copyOf(midTexCoordArray, midTexCoordIdx);
+             midBlockArray = Arrays.copyOf(midBlockArray, midBlockIdx);
+             normalArray = Arrays.copyOf(normalArray, normalIdx);
              colorArray = Arrays.copyOf(colorArray, colIdx);
              indexArray = Arrays.copyOf(indexArray, idxIdx);
         }
 
         int finalVertexCount = posArray.length / 3;
         int finalIndexCount = indexArray.length;
+        String visualMatKey = bucketVisualMaterialKeys.getOrDefault(matKey, matKey);
+        QuadSemantic semantic = bucketSemantics.getOrDefault(matKey, QuadSemantic.NONE);
+        Integer semanticId = semanticIds.get(semantic);
 
         // Log stats
         VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s: read %d quads from %d pages, got vertices=%d, indices=%d",
@@ -849,6 +964,17 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         int posView = addView(gltf, posSlice.bufferIndex(), posSlice.byteOffset(), posArray.length * 4, 34962);
         int posAcc = addAccessor(gltf, posView, finalVertexCount, "VEC3", 5126, posMin, posMax);
 
+        MultiBinaryChunk.Slice normalSlice = chunk.writeFloatArray(normalArray, normalArray.length);
+        int normalView = addView(gltf, normalSlice.bufferIndex(), normalSlice.byteOffset(), normalArray.length * 4, 34962);
+        int normalAcc = addAccessor(gltf, normalView, finalVertexCount, "VEC3", 5126, null, null);
+
+        float[] tangentArray = computeTangents(
+            posArray, uv0Array, normalArray, indexArray
+        );
+        MultiBinaryChunk.Slice tangentSlice = chunk.writeFloatArray(tangentArray, tangentArray.length);
+        int tangentView = addView(gltf, tangentSlice.bufferIndex(), tangentSlice.byteOffset(), tangentArray.length * 4, 34962);
+        int tangentAcc = addAccessor(gltf, tangentView, finalVertexCount, "VEC4", 5126, null, null);
+
         // Check for potential integer overflow
         if (posSlice.byteOffset() < 0) {
             VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: position byteOffset=%d",
@@ -864,18 +990,62 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 matKey, uv0Slice.byteOffset()));
         }
 
-        int uv1Acc = -1;
-        boolean hasUV1 = false;
-        for (float f : uv1Array) {
-            if (f != 0) {
-                hasUV1 = true;
-                break;
-            }
+        // Keep TEXCOORD_n contiguous. Several glTF consumers, including Blender,
+        // stop discovering UV sets at the first missing index.
+        MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(uv1Array, uv1Array.length);
+        int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), uv1Array.length * 4, 34962);
+        int uv1Acc = addAccessor(gltf, uv1View, finalVertexCount, "VEC2", 5126, null, null);
+
+        // glTF custom vertex attributes are legal, but some importers associate
+        // multiple custom accessors through an unordered name collection. Encode
+        // the VEC2 streams as ordinary, otherwise unused texture-coordinate sets.
+        // Light values are normalized so the stream remains conventional UV data.
+        float[] encodedLightUvArray = new float[lightUvArray.length];
+        for (int i = 0; i < lightUvArray.length; i++) {
+            encodedLightUvArray[i] = Math.max(0.0f, Math.min(1.0f, lightUvArray[i] / 240.0f));
         }
-        if (hasUV1) {
-            MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(uv1Array, uv1Array.length);
-            int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), uv1Array.length * 4, 34962);
-            uv1Acc = addAccessor(gltf, uv1View, finalVertexCount, "VEC2", 5126, null, null);
+
+        MultiBinaryChunk.Slice lightUvSlice =
+            uvChunk.writeFloatArray(encodedLightUvArray, encodedLightUvArray.length);
+        int lightUvView = addView(
+            gltf, lightUvSlice.bufferIndex(), lightUvSlice.byteOffset(),
+            encodedLightUvArray.length * 4, 34962
+        );
+        int lightUvAcc = addAccessor(gltf, lightUvView, finalVertexCount, "VEC2", 5126, null, null);
+
+        MultiBinaryChunk.Slice midTexCoordSlice =
+            uvChunk.writeFloatArray(midTexCoordArray, midTexCoordArray.length);
+        int midTexCoordView = addView(
+            gltf, midTexCoordSlice.bufferIndex(), midTexCoordSlice.byteOffset(),
+            midTexCoordArray.length * 4, 34962
+        );
+        int midTexCoordAcc =
+            addAccessor(gltf, midTexCoordView, finalVertexCount, "VEC2", 5126, null, null);
+
+        MultiBinaryChunk.Slice midBlockSlice =
+            chunk.writeFloatArray(midBlockArray, midBlockArray.length);
+        int midBlockView = addView(
+            gltf, midBlockSlice.bufferIndex(), midBlockSlice.byteOffset(),
+            midBlockArray.length * 4, 34962
+        );
+        int midBlockAcc =
+            addAccessor(gltf, midBlockView, finalVertexCount, "VEC4", 5126, null, null);
+
+        int semanticIdAcc = -1;
+        if (semanticId != null) {
+            float[] semanticIdArray = new float[finalVertexCount * 2];
+            for (int i = 0; i < finalVertexCount; i++) {
+                semanticIdArray[i * 2] = semanticId;
+                semanticIdArray[i * 2 + 1] = 0.0f;
+            }
+            MultiBinaryChunk.Slice semanticIdSlice =
+                uvChunk.writeFloatArray(semanticIdArray, semanticIdArray.length);
+            int semanticIdView = addView(
+                gltf, semanticIdSlice.bufferIndex(), semanticIdSlice.byteOffset(),
+                semanticIdArray.length * 4, 34962
+            );
+            semanticIdAcc =
+                addAccessor(gltf, semanticIdView, finalVertexCount, "VEC2", 5126, null, null);
         }
 
         MultiBinaryChunk.Slice colorSlice = chunk.writeFloatArray(colorArray, colorArray.length);
@@ -887,7 +1057,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         int idxAcc = addAccessor(gltf, idxView, finalIndexCount, "SCALAR", 5125, null, null);
 
         // material
-        String sampleSprite = pickPrimarySprite(matKey, matChunk.usedSprites());
+        String sampleSprite = pickPrimarySprite(visualMatKey, matChunk.usedSprites());
         if (sampleSprite == null || !state.getMaterialPaths().containsKey(sampleSprite)) {
             if (state.getMaterialPaths().containsKey("voxelbridge:transparent")) {
                 VoxelBridgeLogger.warn(LogModule.TEXTURE, String.format(
@@ -895,7 +1065,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                     matKey, sampleSprite));
                 sampleSprite = "voxelbridge:transparent";
             } else {
-                throw new IOException("No valid texture path for material " + matKey + " (picked=" + sampleSprite + ")");
+                throw new IOException("No valid texture path for material " + visualMatKey + " (picked=" + sampleSprite + ")");
             }
         }
         VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
@@ -904,7 +1074,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         int textureIndex = textureRegistry.ensureSpriteTexture(sampleSprite, textures, images);
 
         Material material = new Material();
-        material.setName(matKey);
+        material.setName(visualMatKey);
         MaterialPbrMetallicRoughness pbr = new MaterialPbrMetallicRoughness();
         TextureInfo texInfo = new TextureInfo();
         texInfo.setIndex(textureIndex);
@@ -912,15 +1082,50 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         pbr.setMetallicFactor(0.0f);
         pbr.setRoughnessFactor(1.0f);
         material.setPbrMetallicRoughness(pbr);
+        switch (materialRenderLayer) {
+            case CUTOUT -> {
+                material.setAlphaMode("MASK");
+                material.setAlphaCutoff(0.1f);
+            }
+            case TRANSLUCENT -> material.setAlphaMode("BLEND");
+            default -> material.setAlphaMode("OPAQUE");
+        }
+        if (emissive) {
+            material.setEmissiveFactor(new float[] {1.0f, 1.0f, 1.0f});
+        }
         boolean forceDoubleSided = com.voxelbridge.config.ExportRuntimeConfig.isExportDoubleSidedEnabled();
         material.setDoubleSided(forceDoubleSided || doubleSided);
 
         Map<String, Object> extras = new HashMap<>();
+        extras.put("voxelbridge:renderLayer", materialRenderLayer.name().toLowerCase(Locale.ROOT));
+        extras.put("voxelbridge:emissive", emissive);
+        if (semanticId != null) {
+            extras.put("voxelbridge:materialIdentity", semanticId);
+            for (Map.Entry<String, Object> entry : semanticMap(semantic).entrySet()) {
+                extras.put("voxelbridge:" + entry.getKey(), entry.getValue());
+            }
+        }
         if (!colorMapIndices.isEmpty()) {
             extras.put("voxelbridge:colormapTextures", colorMapIndices);
             extras.put("voxelbridge:colormapUV", 1);
         }
         if (!extras.isEmpty()) material.setExtras(extras);
+        Map<String, Object> minecraftMaterial = new LinkedHashMap<>();
+        minecraftMaterial.put("renderLayer", materialRenderLayer.name().toLowerCase(Locale.ROOT));
+        minecraftMaterial.put("emissive", emissive);
+        if (semanticId != null) {
+            minecraftMaterial.put("materialIdentity", semanticId);
+            minecraftMaterial.putAll(semanticMap(semantic));
+            minecraftMaterial.put("identityEncoding", "voxelbridge-scene-material-identity");
+        }
+        String baseTexturePath = state.getMaterialPaths().get(sampleSprite);
+        addLabPbrTexture(
+            minecraftMaterial, "normalTexture", baseTexturePath, "n", textures, images
+        );
+        addLabPbrTexture(
+            minecraftMaterial, "specularTexture", baseTexturePath, "s", textures, images
+        );
+        material.setExtensions(Map.of("VOXELBRIDGE_minecraft_material", minecraftMaterial));
         materials.add(material);
         int matIndex = materials.size() - 1;
 
@@ -928,25 +1133,240 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         MeshPrimitive prim = new MeshPrimitive();
         Map<String, Integer> attrs = new LinkedHashMap<>();
         attrs.put("POSITION", posAcc);
+        attrs.put("NORMAL", normalAcc);
+        attrs.put("TANGENT", tangentAcc);
         attrs.put("TEXCOORD_0", uv0Acc);
-        if (hasUV1) {
-            attrs.put("TEXCOORD_1", uv1Acc);
-        }
+        attrs.put("TEXCOORD_1", uv1Acc);
+        attrs.put("TEXCOORD_2", lightUvAcc);
+        attrs.put("TEXCOORD_3", midTexCoordAcc);
         attrs.put("COLOR_0", colorAcc);
+        attrs.put("_VOXELBRIDGE_MID_BLOCK", midBlockAcc);
+        if (semanticIdAcc >= 0) {
+            attrs.put("TEXCOORD_4", semanticIdAcc);
+        }
         prim.setAttributes(attrs);
         prim.setIndices(idxAcc);
         prim.setMaterial(matIndex);
         prim.setMode(4);
+        if (semanticId != null) {
+            prim.setExtensions(Map.of(
+                "VOXELBRIDGE_minecraft_material",
+                Map.of("materialIdentity", semanticId)
+            ));
+        }
 
         Mesh mesh = new Mesh();
-        mesh.setName(matKey);
+        mesh.setName(visualMatKey);
         mesh.setPrimitives(Collections.singletonList(prim));
         meshes.add(mesh);
 
         Node node = new Node();
-        node.setName(matKey);
+        node.setName(visualMatKey);
         node.setMesh(meshes.size() - 1);
         nodes.add(node);
+    }
+
+    private static int renderLayerPriority(RenderLayer layer) {
+        return switch (layer) {
+            case TRANSLUCENT -> 3;
+            case CUTOUT -> 2;
+            case SOLID -> 1;
+            case UNKNOWN -> 0;
+        };
+    }
+
+    private Map<QuadSemantic, Integer> buildSemanticDictionary(
+        Map<String, Object> sceneContract
+    ) {
+        List<QuadSemantic> identities = bucketSemantics.values().stream()
+            .filter(Objects::nonNull)
+            .filter(semantic -> !semantic.isEmpty())
+            .distinct()
+            .sorted(Comparator.comparing(QuadSemantic::stableKey))
+            .toList();
+        Map<QuadSemantic, Integer> ids = new HashMap<>();
+        List<Map<String, Object>> encoded = new ArrayList<>(identities.size());
+        for (int index = 0; index < identities.size(); index++) {
+            QuadSemantic semantic = identities.get(index);
+            ids.put(semantic, index);
+            Map<String, Object> entry = semanticMap(semantic);
+            entry.put("id", index);
+            encoded.add(entry);
+        }
+        sceneContract.put("materialIdentities", encoded);
+        sceneContract.put("propertyDomains", Map.of(
+            "block.properties", List.of("blockId", "blockState"),
+            "entity.properties", List.of("entityType"),
+            "item.properties", List.of("itemId")
+        ));
+        return ids;
+    }
+
+    private static Map<String, Object> semanticMap(QuadSemantic semantic) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        putIfPresent(result, "objectClass", semantic.objectClass());
+        putIfPresent(result, "materialKey", semantic.materialKey());
+        putIfPresent(result, "blockId", semantic.blockId());
+        putIfPresent(result, "blockState", semantic.blockState());
+        putIfPresent(result, "entityType", semantic.entityType());
+        putIfPresent(result, "blockEntityId", semantic.blockEntityId());
+        putIfPresent(result, "itemId", semantic.itemId());
+        return result;
+    }
+
+    private static void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    /**
+     * Build glTF tangents from the final positions and atlas-remapped UVs.
+     *
+     * <p>The XYZ components are orthogonalized against NORMAL. W is the
+     * bitangent handedness expected by glTF and Iris' at_tangent input.</p>
+     */
+    static float[] computeTangents(
+        float[] positions,
+        float[] uv0,
+        float[] normals,
+        int[] indices
+    ) {
+        int vertexCount = positions.length / 3;
+        float[] tangentSums = new float[vertexCount * 3];
+        float[] bitangentSums = new float[vertexCount * 3];
+        for (int index = 0; index + 2 < indices.length; index += 3) {
+            int i0 = indices[index];
+            int i1 = indices[index + 1];
+            int i2 = indices[index + 2];
+            if (i0 < 0 || i1 < 0 || i2 < 0
+                    || i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount) {
+                continue;
+            }
+            int p0 = i0 * 3, p1 = i1 * 3, p2 = i2 * 3;
+            int t0 = i0 * 2, t1 = i1 * 2, t2 = i2 * 2;
+            float e1x = positions[p1] - positions[p0];
+            float e1y = positions[p1 + 1] - positions[p0 + 1];
+            float e1z = positions[p1 + 2] - positions[p0 + 2];
+            float e2x = positions[p2] - positions[p0];
+            float e2y = positions[p2 + 1] - positions[p0 + 1];
+            float e2z = positions[p2 + 2] - positions[p0 + 2];
+            float du1 = uv0[t1] - uv0[t0];
+            float dv1 = uv0[t1 + 1] - uv0[t0 + 1];
+            float du2 = uv0[t2] - uv0[t0];
+            float dv2 = uv0[t2 + 1] - uv0[t0 + 1];
+            float determinant = du1 * dv2 - dv1 * du2;
+            if (!Float.isFinite(determinant) || Math.abs(determinant) < 1.0e-12f) {
+                continue;
+            }
+            float reciprocal = 1.0f / determinant;
+            float tx = (e1x * dv2 - e2x * dv1) * reciprocal;
+            float ty = (e1y * dv2 - e2y * dv1) * reciprocal;
+            float tz = (e1z * dv2 - e2z * dv1) * reciprocal;
+            float bx = (e2x * du1 - e1x * du2) * reciprocal;
+            float by = (e2y * du1 - e1y * du2) * reciprocal;
+            float bz = (e2z * du1 - e1z * du2) * reciprocal;
+            for (int corner = 0; corner < 3; corner++) {
+                int vertex = corner == 0 ? i0 : (corner == 1 ? i1 : i2);
+                int base = vertex * 3;
+                tangentSums[base] += tx;
+                tangentSums[base + 1] += ty;
+                tangentSums[base + 2] += tz;
+                bitangentSums[base] += bx;
+                bitangentSums[base + 1] += by;
+                bitangentSums[base + 2] += bz;
+            }
+        }
+
+        float[] result = new float[vertexCount * 4];
+        for (int vertex = 0; vertex < vertexCount; vertex++) {
+            int normalBase = vertex * 3;
+            float nx = normals[normalBase];
+            float ny = normals[normalBase + 1];
+            float nz = normals[normalBase + 2];
+            float normalLength = length(nx, ny, nz);
+            if (!(normalLength > 1.0e-12f)) {
+                nx = 0f; ny = 1f; nz = 0f;
+            } else {
+                nx /= normalLength; ny /= normalLength; nz /= normalLength;
+            }
+
+            float tx = tangentSums[normalBase];
+            float ty = tangentSums[normalBase + 1];
+            float tz = tangentSums[normalBase + 2];
+            float normalDotTangent = nx * tx + ny * ty + nz * tz;
+            tx -= nx * normalDotTangent;
+            ty -= ny * normalDotTangent;
+            tz -= nz * normalDotTangent;
+            float tangentLength = length(tx, ty, tz);
+            if (!(tangentLength > 1.0e-12f)) {
+                // Choose the least-parallel cardinal axis for a stable fallback.
+                float ax = Math.abs(nx) < 0.8f ? 1f : 0f;
+                float ay = Math.abs(nx) < 0.8f ? 0f : 1f;
+                float az = 0f;
+                float axisDotNormal = ax * nx + ay * ny + az * nz;
+                tx = ax - nx * axisDotNormal;
+                ty = ay - ny * axisDotNormal;
+                tz = az - nz * axisDotNormal;
+                tangentLength = length(tx, ty, tz);
+            }
+            tx /= tangentLength;
+            ty /= tangentLength;
+            tz /= tangentLength;
+
+            float bx = bitangentSums[normalBase];
+            float by = bitangentSums[normalBase + 1];
+            float bz = bitangentSums[normalBase + 2];
+            float crossX = ny * tz - nz * ty;
+            float crossY = nz * tx - nx * tz;
+            float crossZ = nx * ty - ny * tx;
+            float handedness = crossX * bx + crossY * by + crossZ * bz < 0f
+                ? -1f : 1f;
+            int output = vertex * 4;
+            result[output] = tx;
+            result[output + 1] = ty;
+            result[output + 2] = tz;
+            result[output + 3] = handedness;
+        }
+        return result;
+    }
+
+    private static float length(float x, float y, float z) {
+        return (float) Math.sqrt(x * x + y * y + z * z);
+    }
+
+    private void addLabPbrTexture(
+        Map<String, Object> extension,
+        String field,
+        String basePath,
+        String suffix,
+        List<Texture> textures,
+        List<Image> images
+    ) {
+        String relativePath = companionTexturePath(basePath, suffix);
+        if (relativePath == null || !Files.isRegularFile(outputDir.resolve(relativePath))) {
+            return;
+        }
+        extension.put(field, textureRegistry.ensurePathTexture(relativePath, textures, images));
+    }
+
+    private static String companionTexturePath(String basePath, String suffix) {
+        if (basePath == null || !basePath.toLowerCase(Locale.ROOT).endsWith(".png")) {
+            return null;
+        }
+        int slash = Math.max(basePath.lastIndexOf('/'), basePath.lastIndexOf('\\'));
+        String directory = slash >= 0 ? basePath.substring(0, slash + 1) : "";
+        String file = slash >= 0 ? basePath.substring(slash + 1) : basePath;
+        int extension = file.length() - 4;
+        int udimSeparator = file.lastIndexOf('_', extension - 1);
+        if (udimSeparator >= 0) {
+            String tail = file.substring(udimSeparator + 1, extension);
+            if (tail.length() == 4 && tail.chars().allMatch(Character::isDigit)) {
+                return directory + file.substring(0, udimSeparator + 1)
+                    + suffix + "_" + tail + ".png";
+            }
+        }
+        return directory + file.substring(0, extension) + "_" + suffix + ".png";
     }
 
     /**
@@ -1111,6 +1531,34 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         }
 
         return materialKey;
+    }
+
+    private QuadSemantic exportSemantic(QuadSemantic semantic) {
+        if (com.voxelbridge.config.ExportRuntimeConfig.getMaterialIdentityMode()
+                == com.voxelbridge.config.ExportRuntimeConfig.MaterialIdentityMode.NONE) {
+            return QuadSemantic.NONE;
+        }
+        return semantic != null ? semantic : QuadSemantic.NONE;
+    }
+
+    private String resolveSemanticBucketKey(
+        String materialKey,
+        String spriteKey,
+        QuadSemantic semantic
+    ) {
+        String visualBucketKey = resolveBucketKey(materialKey, spriteKey);
+        QuadSemantic exported = exportSemantic(semantic);
+        if (exported.isEmpty()) {
+            bucketVisualMaterialKeys.putIfAbsent(visualBucketKey, visualBucketKey);
+            return visualBucketKey;
+        }
+        int internalSemanticId = internalSemanticIds.computeIfAbsent(
+            exported, ignored -> nextInternalSemanticId.getAndIncrement()
+        );
+        String bucketKey = visualBucketKey + '\u001e' + internalSemanticId;
+        bucketVisualMaterialKeys.putIfAbsent(bucketKey, visualBucketKey);
+        bucketSemantics.putIfAbsent(bucketKey, exported);
+        return bucketKey;
     }
 
     private String resolveAnimatedBucketKey(String materialKey, String animName) {

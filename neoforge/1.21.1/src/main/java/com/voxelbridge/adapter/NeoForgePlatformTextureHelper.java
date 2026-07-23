@@ -58,6 +58,29 @@ public class NeoForgePlatformTextureHelper implements PlatformTextureHelper {
     }
 
     @Override
+    public Optional<NativeImage> captureLightmap() {
+        try {
+            var lightTexture = net.minecraft.client.Minecraft.getInstance()
+                    .gameRenderer.lightTexture();
+            NativeImage source =
+                    ((com.voxelbridge.mixin.LightTextureAccessor) (Object) lightTexture)
+                            .voxelbridge$getLightPixels();
+            if (source == null) {
+                return Optional.empty();
+            }
+            NativeImage copy = new NativeImage(source.format(), source.getWidth(), source.getHeight(), false);
+            copy.copyFrom(source);
+            return Optional.of(copy);
+        } catch (RuntimeException exception) {
+            VoxelBridgeLogger.warn(
+                    LogModule.TEXTURE,
+                    "Failed to capture Minecraft lightmap: " + exception.getMessage()
+            );
+            return Optional.empty();
+        }
+    }
+
+    @Override
     public void copyNativeImage(NativeImage src, NativeImage dst) {
         if (src != null && dst != null) {
             dst.copyFrom(src);

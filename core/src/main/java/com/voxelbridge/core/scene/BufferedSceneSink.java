@@ -1,6 +1,7 @@
 package com.voxelbridge.core.scene;
 
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.QuadSemantic;
 import com.voxelbridge.core.ir.RenderLayer;
 import com.voxelbridge.core.ir.TintMode;
 
@@ -22,6 +23,7 @@ public final class BufferedSceneSink implements IrSink {
     public void addQuad(String materialKey,
                         String spriteKey,
                         String overlaySpriteKey,
+                        QuadSemantic semantic,
                         RenderLayer renderLayer,
                         TintMode tintMode,
                         boolean doubleSided,
@@ -29,18 +31,23 @@ public final class BufferedSceneSink implements IrSink {
                         float[] positions,
                         float[] uv0,
                         float[] uv1,
+                        float[] lightUv,
+                        float[] midBlock,
                         float[] normal,
                         float[] colors) {
         buffer.add(new QuadRecord(
             materialKey,
             spriteKey,
             overlaySpriteKey,
+            semantic,
             renderLayer,
             tintMode,
             emissive,
             positions,
             uv0,
             uv1,
+            lightUv,
+            midBlock,
             normal,
             colors,
             doubleSided
@@ -97,12 +104,15 @@ public final class BufferedSceneSink implements IrSink {
         String materialGroupKey,
         String spriteKey,
         String overlaySpriteKey,
+        QuadSemantic semantic,
         RenderLayer renderLayer,
         TintMode tintMode,
         boolean emissive,
         float[] positions,
         float[] uv0,
         float[] uv1,
+        float[] lightUv,
+        float[] midBlock,
         float[] normal,
         float[] colors,
         boolean doubleSided

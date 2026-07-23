@@ -39,10 +39,43 @@ public final class NeoForgeConfigScreen {
         ConfigEntryBuilder entries = builder.entryBuilder();
 
         buildGeneralCategory(builder, entries);
+        buildSceneDataCategory(builder, entries);
         buildAtlasCategory(builder, entries);
         buildPerformanceCategory(builder, entries);
 
         return builder.build();
+    }
+
+    private static void buildSceneDataCategory(ConfigBuilder builder, ConfigEntryBuilder entries) {
+        ConfigCategory sceneData = builder.getOrCreateCategory(
+                Component.translatable("config.voxelbridge.category.sceneData"));
+
+        sceneData.addEntry(entries.startBooleanToggle(
+                        Component.translatable("config.voxelbridge.exportLightmap"),
+                        ExportRuntimeConfig.isLightmapExportEnabled())
+                .setDefaultValue(true)
+                .setTooltip(Component.translatable("config.voxelbridge.exportLightmap.tooltip"))
+                .setSaveConsumer(ExportRuntimeConfig::setLightmapExportEnabled)
+                .build());
+
+        sceneData.addEntry(entries.startEnumSelector(
+                        Component.translatable("config.voxelbridge.materialIdentity"),
+                        ExportRuntimeConfig.MaterialIdentityMode.class,
+                        ExportRuntimeConfig.getMaterialIdentityMode())
+                .setDefaultValue(ExportRuntimeConfig.MaterialIdentityMode.REGISTRY)
+                .setTooltip(Component.translatable("config.voxelbridge.materialIdentity.tooltip"))
+                .setEnumNameProvider(value -> {
+                    ExportRuntimeConfig.MaterialIdentityMode mode =
+                        (ExportRuntimeConfig.MaterialIdentityMode) value;
+                    return switch (mode) {
+                        case NONE -> Component.translatable(
+                            "config.voxelbridge.materialIdentity.none");
+                        case REGISTRY -> Component.translatable(
+                            "config.voxelbridge.materialIdentity.registry");
+                    };
+                })
+                .setSaveConsumer(ExportRuntimeConfig::setMaterialIdentityMode)
+                .build());
     }
 
     private static void buildGeneralCategory(ConfigBuilder builder, ConfigEntryBuilder entries) {

@@ -8,6 +8,7 @@
     "CompositeStateAccessor",
     "EmptyTextureStateShardAccessor",
     "HttpTextureAccessor",
+    "LightTextureAccessor",
     "MapInstanceAccessor",
     "MapInstanceInvoker",
     "MapRendererAccessor",

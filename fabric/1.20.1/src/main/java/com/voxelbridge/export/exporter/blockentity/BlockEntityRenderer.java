@@ -329,6 +329,7 @@ public final class BlockEntityRenderer {
                 uv0,
                 blockEntity,
                 materialGroupKey,
+                com.voxelbridge.export.semantic.MinecraftQuadSemantic.blockEntity(blockEntity),
                 this::resolveTexture,
                 this::writeUvs,
                 (tracker, quadPositions, faceNormal) -> tracker.applyOffset(quadPositions, faceNormal, approximateDirection(faceNormal)),

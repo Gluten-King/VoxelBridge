@@ -21,16 +21,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * - When a bucket fills (64KB), it is flushed to the temp file as a Page.
  * - This ensures high write throughput (append-only) and fast read-back (bulk reads).
  * 
- * Page Format (Interleaved, 204 bytes per quad):
+ * Page Format (Interleaved, 300 bytes per quad):
  * - Geometry (140 bytes): [Hash(4), Sprite(4), Overlay(4), Flags(4), Pos(48), Norm(12), Color(64)]
- * - UV (64 bytes): [UV0(32), UV1(32)]
+ * - Semantic vertex data (160 bytes): [UV0(32), UV1(32), Minecraft light UV(32), at_midBlock(64)]
  */
 final class StreamingGeometryWriter implements AutoCloseable {
     
     // Page size: 64KB (approx 321 quads).
     // Small enough to keep memory low with many materials, large enough for efficient IO.
     private static final int PAGE_SIZE = 64 * 1024; 
-    private static final int BYTES_PER_QUAD = 204; // 140 geo + 64 uv
+    static final int BYTES_PER_QUAD = 300; // 140 geo + 96 uv/light + 64 at_midBlock
 
     private final FileChannel tempChannel;
     private final SpriteIndex spriteIndex;
@@ -80,6 +80,8 @@ final class StreamingGeometryWriter implements AutoCloseable {
         float[] flatPositions, int posOffset,
         float[] flatUv0, int uv0Offset,
         float[] flatUv1, int uv1Offset,
+        float[] flatLightUv, int lightUvOffset,
+        float[] flatMidBlock, int midBlockOffset,
         float[] flatNormal, int normOffset,
         float[] flatColors, int colOffset
     ) throws IOException {
@@ -132,6 +134,16 @@ final class StreamingGeometryWriter implements AutoCloseable {
         } else {
             for (int i = 0; i < 8; i++) buf.putFloat(0f);
         }
+        if (flatLightUv != null) {
+            for (int i = 0; i < 8; i++) buf.putFloat(flatLightUv[lightUvOffset + i]);
+        } else {
+            for (int i = 0; i < 8; i++) buf.putFloat(240f);
+        }
+        if (flatMidBlock != null) {
+            for (int i = 0; i < 16; i++) buf.putFloat(flatMidBlock[midBlockOffset + i]);
+        } else {
+            for (int i = 0; i < 16; i++) buf.putFloat(0f);
+        }
 
         // Update bucket tracking
         bucket.quadCount++;
@@ -183,6 +195,8 @@ final class StreamingGeometryWriter implements AutoCloseable {
         float[] positions,
         float[] uv0,
         float[] uv1,
+        float[] lightUv,
+        float[] midBlock,
         float[] normal,
         float[] colors
     ) throws IOException {
@@ -192,6 +206,8 @@ final class StreamingGeometryWriter implements AutoCloseable {
             positions, 0,
             uv0, 0,
             uv1, 0,
+            lightUv, 0,
+            midBlock, 0,
             normal, 0,
             colors, 0
         );

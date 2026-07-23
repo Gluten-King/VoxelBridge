@@ -7,6 +7,7 @@ public interface IrSink {
     void addQuad(String materialKey,
                  String spriteKey,
                  String overlaySpriteKey,
+                 QuadSemantic semantic,
                  RenderLayer renderLayer,
                  TintMode tintMode,
                  boolean doubleSided,
@@ -14,6 +15,8 @@ public interface IrSink {
                  float[] positions,
                  float[] uv0,
                  float[] uv1,
+                 float[] lightUv,
+                 float[] midBlock,
                  float[] normal,
                  float[] colors);
 

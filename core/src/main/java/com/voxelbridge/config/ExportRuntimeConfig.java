@@ -25,6 +25,21 @@ public final class ExportRuntimeConfig {
         }
     }
 
+    public enum MaterialIdentityMode {
+        NONE("Do not export Minecraft material identity"),
+        REGISTRY("Export BlockState and stable block, entity, block entity, and item keys");
+
+        private final String description;
+
+        MaterialIdentityMode(String description) {
+            this.description = description;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+    }
+
     public enum AtlasSize {
         SIZE_128(128, "128x128 (Tiny)"),
         SIZE_256(256, "256x256 (Small)"),
@@ -78,6 +93,8 @@ public final class ExportRuntimeConfig {
     private static boolean exportDoubleSidedEnabled = true;
     // Cull nonsolid faces fully covered by solid neighbors.
     private static boolean nonsolidCullingEnabled = true;
+    private static boolean lightmapExportEnabled = true;
+    private static MaterialIdentityMode materialIdentityMode = MaterialIdentityMode.REGISTRY;
     private static Runnable changeListener;
 
     private static void notifyChanged() {
@@ -238,6 +255,28 @@ public final class ExportRuntimeConfig {
         return nonsolidCullingEnabled;
     }
 
+    public static boolean isLightmapExportEnabled() {
+        return lightmapExportEnabled;
+    }
+
+    public static void setLightmapExportEnabled(boolean enabled) {
+        if (lightmapExportEnabled != enabled) {
+            lightmapExportEnabled = enabled;
+            notifyChanged();
+        }
+    }
+
+    public static MaterialIdentityMode getMaterialIdentityMode() {
+        return materialIdentityMode;
+    }
+
+    public static void setMaterialIdentityMode(MaterialIdentityMode mode) {
+        if (mode != null && materialIdentityMode != mode) {
+            materialIdentityMode = mode;
+            notifyChanged();
+        }
+    }
+
     public static void setNonsolidCullingEnabled(boolean enabled) {
         if (nonsolidCullingEnabled != enabled) {
             nonsolidCullingEnabled = enabled;
@@ -259,6 +298,8 @@ public final class ExportRuntimeConfig {
         loggingEnabled = false;
         exportDoubleSidedEnabled = true;
         nonsolidCullingEnabled = true;
+        lightmapExportEnabled = true;
+        materialIdentityMode = MaterialIdentityMode.REGISTRY;
         notifyChanged();
     }
 
