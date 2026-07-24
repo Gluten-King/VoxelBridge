@@ -177,7 +177,11 @@ public final class CapturedQuadProcessor {
             semantic.blockState(),
             semantic.entityType(),
             semantic.blockEntityId(),
-            null
+            null,
+            semantic.fluidId(),
+            semantic.fluidState(),
+            semantic.fluid(),
+            semantic.irisRenderType()
         );
     }
 

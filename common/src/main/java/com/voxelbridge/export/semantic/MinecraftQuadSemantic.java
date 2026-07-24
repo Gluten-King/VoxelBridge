@@ -10,6 +10,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
+import net.minecraft.world.level.material.FluidState;
 
 import java.lang.reflect.Method;
 import java.util.Comparator;
@@ -31,7 +32,29 @@ public final class MinecraftQuadSemantic {
             canonicalBlockState(state),
             null,
             null,
-            null
+            null,
+            null,
+            null,
+            false,
+            -1
+        );
+    }
+
+    public static QuadSemantic fluid(BlockState hostState, FluidState fluidState) {
+        String blockId = blockId(hostState);
+        String fluidId = fluidId(fluidState);
+        return new QuadSemantic(
+            "terrain",
+            blockId != null ? blockId : fluidId,
+            blockId,
+            canonicalBlockState(hostState),
+            null,
+            null,
+            null,
+            fluidId,
+            canonicalFluidState(fluidState),
+            true,
+            1
         );
     }
 
@@ -45,7 +68,11 @@ public final class MinecraftQuadSemantic {
             null,
             entityType,
             null,
-            itemId
+            itemId,
+            null,
+            null,
+            false,
+            -1
         );
     }
 
@@ -61,7 +88,11 @@ public final class MinecraftQuadSemantic {
             canonicalBlockState(state),
             null,
             blockEntityId,
-            null
+            null,
+            null,
+            null,
+            false,
+            -1
         );
     }
 
@@ -118,11 +149,45 @@ public final class MinecraftQuadSemantic {
         return result.append(']').toString();
     }
 
+    public static String canonicalFluidState(FluidState state) {
+        String id = fluidId(state);
+        if (id == null) {
+            return null;
+        }
+        if (state.getValues().isEmpty()) {
+            return id;
+        }
+        StringBuilder result = new StringBuilder(id).append('[');
+        state.getValues().entrySet().stream()
+            .sorted(Comparator.comparing(entry -> entry.getKey().getName()))
+            .forEachOrdered(entry -> appendProperty(result, entry));
+        return result.append(']').toString();
+    }
+
     private static String blockId(BlockState state) {
         if (state == null) {
             return null;
         }
         return String.valueOf(BuiltInRegistries.BLOCK.getKey(state.getBlock()));
+    }
+
+    private static String fluidId(FluidState state) {
+        if (state == null || state.isEmpty()) {
+            return null;
+        }
+        return String.valueOf(BuiltInRegistries.FLUID.getKey(state.getType()));
+    }
+
+    private static void appendProperty(
+        StringBuilder result,
+        Map.Entry<Property<?>, Comparable<?>> entry
+    ) {
+        if (result.charAt(result.length() - 1) != '[') {
+            result.append(',');
+        }
+        result.append(entry.getKey().getName())
+            .append('=')
+            .append(propertyValue(entry));
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

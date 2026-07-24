@@ -210,6 +210,9 @@ public final class SemanticGltfAnalyzer {
                             throw new IOException(
                                     "primitive materialIdentity is outside materialIdentities");
                         }
+                        if (voxelBridgeSceneVersion >= 3) {
+                            validateFluidIdentity(identities.get(identityId));
+                        }
                         validateMaterialIdentity(
                                 materialIdentity, identityId, standardSemanticTexCoords);
                         if ("terrain".equals(
@@ -360,7 +363,8 @@ public final class SemanticGltfAnalyzer {
     }
 
     private static void validateSemanticTexCoordContract(JsonNode scene) throws IOException {
-        if (scene.path("version").asInt(-1) != 2
+        int version = scene.path("version").asInt(-1);
+        if ((version != 2 && version != 3)
                 || scene.path("colorUvTexCoord").asInt(-1) != 1
                 || scene.path("lightUvTexCoord").asInt(-1) != 2
                 || scene.path("midTexCoordTexCoord").asInt(-1) != 3
@@ -370,7 +374,30 @@ public final class SemanticGltfAnalyzer {
                 || !"index-in-u-into-materialIdentities".equals(
                         scene.path("materialIdentityEncoding").asText())) {
             throw new IOException(
-                    "VOXELBRIDGE_minecraft_scene v2 has an unsupported TEXCOORD layout");
+                    "VOXELBRIDGE_minecraft_scene has an unsupported TEXCOORD layout");
+        }
+    }
+
+    private static void validateFluidIdentity(JsonNode identity) throws IOException {
+        boolean fluid = identity.path("isFluid").asBoolean(false);
+        boolean hasFluidFields = identity.has("fluidId")
+                || identity.has("fluidState")
+                || identity.has("irisRenderType");
+        if (!fluid && hasFluidFields) {
+            throw new IOException(
+                    "non-fluid VoxelBridge identity declares fluid-only fields");
+        }
+        if (!fluid) {
+            return;
+        }
+        if (identity.path("fluidId").asText("").isBlank()
+                || identity.path("fluidState").asText("").isBlank()) {
+            throw new IOException(
+                    "fluid VoxelBridge identity requires fluidId and fluidState");
+        }
+        if (identity.path("irisRenderType").asInt(-1) != 1) {
+            throw new IOException(
+                    "fluid VoxelBridge identity must declare irisRenderType=1");
         }
     }
 

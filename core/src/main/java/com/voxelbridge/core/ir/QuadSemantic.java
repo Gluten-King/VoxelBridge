@@ -14,10 +14,17 @@ public record QuadSemantic(
     String blockState,
     String entityType,
     String blockEntityId,
-    String itemId
+    String itemId,
+    String fluidId,
+    String fluidState,
+    boolean fluid,
+    int irisRenderType
 ) {
     public static final QuadSemantic NONE =
-        new QuadSemantic(null, null, null, null, null, null, null);
+        new QuadSemantic(
+            null, null, null, null, null, null, null,
+            null, null, false, -1
+        );
 
     public QuadSemantic {
         objectClass = emptyToNull(objectClass);
@@ -27,6 +34,11 @@ public record QuadSemantic(
         entityType = emptyToNull(entityType);
         blockEntityId = emptyToNull(blockEntityId);
         itemId = emptyToNull(itemId);
+        fluidId = emptyToNull(fluidId);
+        fluidState = emptyToNull(fluidState);
+        if (!fluid) {
+            irisRenderType = -1;
+        }
     }
 
     public boolean isEmpty() {
@@ -36,7 +48,11 @@ public record QuadSemantic(
             && blockState == null
             && entityType == null
             && blockEntityId == null
-            && itemId == null;
+            && itemId == null
+            && fluidId == null
+            && fluidState == null
+            && !fluid
+            && irisRenderType < 0;
     }
 
     /**
@@ -50,7 +66,11 @@ public record QuadSemantic(
             + '\u001f' + field(blockState)
             + '\u001f' + field(entityType)
             + '\u001f' + field(blockEntityId)
-            + '\u001f' + field(itemId);
+            + '\u001f' + field(itemId)
+            + '\u001f' + field(fluidId)
+            + '\u001f' + field(fluidState)
+            + '\u001f' + fluid
+            + '\u001f' + irisRenderType;
     }
 
     private static String field(String value) {

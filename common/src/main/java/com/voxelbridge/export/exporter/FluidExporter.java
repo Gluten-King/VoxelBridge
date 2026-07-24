@@ -58,7 +58,7 @@ public final class FluidExporter {
             sceneSink, ctx, pos, sprites,
             offsetX, offsetY, offsetZ,
             regionMin, regionMax, fluidKey,
-            MinecraftQuadSemantic.terrain(state),
+            MinecraftQuadSemantic.fluid(state, fs),
             state.getLightEmission()
         );
 

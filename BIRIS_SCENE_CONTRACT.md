@@ -1,4 +1,4 @@
-# VoxelBridge Minecraft Scene Contract v2
+# VoxelBridge Minecraft Scene Contract v3
 
 This contract augments glTF 2.0 without changing the meaning of standard glTF
 attributes. Consumers that do not understand the extension can still display
@@ -17,7 +17,7 @@ Assets declare:
 
 The root `VOXELBRIDGE_minecraft_scene` object contains:
 
-- `version`: contract version, currently `2`.
+- `version`: contract version, currently `3`.
 - `minecraftVersion`: producer Minecraft version.
 - `colorUvTexCoord`: `1`.
 - `lightUvTexCoord`: `2`.
@@ -96,6 +96,18 @@ available stable fields:
 - `blockEntityId`: namespaced block entity type.
 - `itemId`: namespaced item ID when the captured source exposes an item
   (including item entities, item displays, and item frames).
+- `fluidId`: namespaced fluid registry ID for quads emitted by Minecraft's
+  liquid renderer.
+- `fluidState`: canonical full fluid state.
+- `isFluid`: explicit boolean distinguishing liquid-renderer geometry from a
+  translucent or waterlogged host block.
+- `irisRenderType`: Iris/OptiFine `mc_Entity.y`; currently `1` for fluid
+  geometry.
+
+Fluid entries retain the host `blockId` and `blockState`. This is required for
+waterlogged blocks: the host may be seagrass or a modded block while
+`fluidId` remains `minecraft:water`. Consumers must prefer the explicit fluid
+fields over substring tests on `blockState`.
 
 VoxelBridge splits its internal visual buckets by this identity before writing
 glTF primitives. Consequently a primitive and all of its vertices use one
@@ -147,7 +159,9 @@ Consumers may continue to accept v1 files, where light UV, mid-UV, and
 material identity used `_VOXELBRIDGE_LIGHT_UV`,
 `_VOXELBRIDGE_MID_TEX_COORD`, and `_VOXELBRIDGE_MATERIAL_ID`.
 
-Unknown extension fields must be ignored for forward compatibility.
+Unknown extension fields must be ignored for forward compatibility. Contract
+v3 keeps the v2 vertex layout unchanged; v2 consumers can display v3 assets
+while ignoring the added material identity fields.
 
 ## Planned compatible additions
 

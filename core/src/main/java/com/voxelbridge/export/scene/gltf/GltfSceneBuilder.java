@@ -524,7 +524,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 "VOXELBRIDGE_minecraft_material"
             ));
             Map<String, Object> sceneContract = new LinkedHashMap<>();
-            sceneContract.put("version", 2);
+            sceneContract.put("version", 3);
             sceneContract.put("minecraftVersion", "1.21.1");
             sceneContract.put("colorUvTexCoord", 1);
             sceneContract.put("lightUvTexCoord", 2);
@@ -1197,7 +1197,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         sceneContract.put("propertyDomains", Map.of(
             "block.properties", List.of("blockId", "blockState"),
             "entity.properties", List.of("entityType"),
-            "item.properties", List.of("itemId")
+            "item.properties", List.of("itemId"),
+            "fluid", List.of("fluidId", "fluidState", "isFluid", "irisRenderType")
         ));
         return ids;
     }
@@ -1211,6 +1212,12 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         putIfPresent(result, "entityType", semantic.entityType());
         putIfPresent(result, "blockEntityId", semantic.blockEntityId());
         putIfPresent(result, "itemId", semantic.itemId());
+        putIfPresent(result, "fluidId", semantic.fluidId());
+        putIfPresent(result, "fluidState", semantic.fluidState());
+        if (semantic.fluid()) {
+            result.put("isFluid", true);
+            result.put("irisRenderType", semantic.irisRenderType());
+        }
         return result;
     }
 
