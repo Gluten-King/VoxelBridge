@@ -20,3 +20,8 @@ if (file('fabric/26.1.2/mod').exists()) {
     include 'fabric:26.1.2:mod'
     project(':fabric:26.1.2:mod').projectDir = file('fabric/26.1.2/mod')
 }
+
+if (file('fabric/26.2/mod').exists()) {
+    include 'fabric:26.2:mod'
+    project(':fabric:26.2:mod').projectDir = file('fabric/26.2/mod')
+}
