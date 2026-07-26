@@ -255,8 +255,9 @@ public final class OverlayManager {
             TintMode tintMode = ctx.getColorMode() != null && ctx.getColorMode().usesColormap()
                 ? TintMode.COLORMAP
                 : TintMode.VERTEX_COLOR;
-            sceneSink.addQuad(overlayMaterialKey, overlay.spriteKey, overlay.spriteKey,
-                RenderLayer.UNKNOWN, tintMode, doubleSided, false,
+            // Grass/foliage overlays are cutout (alpha-tested), not blended translucent.
+        sceneSink.addQuad(overlayMaterialKey, overlay.spriteKey, overlay.spriteKey,
+                RenderLayer.CUTOUT, tintMode, doubleSided, false,
                 overlay.positions, overlay.uv, overlayColorData.uv1(), overlay.normal,
                 overlayColorData.colors());
         }

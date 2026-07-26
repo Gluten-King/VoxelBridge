@@ -1,5 +1,6 @@
 package com.voxelbridge.export.quad;
 
+import com.voxelbridge.core.ir.RenderLayer;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
 
@@ -14,4 +15,11 @@ public interface QuadData {
     int[] vertices();
 
     int tintIndex();
+
+    /**
+     * Terrain render layer used for glTF alphaMode (SOLID/CUTOUT/TRANSLUCENT).
+     */
+    default RenderLayer renderLayer() {
+        return RenderLayer.UNKNOWN;
+    }
 }

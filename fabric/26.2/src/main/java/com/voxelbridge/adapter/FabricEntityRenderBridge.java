@@ -19,6 +19,7 @@ public final class FabricEntityRenderBridge implements EntityRenderBridge {
     }
 
     @Override
+    @SuppressWarnings({"rawtypes", "unchecked"})
     public Object createRenderState(net.minecraft.client.renderer.entity.EntityRenderer renderer,
             Entity entity,
             float yaw,
@@ -27,6 +28,7 @@ public final class FabricEntityRenderBridge implements EntityRenderBridge {
     }
 
     @Override
+    @SuppressWarnings({"rawtypes", "unchecked"})
     public Vec3 getRenderOffset(net.minecraft.client.renderer.entity.EntityRenderer renderer,
             Entity entity,
             float partial,

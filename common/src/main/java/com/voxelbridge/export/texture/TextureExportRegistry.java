@@ -97,8 +97,8 @@ public final class TextureExportRegistry {
             }
             if (ExportRuntimeConfig.isAnimationEnabled()) {
                 AnimatedFrameSet framesForWrite = repo.getAnimation(spriteKey);
-                if (framesForWrite == null) {
-                    framesForWrite = AnimatedTextureHelper.extractAndStore(ctx, spriteKey, image, repo);
+                if (framesForWrite == null && pngKey != null) {
+                    framesForWrite = AnimatedTextureHelper.detectFromMetadata(ctx, spriteKey, pngKey, repo);
                 }
                 if (framesForWrite != null && !framesForWrite.isEmpty()) {
                     image = framesForWrite.frames().get(0);

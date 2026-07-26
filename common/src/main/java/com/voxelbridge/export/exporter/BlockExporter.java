@@ -20,9 +20,7 @@ import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -172,9 +170,8 @@ public final class BlockExporter {
         if (handledQuads != null) {
             quads = QuadDataUtil.wrapBakedQuads(handledQuads);
         } else {
-            long seed = state.is(Blocks.LILY_PAD)
-                ? GeometryUtil.computeBushSeed(pos.getX(), pos.getY(), pos.getZ())
-                : Mth.getSeed(pos.getX(), pos.getY(), pos.getZ());
+            // Same formula as the deprecated Mth.getSeed(x,y,z) (still used by vanilla for lily pads etc.).
+            long seed = GeometryUtil.computeBushSeed(pos.getX(), pos.getY(), pos.getZ());
             QuadBatch batch = com.voxelbridge.adapter.Adapters.getRender().getQuadBatch(model, state, pos, level, seed);
             quads = batch.quads();
         }
@@ -191,6 +188,13 @@ public final class BlockExporter {
             var sprite = quad.sprite();
             if (quad == null || sprite == null) continue;
             String spriteKey = com.voxelbridge.adapter.Adapters.getRender().getSpriteName(sprite);
+            // Per-block overrides (e.g. sign text baked into block/oak_sign for this pos only).
+            String overridden = ctx.resolveBlockSpriteOverride(pos.asLong(), spriteKey);
+            if (overridden != null && !overridden.equals(spriteKey)) {
+                System.err.println("[VB-Sign] sprite override " + spriteKey + " -> " + overridden
+                    + " @ " + pos.toShortString());
+                spriteKey = overridden;
+            }
             spriteKeys[i] = spriteKey;
             if (!isCtmCompact && OverlayClassifier.isContinuitySprite(spriteKey)) {
                 isCtmCompact = true;
@@ -253,8 +257,12 @@ public final class BlockExporter {
                 // Transparent blocks: no face culling (internal faces must remain visible)
             }
 
-            // Process quad
-            quadProcessor.processQuad(state, pos, quad, blockKey, randomOffset, vertexCache[i]);
+            // Process quad (use per-block overridden sprite key when present).
+            // Generated BE sprites keep their own material key so they are not merged into the blank wood mesh.
+            String matKey = (spriteKey != null && spriteKey.startsWith("blockentity:generated/"))
+                ? spriteKey
+                : blockKey;
+            quadProcessor.processQuad(state, pos, quad, matKey, randomOffset, vertexCache[i], spriteKey);
         }
 
         // Flush cached quads (dedup/cull) before overlays

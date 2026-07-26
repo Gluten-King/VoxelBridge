@@ -1,6 +1,7 @@
 package com.voxelbridge.export.quad;
 
 import com.voxelbridge.compat.QuadCompat;
+import com.voxelbridge.core.ir.RenderLayer;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
@@ -33,5 +34,10 @@ public final class BakedQuadData implements QuadData {
     @Override
     public int tintIndex() {
         return QuadCompat.getTintIndex(quad);
+    }
+
+    @Override
+    public RenderLayer renderLayer() {
+        return QuadCompat.getRenderLayer(quad);
     }
 }

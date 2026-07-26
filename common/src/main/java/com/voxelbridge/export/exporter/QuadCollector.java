@@ -12,6 +12,9 @@ import com.voxelbridge.export.exporter.capture.CapturedQuadProcessor;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * Collects quads emitted by the vanilla render pipeline (e.g., fluids) and forwards them to the SceneSink.
  */
@@ -24,6 +27,8 @@ final class QuadCollector implements VertexConsumer {
     private final double regionMinX, regionMaxX, regionMinZ, regionMaxZ;
     private final boolean hasRegionBounds;
     private final String materialGroupKey;
+    /** Drop coplanar opposite faces (FluidRenderer adds water top back-faces). */
+    private final Set<Long> emittedPlanes = new HashSet<>();
 
     // Coordinate system detection
     private final float[] rawPositions = new float[12];
@@ -156,6 +161,15 @@ final class QuadCollector implements VertexConsumer {
             return;
         }
 
+        // FluidRenderer emits both front and back of the water surface when looking
+        // up from below. With glTF BLEND (no depth write) both stay visible and the
+        // "occluded" underside shows through. Keep only the first of each coplanar pair.
+        long planeKey = planeKey(positions, normal);
+        if (!emittedPlanes.add(planeKey)) {
+            resetQuadState();
+            return;
+        }
+
         String spriteKey = ctx.getTextureAccess().resolveSpriteKey(sprite);
         // Register sprite so animation scan/export (e.g., water_still) is whitelisted
         com.voxelbridge.export.texture.TextureAtlasManager.registerTint(ctx, spriteKey, 0xFFFFFF);
@@ -171,11 +185,41 @@ final class QuadCollector implements VertexConsumer {
             ? TintMode.COLORMAP
             : TintMode.VERTEX_COLOR;
         String materialKey = ctx.resolveMaterialKey(spriteKey, materialGroupKey);
+        // Water stays TRANSLUCENT (BLEND). Vanilla lava textures are opaque RGB —
+        // tag SOLID so glTF depth-writes and does not paint over nearer stained
+        // glass frames. GltfSceneBuilder also forces lava SOLID as a safety net.
+        RenderLayer fluidLayer = isLavaSprite(spriteKey, materialKey)
+            ? RenderLayer.SOLID
+            : RenderLayer.TRANSLUCENT;
+        // single-sided: double-sided BLEND writes depth from back faces and lets
+        // occluded fluid faces show through in DCC viewers.
         sink.addQuad(materialKey, spriteKey, CapturedQuadProcessor.TRANSPARENT_SPRITE_KEY,
-            RenderLayer.UNKNOWN, tintMode, true, false,
+            fluidLayer, tintMode, false, false,
             positions.clone(), normalizedUVs, colorData.uv1(), normal, colorData.colors());
 
         resetQuadState();
+    }
+
+    /**
+     * Stable key for a quad's supporting plane (ignores normal sign) so opposite
+     * coplanar faces collide. Quantized to ~1mm to absorb float noise.
+     */
+    private static long planeKey(float[] positions, float[] normal) {
+        float nx = normal[0], ny = normal[1], nz = normal[2];
+        // Canonicalize normal hemisphere so n and -n share a key.
+        if (nx < 0 || (nx == 0 && ny < 0) || (nx == 0 && ny == 0 && nz < 0)) {
+            nx = -nx; ny = -ny; nz = -nz;
+        }
+        float cx = (positions[0] + positions[3] + positions[6] + positions[9]) * 0.25f;
+        float cy = (positions[1] + positions[4] + positions[7] + positions[10]) * 0.25f;
+        float cz = (positions[2] + positions[5] + positions[8] + positions[11]) * 0.25f;
+        // Plane constant d = n·p (same for both sides after normal flip).
+        float d = nx * cx + ny * cy + nz * cz;
+        int qn = (Math.round(nx * 100f) & 0x3FF)
+            | ((Math.round(ny * 100f) & 0x3FF) << 10)
+            | ((Math.round(nz * 100f) & 0x3FF) << 20);
+        int qd = Math.round(d * 1000f);
+        return (((long) qn) << 32) ^ (qd & 0xFFFFFFFFL);
     }
     
     private void resetQuadState() {
@@ -185,6 +229,16 @@ final class QuadCollector implements VertexConsumer {
         useChunkOffset = false;
         quadColorCaptured = false;
         quadArgb = 0xFFFFFFFF;
+    }
+
+    private static boolean isLavaSprite(String spriteKey, String materialKey) {
+        String a = spriteKey != null ? spriteKey.toLowerCase(java.util.Locale.ROOT) : "";
+        String b = materialKey != null ? materialKey.toLowerCase(java.util.Locale.ROOT) : "";
+        // Exclude mod "gel" fluids that happen to contain the substring.
+        if (a.contains("gel") || b.contains("gel")) {
+            return false;
+        }
+        return a.contains("lava") || b.contains("lava");
     }
 
     private TextureAtlasSprite chooseSpriteForQuad() {

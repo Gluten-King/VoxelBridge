@@ -1,5 +1,6 @@
 package com.voxelbridge.adapter;
 
+import com.voxelbridge.core.ir.RenderLayer;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
@@ -29,4 +30,12 @@ public interface PlatformModelHelper {
      * Gets the tint index of a BakedQuad.
      */
     int getQuadTintIndex(BakedQuad quad);
+
+    /**
+     * Terrain/render-layer hint for a baked quad (SOLID / CUTOUT / TRANSLUCENT).
+     * Used so glTF materials get the correct alphaMode.
+     */
+    default RenderLayer getQuadRenderLayer(BakedQuad quad) {
+        return RenderLayer.UNKNOWN;
+    }
 }

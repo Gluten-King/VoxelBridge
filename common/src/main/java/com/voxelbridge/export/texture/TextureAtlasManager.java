@@ -469,6 +469,19 @@ public final class TextureAtlasManager {
             return cached;
         }
 
+        // Generated BE/entity textures (banners, baked signs, …) live here when not yet cached.
+        BufferedImage generated = ctx.getGeneratedEntityTextures().get(spriteKey);
+        if (generated != null) {
+            ctx.cacheSpriteImage(spriteKey, generated);
+            return generated;
+        }
+
+        BufferedImage bySprite = ctx.getTextureRepository().getBySpriteKey(spriteKey);
+        if (bySprite != null) {
+            ctx.cacheSpriteImage(spriteKey, bySprite);
+            return bySprite;
+        }
+
         String resourceKey = ctx.getTextureAccess().spriteKeyToResourceKey(spriteKey);
         if (resourceKey == null) {
             return null;

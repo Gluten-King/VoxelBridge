@@ -16,8 +16,10 @@ import com.voxelbridge.platform.client.ClientAccessHolder;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BushBlock;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -55,7 +57,8 @@ public final class QuadProcessor {
     private record PendingQuad(QuadDedupKey key, BlockState state, BlockPos pos,
                                QuadData quad, Direction dir, String materialKey, String spriteKey,
                                float[] positions, float[] uvs, float[] normal,
-                               ColorModeHandler.ColorData colorData, boolean doubleSided) {}
+                               ColorModeHandler.ColorData colorData, boolean doubleSided,
+                               RenderLayer renderLayer) {}
     public QuadProcessor(ExportContext ctx, Level level, IrSink sceneSink,
                          double offsetX, double offsetY, double offsetZ,
                          PlaneOffsetTracker planeOffset) {
@@ -92,16 +95,29 @@ public final class QuadProcessor {
      */
     public void processQuad(BlockState state, BlockPos pos, QuadData quad,
                             String blockKey, Vec3 randomOffset) {
-        processQuad(state, pos, quad, blockKey, randomOffset, null);
+        processQuad(state, pos, quad, blockKey, randomOffset, null, null);
     }
 
     public void processQuad(BlockState state, BlockPos pos, QuadData quad,
                             String blockKey, Vec3 randomOffset,
                             VertexExtractor.VertexData vertexData) {
+        processQuad(state, pos, quad, blockKey, randomOffset, vertexData, null);
+    }
+
+    /**
+     * @param spriteKeyOverride optional pre-resolved sprite key (e.g. after per-block override).
+     *                          When null, derived from the quad's atlas sprite.
+     */
+    public void processQuad(BlockState state, BlockPos pos, QuadData quad,
+                            String blockKey, Vec3 randomOffset,
+                            VertexExtractor.VertexData vertexData,
+                            String spriteKeyOverride) {
         TextureAtlasSprite sprite = quad.sprite();
         if (sprite == null) return;
 
-        String spriteKey = ctx.getTextureAccess().resolveSpriteKey(sprite);
+        String spriteKey = spriteKeyOverride != null
+            ? spriteKeyOverride
+            : ctx.getTextureAccess().resolveSpriteKey(sprite);
 
         // Load PBR textures (once per sprite)
         if (!pbrLoadedSprites.contains(spriteKey)) {
@@ -127,7 +143,8 @@ public final class QuadProcessor {
             : VertexExtractor.extractFromQuad(quad, pos, sprite, offsetX, offsetY, offsetZ, randomOffset);
 
         boolean hasBaked = ColorUtil.hasBakedColors(data.colors());
-        boolean doubleSided = state.getBlock() instanceof BushBlock;
+        // Cross-model / torch shell faces are zero-thickness; DCC viewers need both sides.
+        boolean doubleSided = isDoubleSidedCutout(state);
         boolean exportDoubleSided = ExportRuntimeConfig.isExportDoubleSidedEnabled();
         Direction dir = quad.direction();
         if (exportDoubleSided && !BlockStateCompat.isSolidRender(state, level, pos)) {
@@ -175,10 +192,23 @@ public final class QuadProcessor {
             }
         }
 
-        String materialKey = ctx.resolveMaterialKey(spriteKey, blockKey);
+        // Torch tip "glow shell": six zero-thickness plates that each sample a single
+        // fully-opaque texel. With MASK the whole plate is solid and looks like an
+        // opaque outer box. Split them to a *_shell material as TRANSLUCENT and
+        // soften vertex alpha so the dual-layer tip reads as a translucent shell.
+        boolean torchShell = isTorchGlowShell(state, data.positions());
+        String materialBase = blockKey;
+        RenderLayer renderLayer = quad.renderLayer() != null ? quad.renderLayer() : RenderLayer.UNKNOWN;
+        if (torchShell) {
+            materialBase = blockKey + "_shell";
+            renderLayer = RenderLayer.TRANSLUCENT;
+            colorData = withVertexAlpha(colorData, 0.55f);
+            doubleSided = true;
+        }
+        String materialKey = ctx.resolveMaterialKey(spriteKey, materialBase);
         QuadDedupKey key = buildDedupKey(spriteKey.hashCode(), dedupTint, data.positions(), data.normal());
         pendingQuads.add(new PendingQuad(key, state, pos, quad, dir, materialKey, spriteKey,
-            data.positions(), data.uvs(), data.normal(), colorData, doubleSided));
+            data.positions(), data.uvs(), data.normal(), colorData, doubleSided, renderLayer));
     }
 
     /**
@@ -228,7 +258,8 @@ public final class QuadProcessor {
                 ? TintMode.COLORMAP
                 : TintMode.VERTEX_COLOR;
             sceneSink.addQuad(ctx.intern(quad.materialKey), ctx.intern(quad.spriteKey), null,
-                RenderLayer.UNKNOWN, tintMode, quad.doubleSided, false,
+                quad.renderLayer != null ? quad.renderLayer : RenderLayer.UNKNOWN,
+                tintMode, quad.doubleSided, false,
                 quad.positions, quad.uvs, quad.colorData.uv1(), quad.normal, quad.colorData.colors());
         }
         pendingQuads.clear();
@@ -251,6 +282,86 @@ public final class QuadProcessor {
         if (sprite == null || spriteKey == null) return;
         // Use PbrTextureHelper's enhanced lookup logic
         com.voxelbridge.export.texture.PbrTextureHelper.ensurePbrCached(ctx, spriteKey, sprite);
+    }
+
+    /**
+     * Cross plants and torch flame shells use zero-thickness faces; export both sides so
+     * DCC viewers don't hide the outer cutout layer from one view direction.
+     */
+    private static boolean isDoubleSidedCutout(BlockState state) {
+        if (state == null) {
+            return false;
+        }
+        Block block = state.getBlock();
+        if (block instanceof BushBlock) {
+            return true;
+        }
+        var key = BuiltInRegistries.BLOCK.getKey(block);
+        if (key == null) {
+            return false;
+        }
+        String path = key.getPath();
+        return path.contains("torch")
+                || path.contains("lantern")
+                || path.equals("fire")
+                || path.equals("soul_fire")
+                || path.contains("redstone_wire")
+                || path.equals("repeater")
+                || path.equals("comparator");
+    }
+
+    /**
+     * Redstone/regular torch tip models add six zero-thickness plates around the head.
+     * Each plate is ~3/16 wide and flat on one axis (area is non-zero, thickness is zero).
+     */
+    private static boolean isTorchGlowShell(BlockState state, float[] positions) {
+        if (state == null || positions == null || positions.length < 12) {
+            return false;
+        }
+        var key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+        if (key == null) {
+            return false;
+        }
+        String path = key.getPath();
+        // Torch blocks and lit diode torches share the same shell elements.
+        if (!(path.contains("torch") || path.equals("repeater") || path.equals("comparator"))) {
+            return false;
+        }
+        float minX = positions[0], maxX = positions[0];
+        float minY = positions[1], maxY = positions[1];
+        float minZ = positions[2], maxZ = positions[2];
+        for (int i = 1; i < 4; i++) {
+            float x = positions[i * 3];
+            float y = positions[i * 3 + 1];
+            float z = positions[i * 3 + 2];
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+        }
+        float sx = maxX - minX;
+        float sy = maxY - minY;
+        float sz = maxZ - minZ;
+        // Zero-thickness plate: one axis collapsed. Outer torch shells are 3/16 (0.1875);
+        // the stem cross-section is only 2/16 (0.125) and must stay hard MASK.
+        final float flat = 1e-4f;
+        final float minSpan = 0.15f;
+        final float maxSpan = 0.30f;
+        boolean flatX = sx <= flat && sy >= minSpan && sy <= maxSpan && sz >= minSpan && sz <= maxSpan;
+        boolean flatY = sy <= flat && sx >= minSpan && sx <= maxSpan && sz >= minSpan && sz <= maxSpan;
+        boolean flatZ = sz <= flat && sx >= minSpan && sx <= maxSpan && sy >= minSpan && sy <= maxSpan;
+        return flatX || flatY || flatZ;
+    }
+
+    private static ColorModeHandler.ColorData withVertexAlpha(ColorModeHandler.ColorData src, float alpha) {
+        if (src == null || src.colors() == null || src.colors().length < 16) {
+            return src;
+        }
+        float a = Math.max(0f, Math.min(1f, alpha));
+        float[] colors = src.colors().clone();
+        for (int i = 0; i < 4; i++) {
+            colors[i * 4 + 3] = a;
+        }
+        return new ColorModeHandler.ColorData(src.uv1(), colors);
     }
 
     private QuadDedupKey buildDedupKey(int spriteHash, int tintArgb, float[] positions, float[] normal) {

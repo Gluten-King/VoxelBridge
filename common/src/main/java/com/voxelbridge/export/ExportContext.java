@@ -89,6 +89,14 @@ public final class ExportContext {
         state.registerSpriteMaterial(spriteKey, materialKey);
     }
 
+    public void putBlockSpriteOverride(long packedPos, String originalSpriteKey, String overrideSpriteKey) {
+        state.putBlockSpriteOverride(packedPos, originalSpriteKey, overrideSpriteKey);
+    }
+
+    public String resolveBlockSpriteOverride(long packedPos, String spriteKey) {
+        return state.resolveBlockSpriteOverride(packedPos, spriteKey);
+    }
+
     public String resolveMaterialKey(String spriteKey, String fallbackMaterialKey) {
         if (spriteKey != null && ExportRuntimeConfig.isAnimationEnabled()) {
             TextureRepository repo = state.getTextureRepository();

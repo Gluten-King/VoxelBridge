@@ -34,6 +34,11 @@ public final class ExportState {
     private final Map<String, EntityTexture> entityTextures = new ConcurrentHashMap<>();
     private final Map<String, BlockEntityAtlasPlacement> blockEntityAtlasPlacements = new ConcurrentHashMap<>();
     private final TextureRepository textureRepository = new TextureRepository();
+    /**
+     * Optional per-block sprite remaps (packed BlockPos long → original sprite → override sprite).
+     * Used when a block entity bakes content into a block-model texture (e.g. 26.2 signs).
+     */
+    private final Map<Long, Map<String, String>> blockSpriteOverrides = new ConcurrentHashMap<>();
 
     // String Deduplication Pool (Concurrent)
     private final Map<String, String> stringPool = new ConcurrentHashMap<>();
@@ -63,6 +68,26 @@ public final class ExportState {
         if (spriteKey != null && materialKey != null) {
             spriteToMaterial.putIfAbsent(intern(spriteKey), intern(materialKey));
         }
+    }
+
+    public void putBlockSpriteOverride(long packedPos, String originalSpriteKey, String overrideSpriteKey) {
+        if (originalSpriteKey == null || overrideSpriteKey == null) {
+            return;
+        }
+        blockSpriteOverrides
+            .computeIfAbsent(packedPos, k -> new ConcurrentHashMap<>())
+            .put(intern(originalSpriteKey), intern(overrideSpriteKey));
+    }
+
+    public String resolveBlockSpriteOverride(long packedPos, String spriteKey) {
+        if (spriteKey == null) {
+            return null;
+        }
+        Map<String, String> atPos = blockSpriteOverrides.get(packedPos);
+        if (atPos == null) {
+            return spriteKey;
+        }
+        return atPos.getOrDefault(spriteKey, spriteKey);
     }
 
     public it.unimi.dsi.fastutil.ints.Int2ObjectMap<TexturePlacement> getColorMap() {

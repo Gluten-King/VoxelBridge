@@ -92,7 +92,9 @@ sourceSets {
                     "com/voxelbridge/platform/render/capture/CaptureBufferBase.java",
                     "com/voxelbridge/platform/render/capture/RenderCapture.java",
                     "com/voxelbridge/export/exporter/blockentity/BlockEntityTextureResolver.java",
-                    "com/voxelbridge/export/exporter/entity/EntityTextureResolver.java"
+                    "com/voxelbridge/export/exporter/entity/EntityTextureResolver.java",
+                    // 26.2 signs are block models + submitText; 26.1.2 still uses BER entity sheet.
+                    "com/voxelbridge/export/exporter/blockentity/SignBlockEntityHandler.java"
                 )
             }
             into(filteredCommonDir)

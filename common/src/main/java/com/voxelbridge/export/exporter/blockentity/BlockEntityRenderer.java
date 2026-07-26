@@ -472,13 +472,22 @@ public final class BlockEntityRenderer {
                               String spriteKey,
                               ResolvedTexture textureRes,
                               float[] uv0) {
+            // Prefer un-expand only when CapturedQuadProcessor kept useAtlasUv (true
+            // atlas-space capture). BE submit capture keeps sprite-local 0..1 and
+            // useAtlasUv=false so clamp + export-atlas remap samples the cropped
+            // entity sheet correctly.
             if (useAtlasUv) {
-                RenderCaptureUtil.fillUvsAtlas(verts, uv0, u0, u1, v0, v1);
-            } else {
-                RenderCaptureUtil.fillUvsClamp(verts, uv0);
+                float au0 = textureRes != null ? textureRes.u0() : u0;
+                float au1 = textureRes != null ? textureRes.u1() : u1;
+                float av0 = textureRes != null ? textureRes.v0() : v0;
+                float av1 = textureRes != null ? textureRes.v1() : v1;
+                RenderCaptureUtil.fillUvsAtlas(verts, uv0, au0, au1, av0, av1);
+                return;
             }
 
-            if (!useAtlasUv && uvStats != null && textureRes != null && (uvStats.maxU() > 1f || uvStats.maxV() > 1f)) {
+            RenderCaptureUtil.fillUvsClamp(verts, uv0);
+
+            if (uvStats != null && textureRes != null && (uvStats.maxU() > 1f || uvStats.maxV() > 1f)) {
                 BufferedImage img = ctx.getCachedSpriteImage(spriteKey);
                 if (img == null) {
                     img = loadTextureImage(ctx, textureRes);

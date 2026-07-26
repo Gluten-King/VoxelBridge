@@ -42,6 +42,8 @@ public final class BlockEntityTextureManager {
         repo.put(loc, spriteKey, image);
 
         ctx.getGeneratedEntityTextures().put(spriteKey, image);
+        // Atlas packing prefers the sprite-image cache; keep generated pixels there too.
+        ctx.cacheSpriteImage(spriteKey, image);
         ctx.getMaterialPaths().putIfAbsent(spriteKey, handle.relativePath());
         ctx.getEntityTextures().putIfAbsent(spriteKey,
             new ExportState.EntityTexture(loc, image.getWidth(), image.getHeight()));
@@ -104,7 +106,14 @@ public final class BlockEntityTextureManager {
         // Register the texture with the export context (same as old EntityTextureManager)
         if (texture != null) {
             if (com.voxelbridge.config.ExportRuntimeConfig.isAnimationEnabled()) {
-                com.voxelbridge.core.texture.AnimatedFrameSet frames = AnimatedTextureHelper.extractAndStore(ctx, spriteKey, texture, repo);
+                String animResourceKey = ctx.getTextureAccess().spriteKeyToResourceKey(spriteKey);
+                if (animResourceKey == null) {
+                    animResourceKey = loadedKey;
+                }
+                com.voxelbridge.core.texture.AnimatedFrameSet frames =
+                    animResourceKey != null
+                        ? AnimatedTextureHelper.detectFromMetadata(ctx, spriteKey, animResourceKey, repo)
+                        : null;
                 if (frames != null && !frames.isEmpty()) {
                     texture = frames.frames().get(0);
                 }
@@ -161,7 +170,30 @@ public final class BlockEntityTextureManager {
      * This must be called to populate the texture cache before atlas generation.
      */
     public static BufferedImage getTexture(ExportContext ctx, String resourceKey) {
-        return repo(ctx).get(resourceKey);
+        if (resourceKey == null) {
+            return null;
+        }
+        BufferedImage cached = repo(ctx).get(resourceKey);
+        if (cached != null) {
+            return cached;
+        }
+        // Also try png-normalized key (some callers pass bare minecraft:block/foo).
+        String pngKey = ctx.getTextureAccess().ensurePngKey(resourceKey);
+        if (pngKey != null && !pngKey.equals(resourceKey)) {
+            cached = repo(ctx).get(pngKey);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        BufferedImage loaded = loadTextureFromResource(ctx, pngKey != null ? pngKey : resourceKey);
+        if (loaded == null && pngKey != null && !pngKey.equals(resourceKey)) {
+            loaded = loadTextureFromResource(ctx, resourceKey);
+        }
+        if (loaded != null) {
+            String storeKey = pngKey != null ? pngKey : resourceKey;
+            repo(ctx).put(storeKey, null, loaded);
+        }
+        return loaded;
     }
 
     /**

@@ -43,6 +43,44 @@ public class FabricPlatformRenderHelper implements PlatformRenderHelper {
         return false;
     }
 
+    @Override
+    public com.voxelbridge.core.ir.RenderLayer getRenderTypeLayer(RenderType renderType) {
+        if (renderType == null) {
+            return com.voxelbridge.core.ir.RenderLayer.UNKNOWN;
+        }
+        try {
+            String name = renderType.toString();
+            if (name == null) {
+                return com.voxelbridge.core.ir.RenderLayer.UNKNOWN;
+            }
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            // Terrain / true translucent passes first.
+            if (lower.contains("tripwire") || lower.contains("clouds")
+                    || (lower.contains("translucent") && !lower.contains("entity"))) {
+                return com.voxelbridge.core.ir.RenderLayer.TRANSLUCENT;
+            }
+            // Water uses the translucent terrain pass; match by name too.
+            if (lower.contains("water") && !lower.contains("entity")) {
+                return com.voxelbridge.core.ir.RenderLayer.TRANSLUCENT;
+            }
+            // entity_translucent / armor translucent: MC still depth-tests these.
+            // Export as CUTOUT (glTF MASK) so DCC viewers write depth and hide
+            // internal model faces. True soft entity translucency is rare.
+            if (lower.contains("entity") && lower.contains("translucent")) {
+                return com.voxelbridge.core.ir.RenderLayer.CUTOUT;
+            }
+            if (lower.contains("cutout") || lower.contains("crumbling")
+                    || lower.contains("cross") || lower.contains("armor_cutout")) {
+                return com.voxelbridge.core.ir.RenderLayer.CUTOUT;
+            }
+            if (lower.contains("solid") || lower.contains("entity") || lower.contains("item")) {
+                return com.voxelbridge.core.ir.RenderLayer.SOLID;
+            }
+        } catch (Exception ignored) {
+        }
+        return com.voxelbridge.core.ir.RenderLayer.UNKNOWN;
+    }
+
 
     @Override
     public boolean isOnRenderThread() {

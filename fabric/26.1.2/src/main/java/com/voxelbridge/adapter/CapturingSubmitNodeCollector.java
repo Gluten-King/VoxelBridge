@@ -72,10 +72,13 @@ public final class CapturingSubmitNodeCollector implements SubmitNodeCollector {
                                 int packedLight, int packedOverlay, int tintedColor, TextureAtlasSprite sprite,
                                 int outlineColor, ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         if (model != null && renderType != null) {
+            // Capture sprite-local UVs (ModelPart emits 0..1 within the sheet). Do NOT
+            // sprite.wrap() here: expander writes atlas-space UVs, and if the captured
+            // values collapse (or bounds disagree with the export texture crop) the BE
+            // path un-expands every vertex to the sprite origin → pure-black chests.
+            // Downstream resolveTexture already knows the atlas sprite; writeUvs keeps
+            // local 0..1 when useAtlasUv is false / looks sprite-local.
             VertexConsumer consumer = buffer.getBuffer(renderType);
-            if (sprite != null) {
-                consumer = sprite.wrap(consumer);
-            }
             model.setupAnim(state);
             model.renderToBuffer(poseStack, consumer, packedLight, packedOverlay, tintedColor);
         }
@@ -88,9 +91,6 @@ public final class CapturingSubmitNodeCollector implements SubmitNodeCollector {
                                 ModelFeatureRenderer.CrumblingOverlay crumblingOverlay, int outlineColor) {
         if (modelPart != null && renderType != null) {
             VertexConsumer consumer = buffer.getBuffer(renderType);
-            if (sprite != null) {
-                consumer = sprite.wrap(consumer);
-            }
             modelPart.render(poseStack, consumer, packedLight, packedOverlay, tintedColor);
         }
     }

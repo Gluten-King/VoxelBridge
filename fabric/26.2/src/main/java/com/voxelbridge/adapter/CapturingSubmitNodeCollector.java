@@ -73,10 +73,10 @@ public final class CapturingSubmitNodeCollector implements SubmitNodeCollector {
                                 int packedLight, int packedOverlay, int tintedColor, TextureAtlasSprite sprite,
                                 int outlineColor, ModelFeatureRenderer.CrumblingOverlay crumblingOverlay) {
         if (model != null && renderType != null) {
+            // Capture sprite-local UVs only — see 26.1.2 collector. Skipping wrap keeps
+            // chest/bed/sign sheet UVs in 0..1 so export atlas remap samples the cropped
+            // entity texture instead of a single atlas-origin pixel (black chests).
             VertexConsumer consumer = buffer.getBuffer(renderType);
-            if (sprite != null) {
-                consumer = sprite.wrap(consumer);
-            }
             model.setupAnim(state);
             model.renderToBuffer(poseStack, consumer, packedLight, packedOverlay, tintedColor);
         }
@@ -91,9 +91,6 @@ public final class CapturingSubmitNodeCollector implements SubmitNodeCollector {
                                 int outlineColor) {
         if (modelPart != null && renderType != null) {
             VertexConsumer consumer = buffer.getBuffer(renderType);
-            if (sprite != null) {
-                consumer = sprite.wrap(consumer);
-            }
             modelPart.render(poseStack, consumer, packedLight, packedOverlay, tintedColor);
         }
     }

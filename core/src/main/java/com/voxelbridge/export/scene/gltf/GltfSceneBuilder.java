@@ -549,8 +549,16 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
 
                 // Finalize glTF
                 Scene scene = new Scene();
-                List<Integer> nodeIndices = new ArrayList<>();
-                for (int i = 0; i < nodes.size(); i++) nodeIndices.add(i);
+                // Draw order for viewers that do not depth-sort transparent draws:
+                // OPAQUE first (writes depth), then MASK (also writes depth), then BLEND.
+                // Without this, alphabetical material keys put glass before water and the
+                // later BLEND water pass paints over nearer glass frame edges.
+                List<Integer> nodeIndices = new ArrayList<>(nodes.size());
+                for (int i = 0; i < nodes.size(); i++) {
+                    nodeIndices.add(i);
+                }
+                nodeIndices.sort(Comparator.comparingInt(i ->
+                    alphaDrawOrder(nodes.get(i), meshes, materials)));
                 scene.setNodes(nodeIndices);
                 gltf.addScenes(scene);
                 gltf.setScene(0);
@@ -675,6 +683,9 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         int idxIdx = 0;
         
         boolean doubleSided = false;
+        // Track the "most transparent" layer seen on this material so alphaMode is correct
+        // even when a mesh mixes solid + translucent quads under one material key.
+        RenderLayer strongestLayer = RenderLayer.UNKNOWN;
 
         // 64KB Page Buffer (Interleaved Data)
         // Format: [Hash(4), Sprite(4), Overlay(4), Flags(4), Pos(48), Norm(12), Color(64), UV0(32), UV1(32)] = 204 bytes
@@ -771,8 +782,9 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 indexArray[idxIdx++] = currentVertexBase + 3;
                 
                 currentVertexBase += 4;
-                
+
                 if (IrFlags.isDoubleSided(flags)) doubleSided = true;
+                strongestLayer = strongerLayer(strongestLayer, IrFlags.decodeRenderLayer(flags));
             }
         }
 
@@ -892,8 +904,23 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         pbr.setMetallicFactor(0.0f);
         pbr.setRoughnessFactor(1.0f);
         material.setPbrMetallicRoughness(pbr);
-        boolean forceDoubleSided = com.voxelbridge.config.ExportRuntimeConfig.isExportDoubleSidedEnabled();
-        material.setDoubleSided(forceDoubleSided || doubleSided);
+        RenderLayer effectiveLayer = resolveEffectiveLayer(strongestLayer, matKey);
+        applyAlphaMode(material, effectiveLayer);
+        // Translucent (BLEND) materials must stay single-sided: double-sided back faces
+        // write/occlude incorrectly and show internal fluid/entity faces in DCC viewers.
+        // Entity models (player etc.) also must not be forced double-sided — body parts
+        // would show their inner surfaces when looking through gaps.
+        // Exception: torch tip glow shells are zero-thickness plates and need both sides.
+        boolean entityLike = isEntityLikeMaterial(matKey);
+        boolean torchShell = isTorchGlowShellMaterial(matKey);
+        if (torchShell) {
+            material.setDoubleSided(true);
+        } else if (effectiveLayer == RenderLayer.TRANSLUCENT || entityLike) {
+            material.setDoubleSided(false);
+        } else {
+            boolean forceDoubleSided = com.voxelbridge.config.ExportRuntimeConfig.isExportDoubleSidedEnabled();
+            material.setDoubleSided(forceDoubleSided || doubleSided);
+        }
 
         Map<String, Object> extras = new HashMap<>();
         if (!colorMapIndices.isEmpty()) {
@@ -1173,6 +1200,258 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         void setStage(Stage stage, String detail);
 
         void setPhasePercent(Float percent);
+    }
+
+    /**
+     * Prefer the more transparent layer when a material mixes quads.
+     * Order: TRANSLUCENT > CUTOUT > SOLID > UNKNOWN.
+     */
+    private static RenderLayer strongerLayer(RenderLayer current, RenderLayer next) {
+        if (next == null || next == RenderLayer.UNKNOWN) {
+            return current != null ? current : RenderLayer.UNKNOWN;
+        }
+        if (current == null || current == RenderLayer.UNKNOWN) {
+            return next;
+        }
+        if (current == RenderLayer.TRANSLUCENT || next == RenderLayer.TRANSLUCENT) {
+            return RenderLayer.TRANSLUCENT;
+        }
+        if (current == RenderLayer.CUTOUT || next == RenderLayer.CUTOUT) {
+            return RenderLayer.CUTOUT;
+        }
+        return RenderLayer.SOLID;
+    }
+
+    private static RenderLayer resolveEffectiveLayer(RenderLayer layer, String matKey) {
+        RenderLayer effective = layer != null ? layer : RenderLayer.UNKNOWN;
+        if (effective == RenderLayer.UNKNOWN) {
+            effective = inferLayerFromName(matKey);
+        }
+        // Some plant/wire models still arrive as SOLID (or UNKNOWN→missed) even though
+        // their textures are hard alpha. Promote exact cutout plant keys without
+        // touching solid building blocks like bamboo_planks / bamboo_block.
+        // Torch tip *_shell materials are soft BLEND plates — never promote those.
+        if ((effective == RenderLayer.SOLID || effective == RenderLayer.UNKNOWN)
+                && !isTorchGlowShellMaterial(matKey)
+                && isHardCutoutPlant(matKey)) {
+            effective = RenderLayer.CUTOUT;
+        }
+        // Plain glass (and glass panes) ship as terrain TRANSLUCENT, but the texture is
+        // hard-edged alpha (frame opaque, center fully transparent). Export as MASK so
+        // DCC viewers write depth on the frame and nearer glass edges are not painted
+        // over by later BLEND fluids. Soft-alpha glass (stained/tinted) stays BLEND.
+        // Torch tip glow shells are also TRANSLUCENT by design.
+        if (effective == RenderLayer.TRANSLUCENT && isHardAlphaGlass(matKey)
+                && !isTorchGlowShellMaterial(matKey)) {
+            return RenderLayer.CUTOUT;
+        }
+        // Vanilla lava is opaque RGB; fluid exporter may still tag TRANSLUCENT. Force SOLID.
+        if (effective == RenderLayer.TRANSLUCENT && matKey != null
+                && matKey.toLowerCase(Locale.ROOT).contains("lava")
+                && !matKey.toLowerCase(Locale.ROOT).contains("gel")) {
+            return RenderLayer.SOLID;
+        }
+        if (!isEntityLikeMaterial(matKey)) {
+            return effective;
+        }
+        // Entity/block-entity models:
+        // - cutout types on opaque sheets (chests) → SOLID (no alpha holes)
+        // - translucent entity passes (player skins) arrive as CUTOUT after platform
+        //   mapping, or still TRANSLUCENT if classified elsewhere → MASK, not BLEND.
+        //   BLEND skips depth writes in most DCC viewers so internal faces show through.
+        if (effective == RenderLayer.TRANSLUCENT) {
+            return RenderLayer.CUTOUT;
+        }
+        if (effective == RenderLayer.CUTOUT) {
+            // Chest/sign-like sheets are fully opaque; MASK can still punch holes on
+            // near-black atlas padding. Demote pure cutout entity sheets to SOLID unless
+            // the name looks like a translucent entity.
+            String lower = matKey.toLowerCase(Locale.ROOT);
+            if (lower.contains("slime") || lower.contains("player")
+                    || lower.contains("armor") || lower.contains("cape")
+                    || lower.contains("elytra") || lower.contains("ghost")
+                    || lower.contains("enderman") || lower.contains("blaze")) {
+                return RenderLayer.CUTOUT;
+            }
+            return RenderLayer.SOLID;
+        }
+        return effective;
+    }
+
+    /**
+     * Exact-ish plant / dust keys that must be MASK even if the quad layer said SOLID.
+     * Intentionally narrow so bamboo_planks / bamboo_block stay OPAQUE.
+     */
+    private static boolean isHardCutoutPlant(String matKey) {
+        if (matKey == null) {
+            return false;
+        }
+        String lower = matKey.toLowerCase(Locale.ROOT);
+        // Torch tip dual-layer shells are exported as soft BLEND, not hard MASK.
+        if (isTorchGlowShellMaterial(lower)) {
+            return false;
+        }
+        // Strip common prefixes used as material group keys.
+        String bare = lower;
+        int slash = bare.lastIndexOf('/');
+        if (slash >= 0) {
+            bare = bare.substring(slash + 1);
+        }
+        int colon = bare.lastIndexOf(':');
+        if (colon >= 0) {
+            bare = bare.substring(colon + 1);
+        }
+        return bare.equals("bamboo")
+                || bare.equals("bamboo_sapling")
+                || bare.equals("sugar_cane")
+                || bare.equals("dead_bush")
+                || bare.equals("sweet_berry_bush")
+                || bare.equals("cobweb")
+                || bare.equals("short_grass")
+                || bare.equals("tall_grass")
+                || bare.equals("fern")
+                || bare.equals("large_fern")
+                || bare.startsWith("redstone_dust")
+                || bare.equals("redstone_wire")
+                || bare.contains("torch")
+                || bare.contains("lantern")
+                || bare.contains("fire") && !bare.contains("campfire_log");
+    }
+
+    /** Dual-layer torch tip plates exported as soft-alpha BLEND materials. */
+    private static boolean isTorchGlowShellMaterial(String matKey) {
+        if (matKey == null) {
+            return false;
+        }
+        String lower = matKey.toLowerCase(Locale.ROOT);
+        return lower.endsWith("_shell") || lower.contains("_shell") || lower.contains(":shell");
+    }
+
+    /**
+     * Vanilla glass / glass_pane textures are binary alpha (opaque frame, empty center).
+     * Stained and tinted glass keep soft alpha and must stay BLEND.
+     */
+    private static boolean isHardAlphaGlass(String matKey) {
+        if (matKey == null) {
+            return false;
+        }
+        String lower = matKey.toLowerCase(Locale.ROOT);
+        if (!lower.contains("glass")) {
+            return false;
+        }
+        return !lower.contains("stained") && !lower.contains("tinted");
+    }
+
+    /**
+     * Scene draw-order key: lower draws first. OPAQUE(0) → MASK(1) → BLEND(2).
+     */
+    private static int alphaDrawOrder(Node node, List<Mesh> meshes, List<Material> materials) {
+        if (node == null || meshes == null || materials == null) {
+            return 0;
+        }
+        Integer meshIdx = node.getMesh();
+        if (meshIdx == null || meshIdx < 0 || meshIdx >= meshes.size()) {
+            return 0;
+        }
+        Mesh mesh = meshes.get(meshIdx);
+        if (mesh == null || mesh.getPrimitives() == null || mesh.getPrimitives().isEmpty()) {
+            return 0;
+        }
+        Integer matIdx = mesh.getPrimitives().get(0).getMaterial();
+        if (matIdx == null || matIdx < 0 || matIdx >= materials.size()) {
+            return 0;
+        }
+        Material material = materials.get(matIdx);
+        if (material == null) {
+            return 0;
+        }
+        String mode = material.getAlphaMode();
+        if (mode == null) {
+            return 0; // glTF default OPAQUE
+        }
+        if ("MASK".equalsIgnoreCase(mode)) {
+            return 1;
+        }
+        if ("BLEND".equalsIgnoreCase(mode)) {
+            return 2;
+        }
+        return 0;
+    }
+
+    private static boolean isEntityLikeMaterial(String matKey) {
+        if (matKey == null) {
+            return false;
+        }
+        String lower = matKey.toLowerCase(Locale.ROOT);
+        return lower.startsWith("blockentity:")
+            || lower.startsWith("entity:")
+            || lower.contains("blockentity/")
+            || lower.contains("entity/");
+    }
+
+    /**
+     * Map IR render layer onto glTF alphaMode so Blender/DCC tools blend correctly.
+     */
+    private static void applyAlphaMode(Material material, RenderLayer effective) {
+        if (effective == null) {
+            effective = RenderLayer.UNKNOWN;
+        }
+        switch (effective) {
+            case TRANSLUCENT -> material.setAlphaMode("BLEND");
+            case CUTOUT -> {
+                material.setAlphaMode("MASK");
+                // Match vanilla cutout pipelines (ALPHA_CUTOUT ≈ 0.1). 0.5 was too high for
+                // 1×1 torch flame shell texels and other sparse cutout edges after atlas pack.
+                material.setAlphaCutoff(0.1f);
+            }
+            case SOLID, UNKNOWN -> {
+                // OPAQUE is the glTF default; leave unset.
+            }
+        }
+    }
+
+    private static RenderLayer inferLayerFromName(String matKey) {
+        if (matKey == null) {
+            return RenderLayer.UNKNOWN;
+        }
+        String lower = matKey.toLowerCase(Locale.ROOT);
+        // Soft-alpha fluids / ice / stained-tinted glass / portals → BLEND.
+        // Lava is fully opaque in vanilla textures — keep it out of BLEND so it depth-writes
+        // (OPAQUE→MASK→BLEND order) and does not paint over nearer stained-glass frames.
+        if (lower.contains("lava")) {
+            return RenderLayer.SOLID;
+        }
+        // Torch tip dual-layer glow plates — soft BLEND, not hard cutout.
+        if (isTorchGlowShellMaterial(lower)) {
+            return RenderLayer.TRANSLUCENT;
+        }
+        if (lower.contains("water")
+                || lower.contains("ice") || lower.contains("slime") || lower.contains("honey")
+                || lower.contains("stained_glass") || lower.contains("tinted_glass")
+                || lower.contains("translucent") || lower.contains("nether_portal")) {
+            return RenderLayer.TRANSLUCENT;
+        }
+        // Plain glass is hard alpha — MASK (depth write) so fluids behind do not paint over edges.
+        if (lower.contains("glass")) {
+            return RenderLayer.CUTOUT;
+        }
+        // Cutout-style foliage / rails / etc. Avoid matching solid grass_block /
+        // bamboo_planks / bamboo_block (those are opaque building blocks).
+        if (lower.contains("leaves") || lower.contains("sapling")
+                || lower.contains("short_grass") || lower.contains("tall_grass")
+                || lower.contains("fern") || lower.contains("flower")
+                || lower.contains("vine") || lower.contains("rail")
+                || lower.contains("trapdoor") || lower.contains("ladder")
+                || lower.contains("iron_bars") || lower.contains("chain")
+                || lower.contains("cutout") || lower.contains("_overlay")
+                || lower.contains("torch") || lower.contains("lantern")
+                || lower.contains("redstone_dust") || lower.contains("redstone_wire")
+                || lower.equals("minecraft:bamboo") || lower.endsWith(":bamboo")
+                || lower.contains("bamboo_sapling") || lower.contains("sugar_cane")
+                || lower.endsWith(":grass") || lower.endsWith("/grass")) {
+            return RenderLayer.CUTOUT;
+        }
+        return RenderLayer.UNKNOWN;
     }
 }
 

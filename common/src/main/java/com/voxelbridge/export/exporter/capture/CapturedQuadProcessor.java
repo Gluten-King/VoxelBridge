@@ -109,15 +109,46 @@ public final class CapturedQuadProcessor {
         float v0 = result.v0();
         float v1 = result.v1();
 
-        if (useAtlasUv && textureRes != null && textureRes.sprite() != null) {
-            float eps = 1e-4f;
-            boolean outsideSpriteBounds =
-                stats.minU() < textureRes.u0() - eps || stats.maxU() > textureRes.u1() + eps ||
-                stats.minV() < textureRes.v0() - eps || stats.maxV() > textureRes.v1() + eps;
-            if (outsideSpriteBounds) {
+        // ModelPart / submitModel capture emits sprite-local UVs in ~[0,1] (we skip
+        // SpriteCoordinateExpander in CapturingSubmitNodeCollector). ResolvedTexture
+        // still carries the MC sheet sub-rect. Un-expanding local UVs against that
+        // rect clamps every vertex to the origin → pure-black chests. Detect local
+        // UVs without requiring a large UV span (locks / small faces stay local too).
+        if (useAtlasUv && textureRes != null) {
+            float spanU = Math.max(1e-6f, textureRes.u1() - textureRes.u0());
+            float spanV = Math.max(1e-6f, textureRes.v1() - textureRes.v0());
+            boolean mcSpriteIsSubRect = spanU < 0.95f || spanV < 0.95f;
+            boolean uvInUnitSquare =
+                stats.minU() >= -0.05f && stats.maxU() <= 1.05f
+                    && stats.minV() >= -0.05f && stats.maxV() <= 1.05f;
+            if (mcSpriteIsSubRect && uvInUnitSquare) {
                 useAtlasUv = false;
                 u0 = 0f; u1 = 1f;
                 v0 = 0f; v1 = 1f;
+            } else if (textureRes.sprite() != null) {
+                // Atlas-expanded capture (true SpriteCoordinateExpander path): keep
+                // un-expand on mild half-texel overshoot; only drop bounds when UVs
+                // look unit-square *and* far outside the MC sprite rect.
+                float epsU = Math.max(1e-3f, spanU * 0.05f);
+                float epsV = Math.max(1e-3f, spanV * 0.05f);
+                boolean outsideSpriteBounds =
+                    stats.minU() < textureRes.u0() - epsU || stats.maxU() > textureRes.u1() + epsU ||
+                    stats.minV() < textureRes.v0() - epsV || stats.maxV() > textureRes.v1() + epsV;
+                if (outsideSpriteBounds) {
+                    boolean looksStandaloneLocal =
+                        uvInUnitSquare
+                            && (stats.maxU() - stats.minU()) > 0.2f
+                            && (stats.maxV() - stats.minV()) > 0.2f
+                            && (stats.minU() < textureRes.u0() - spanU
+                                || stats.maxU() > textureRes.u1() + spanU
+                                || stats.minV() < textureRes.v0() - spanV
+                                || stats.maxV() > textureRes.v1() + spanV);
+                    if (looksStandaloneLocal) {
+                        useAtlasUv = false;
+                        u0 = 0f; u1 = 1f;
+                        v0 = 0f; v1 = 1f;
+                    }
+                }
             }
         }
 
@@ -130,7 +161,7 @@ public final class CapturedQuadProcessor {
         float[] faceNormal = GeometryUtil.computeFaceNormal(positions);
         planeOffsetStrategy.apply(planeOffset, positions, faceNormal);
         sceneSink.addQuad(resolvedMaterialKey, spriteKey, TRANSPARENT_SPRITE_KEY,
-            RenderLayer.UNKNOWN, colorResult.tintMode(),
+            renderTypeResolver.resolveLayer(renderType), colorResult.tintMode(),
             renderTypeResolver.isDoubleSided(renderType),
             false,
             positions, uv0, colorResult.uv1(), NORMAL_UP, colors);

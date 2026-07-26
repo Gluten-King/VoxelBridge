@@ -1,6 +1,7 @@
 package com.voxelbridge.adapter;
 
 import com.voxelbridge.compat.FabricQuadAccess;
+import com.voxelbridge.core.ir.RenderLayer;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
@@ -27,5 +28,10 @@ public class FabricPlatformModelHelper implements PlatformModelHelper {
     @Override
     public int getQuadTintIndex(BakedQuad quad) {
         return FabricQuadAccess.getTintIndex(quad);
+    }
+
+    @Override
+    public RenderLayer getQuadRenderLayer(BakedQuad quad) {
+        return FabricQuadAccess.getRenderLayer(quad);
     }
 }

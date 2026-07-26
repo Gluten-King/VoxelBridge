@@ -39,10 +39,21 @@ public final class MinecraftClientAccess implements ClientAccess {
         return id -> Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(atlasId).getSprite(id);
     }
 
+    /**
+     * Maps Sheets texture locations ({@code textures/atlas/foo.png}) to AtlasManager
+     * definition ids ({@link net.minecraft.data.AtlasIds}).
+     * <p>
+     * Most sheets strip cleanly (e.g. {@code shulker_boxes.png} → {@code shulker_boxes}),
+     * but chest is special: {@code Sheets.CHEST_SHEET} is {@code textures/atlas/chest.png}
+     * while {@code AtlasIds.CHESTS} is {@code chests}.
+     */
     private static Identifier atlasDefinitionId(Identifier textureId) {
         String path = textureId.getPath();
         if (path.startsWith("textures/atlas/") && path.endsWith(".png")) {
             path = path.substring("textures/atlas/".length(), path.length() - ".png".length());
+        }
+        if ("chest".equals(path)) {
+            path = "chests";
         }
         return Identifier.fromNamespaceAndPath(textureId.getNamespace(), path);
     }

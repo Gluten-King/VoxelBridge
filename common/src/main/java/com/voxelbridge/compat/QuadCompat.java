@@ -1,13 +1,14 @@
 package com.voxelbridge.compat;
 
+import com.voxelbridge.adapter.Adapters;
+import com.voxelbridge.core.ir.RenderLayer;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
-import com.voxelbridge.adapter.Adapters;
 
 /**
  * Version-agnostic access to baked quad data.
- * Delegates to PlatformRenderHelper.
+ * Delegates to PlatformModelHelper.
  */
 public final class QuadCompat {
 
@@ -27,5 +28,9 @@ public final class QuadCompat {
 
     public static int getTintIndex(BakedQuad quad) {
         return Adapters.getModelHelper().getQuadTintIndex(quad);
+    }
+
+    public static RenderLayer getRenderLayer(BakedQuad quad) {
+        return Adapters.getModelHelper().getQuadRenderLayer(quad);
     }
 }

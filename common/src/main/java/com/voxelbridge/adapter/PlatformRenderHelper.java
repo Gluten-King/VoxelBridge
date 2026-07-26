@@ -10,6 +10,14 @@ public interface PlatformRenderHelper {
     net.minecraft.resources.Identifier getRenderTypeTexture(net.minecraft.client.renderer.rendertype.RenderType renderType);
     boolean isRenderTypeDoubleSided(net.minecraft.client.renderer.rendertype.RenderType renderType);
 
+    /**
+     * Best-effort map from a RenderType to IR RenderLayer for alphaMode.
+     * Default UNKNOWN when the platform cannot classify the type.
+     */
+    default com.voxelbridge.core.ir.RenderLayer getRenderTypeLayer(net.minecraft.client.renderer.rendertype.RenderType renderType) {
+        return com.voxelbridge.core.ir.RenderLayer.UNKNOWN;
+    }
+
     // RenderSystem helpers
     boolean isOnRenderThread();
     void recordRenderCall(Runnable task);

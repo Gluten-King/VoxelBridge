@@ -34,6 +34,9 @@ public final class VoxelBridgeLogger {
 
     private VoxelBridgeLogger() {}
 
+    // with* builders are the only API on log4j 2.20 (core compileOnly);
+    // newer MC runtimes mark them deprecated in favor of set* — both work at runtime.
+    @SuppressWarnings("deprecation")
     public static synchronized void initialize(Path outDir) throws IOException {
         if (!enabled) {
             return;
@@ -53,6 +56,8 @@ public final class VoxelBridgeLogger {
             String appenderName = "VB_" + module.name();
             APPENDER_NAMES.put(module, appenderName);
             if (config.getAppender(appenderName) == null) {
+                // Prefer with* builders: core compileOnly pins log4j 2.20 (no set*).
+                // Newer MC runtimes still accept with* (set* is preferred there but dual-API).
                 PatternLayout layout = PatternLayout.newBuilder()
                     .withPattern(PATTERN)
                     .withConfiguration(config)
