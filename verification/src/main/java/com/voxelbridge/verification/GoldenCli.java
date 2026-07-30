@@ -20,9 +20,10 @@ public final class GoldenCli {
         String scenario = options.getOrDefault("--scenario", "unknown");
         String minecraft = options.getOrDefault("--minecraft", "unknown");
         Path scenarioFile = optionalPath(options, "--scenario-file");
+        Path scenarioManifest = optionalPath(options, "--scenario-manifest");
 
         GoldenSnapshot actual = SemanticGltfAnalyzer.analyze(
-                gltf, scenario, minecraft, scenarioFile, 1.0e-5);
+                gltf, scenario, minecraft, scenarioFile, scenarioManifest, 1.0e-5);
 
         switch (command) {
             case "generate" -> {
@@ -79,7 +80,9 @@ public final class GoldenCli {
 
     private static void usage() {
         System.err.println("Usage:");
-        System.err.println("  generate --gltf FILE --snapshot FILE --scenario ID --minecraft VERSION [--scenario-file FILE]");
-        System.err.println("  verify   --gltf FILE --expected FILE --actual FILE --scenario ID --minecraft VERSION [--scenario-file FILE]");
+        System.err.println("  generate --gltf FILE --snapshot FILE --scenario ID --minecraft VERSION"
+                + " [--scenario-file FILE] [--scenario-manifest FILE]");
+        System.err.println("  verify   --gltf FILE --expected FILE --actual FILE --scenario ID --minecraft VERSION"
+                + " [--scenario-file FILE] [--scenario-manifest FILE]");
     }
 }

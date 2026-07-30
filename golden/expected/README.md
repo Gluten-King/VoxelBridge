@@ -9,3 +9,6 @@ Expected initial paths:
 - `1.21.1/vanilla_smoke.snapshot.json`
 - `1.21.4/vanilla_smoke.snapshot.json`
 - `1.21.8/vanilla_smoke.snapshot.json`
+- `1.21.8/render_features.snapshot.json`
+- `1.21.11/vanilla_smoke.snapshot.json`
+- `1.21.11/render_features.snapshot.json`

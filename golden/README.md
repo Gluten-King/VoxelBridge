@@ -13,7 +13,26 @@ the golden result.
 
 The verifier reads `.gltf`, every referenced binary buffer, and every referenced
 image. It canonicalizes triangle arrival order, preserves winding, quantizes float
-attributes to `1e-5`, hashes decoded RGBA pixels, and emits reviewable JSON.
+attributes to `1e-5`, hashes decoded RGBA pixels, evaluates the named semantic
+assertions from `scenario.json`, and emits reviewable JSON.
+
+Two semantic assertion types are supported:
+
+- `material` matches exported material names and checks material, primitive,
+  vertex, or triangle counts. This is used for entity and block-entity coverage.
+- `face` counts matching triangles on a world-coordinate plane and optional
+  bounds. This is used to prove that contact faces are culled while nearby
+  control faces remain present.
+
+Assertions use `expectedMaterials`/`minMaterials`/`maxMaterials` and equivalent
+`Primitives`, `Vertices`, and `Triangles` fields. A failing assertion reports its
+stable `id`, expected constraint, and observed count before golden comparison.
+Material assertions may also use the equivalent `ColorVertices`,
+`NonBlackColorVertices`, `NonWhiteColorVertices`, `UvVertices`,
+`OutOfRangeUvVertices`, and `FullRangeUvPrimitives` fields. For example,
+`minNonBlackColorVertices: 1` catches a renderer tint captured as black, while
+`maxFullRangeUvPrimitives: 0` catches raw 0..1 UVs that were not remapped into
+atlas placement space.
 
 Generate a snapshot from an existing export:
 
@@ -23,7 +42,8 @@ Generate a snapshot from an existing export:
   "-Psnapshot=golden/expected/1.21.8/vanilla_smoke.snapshot.json" `
   "-Pscenario=vanilla_smoke" `
   "-PminecraftVersion=1.21.8" `
-  "-PscenarioFile=golden/scenarios/vanilla_smoke/scene.mcfunction"
+  "-PscenarioFile=golden/scenarios/vanilla_smoke/scene.mcfunction" `
+  "-PscenarioManifest=golden/scenarios/vanilla_smoke/scenario.json"
 ```
 
 Verify without modifying the expected snapshot:
@@ -34,7 +54,8 @@ Verify without modifying the expected snapshot:
   "-Pexpected=golden/expected/1.21.8/vanilla_smoke.snapshot.json" `
   "-Pscenario=vanilla_smoke" `
   "-PminecraftVersion=1.21.8" `
-  "-PscenarioFile=golden/scenarios/vanilla_smoke/scene.mcfunction"
+  "-PscenarioFile=golden/scenarios/vanilla_smoke/scene.mcfunction" `
+  "-PscenarioManifest=golden/scenarios/vanilla_smoke/scenario.json"
 ```
 
 ## Fully automated client run
@@ -64,6 +85,25 @@ updating a baseline. Subsequent runs use:
 ```
 
 Both loaders compare against the same expected snapshot.
+
+Run the focused entity, block-entity, and nonsolid-culling scene with:
+
+```powershell
+.\gradlew.bat verifyGoldenClient `
+  "-PgoldenTarget=fabric-1.21.11" `
+  "-PgoldenScenario=render_features"
+```
+
+The focused scene covers entity and block-entity capture, same-leaves face
+deduplication on all three axes, and leaves, stairs, slabs, and glass touching
+solid blocks. The culling checks include EAST, SOUTH, and UP contacts. Each
+culled contact has exterior and solid-side control-face assertions so an
+over-culling regression cannot pass by merely deleting both sides.
+
+Client automation reads `threadCount`, `atlasMode`, `coordinateMode`,
+`exportDoubleSided`, and `nonsolidCulling` from the scenario manifest. Golden
+client runs for the same target are protected by a cross-process lock so
+overlapping invocations cannot replace each other's disposable world or output.
 
 If NeoForge cannot quick-play a Fabric-created template, create a separate
 NeoForge world and package it without changing the semantic baseline:

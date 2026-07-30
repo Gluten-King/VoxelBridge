@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${mod_version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "authors": [
+    "${mod_authors}"
+  ],
+  "contact": {
+    "homepage": "https://modrinth.com/mod/voxelbridge",
+    "issues": "https://github.com/Gluten-King/VoxelBridge/issues"
+  },
+  "license": "${mod_license}",
+  "icon": "assets/voxelbridge/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.voxelbridge.VoxelBridge"
+    ],
+    "modmenu": [
+      "com.voxelbridge.platform.FabricModMenuIntegration"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=${fabric_loader_version}",
+    "minecraft": "${fabric_minecraft_version}",
+    "fabric-api": "*",
+    "cloth-config2": "*"
+  },
+  "suggests": {
+    "modmenu": "*"
+  },
+  "mixins": [
+    "voxelbridge.mixins.json"
+  ]
+}

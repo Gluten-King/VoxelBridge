@@ -1,0 +1,302 @@
+{
+  "assertions" : [ {
+    "id" : "entity_geometry",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 108,
+    "type" : "material",
+    "vertexCount" : 216
+  }, {
+    "id" : "block_entity_geometry",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 36,
+    "type" : "material",
+    "vertexCount" : 72
+  }, {
+    "id" : "leaves_pair_shared_face_deduplicated",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "leaves_pair_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "leaves_pair_south_shared_face_deduplicated",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "leaves_pair_south_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "leaves_pair_up_shared_face_deduplicated",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "leaves_pair_down_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "leaves_vs_solid_contact_culled",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 0,
+    "type" : "face",
+    "vertexCount" : 0
+  }, {
+    "id" : "leaves_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "solid_face_next_to_leaves_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "stairs_vs_solid_contact_culled",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 0,
+    "type" : "face",
+    "vertexCount" : 0
+  }, {
+    "id" : "stairs_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "solid_face_next_to_stairs_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "slab_vs_solid_contact_culled",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 0,
+    "type" : "face",
+    "vertexCount" : 0
+  }, {
+    "id" : "slab_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "solid_face_next_to_slab_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "glass_vs_solid_contact_culled",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 0,
+    "type" : "face",
+    "vertexCount" : 0
+  }, {
+    "id" : "glass_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "solid_face_next_to_glass_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "glass_vs_solid_south_contact_culled",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 0,
+    "type" : "face",
+    "vertexCount" : 0
+  }, {
+    "id" : "glass_north_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "solid_face_next_to_south_glass_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "glass_vs_solid_up_contact_culled",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 0,
+    "type" : "face",
+    "vertexCount" : 0
+  }, {
+    "id" : "glass_down_exterior_face_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  }, {
+    "id" : "solid_face_next_to_up_glass_preserved",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 2,
+    "type" : "face",
+    "vertexCount" : 6
+  } ],
+  "boundsMax" : [ 7.5, 0.0, 3.5 ],
+  "boundsMin" : [ -6.5, -2.0, -6.5 ],
+  "geometryHash" : "992fb3588dbf8884ea9833980a978077708a5425015f867cb819d6e27672d9b4",
+  "imageReferenceCount" : 9,
+  "images" : [ {
+    "height" : 64,
+    "id" : "textures/blockentity_minecraft_entity_chest_normal.png",
+    "rgbaHash" : "ed11b2556dc6863c10b38d9b939dc1c77909f1d23fdb0e8a8f651f388675fc86",
+    "width" : 64
+  }, {
+    "height" : 8192,
+    "id" : "textures/colormap/colormap_1001.png",
+    "rgbaHash" : "76f2863fa9cd474b0b56f5a119b5f2c2806bc910abb6f366fdf4f61fa2a90a4a",
+    "width" : 8192
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_birch_planks.png",
+    "rgbaHash" : "bb501fe218322ab65d8542c89ac84c2068ead1fb3b3aa236bb040d0e6639c4d2",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_glass.png",
+    "rgbaHash" : "1a887f8f1ec788c7ad4b796e37da862440c57568a2dca643b10dafa09779178a",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_oak_leaves.png",
+    "rgbaHash" : "098a82064b5ce7d3aa3edbebeea6e35c6b5de5cb067c563c4b6b50910e0e55f7",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_oak_planks.png",
+    "rgbaHash" : "6138b0af077708bac68849ad2ea90ae403cdd4e8976d6cfddd13ccba7ad0c783",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_spruce_leaves.png",
+    "rgbaHash" : "2d4ee6ccb2e2f578a0471816550129dcc6f855194d0068d46250876228cd12d2",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/minecraft_block_stone.png",
+    "rgbaHash" : "057ffefa8bfcd516c6f7828cdf33271f15a5fd429b127e8caa348d50a0787304",
+    "width" : 16
+  }, {
+    "height" : 16,
+    "id" : "textures/voxelbridge_transparent.png",
+    "rgbaHash" : "1a6e5b651c5a335b11ececb4ece05317b0c2d581ae160b441941f183e1a92590",
+    "width" : 16
+  } ],
+  "materials" : [ {
+    "geometryHash" : "564796661225cc5190e115c8c76c3ea94d19cd1fc5889a68d5120d3031f3844e",
+    "name" : "blockentity:minecraft/entity/chest/normal__blockentity_minecraft_entity_chest_normal",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "ed11b2556dc6863c10b38d9b939dc1c77909f1d23fdb0e8a8f651f388675fc86" ],
+    "triangleCount" : 36,
+    "vertexCount" : 72
+  }, {
+    "geometryHash" : "c6acc17e0628d0423e8faaffb9bd208d4f4762a0ebd0f0800f5cc528df95c3d3",
+    "name" : "entity:minecraft/white__entity_minecraft_white",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "1a6e5b651c5a335b11ececb4ece05317b0c2d581ae160b441941f183e1a92590" ],
+    "triangleCount" : 108,
+    "vertexCount" : 216
+  }, {
+    "geometryHash" : "4842a57132ce7de37e8d23990a20c5729a910b4e035e2abf23285828e5664a0f",
+    "name" : "minecraft:block/birch_planks__minecraft_block_birch_planks",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "bb501fe218322ab65d8542c89ac84c2068ead1fb3b3aa236bb040d0e6639c4d2" ],
+    "triangleCount" : 10,
+    "vertexCount" : 20
+  }, {
+    "geometryHash" : "9ca85cc8b79812d94caa30346203c7746d52f369fd539c991f3b9a84dff90322",
+    "name" : "minecraft:block/glass__minecraft_block_glass",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "1a887f8f1ec788c7ad4b796e37da862440c57568a2dca643b10dafa09779178a" ],
+    "triangleCount" : 30,
+    "vertexCount" : 60
+  }, {
+    "geometryHash" : "5523c79e30d3cd2e069f54e5510a5b15e95ec05a63de2cf3f12c6d85ce804fa0",
+    "name" : "minecraft:block/oak_leaves__minecraft_block_oak_leaves",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "098a82064b5ce7d3aa3edbebeea6e35c6b5de5cb067c563c4b6b50910e0e55f7" ],
+    "triangleCount" : 66,
+    "vertexCount" : 132
+  }, {
+    "geometryHash" : "4b1951b9a6d731bc5d95f2d25580468e306f24f8b63b02a94819f529b251f7ad",
+    "name" : "minecraft:block/oak_planks__minecraft_block_oak_planks",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "6138b0af077708bac68849ad2ea90ae403cdd4e8976d6cfddd13ccba7ad0c783" ],
+    "triangleCount" : 18,
+    "vertexCount" : 36
+  }, {
+    "geometryHash" : "ba9de0995696981b13bf5b3e14bb26113d7dcea7af72d825363c04102695f794",
+    "name" : "minecraft:block/spruce_leaves__minecraft_block_spruce_leaves",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "2d4ee6ccb2e2f578a0471816550129dcc6f855194d0068d46250876228cd12d2" ],
+    "triangleCount" : 10,
+    "vertexCount" : 20
+  }, {
+    "geometryHash" : "1b4c37b5a819a05094c88ac3a9b14ab52162e18a642504331569d72967627a4d",
+    "name" : "minecraft:block/stone__minecraft_block_stone",
+    "primitiveCount" : 1,
+    "textureRgbaHashes" : [ "057ffefa8bfcd516c6f7828cdf33271f15a5fd429b127e8caa348d50a0787304" ],
+    "triangleCount" : 72,
+    "vertexCount" : 144
+  } ],
+  "meshCount" : 8,
+  "minecraftVersion" : "1.21.11",
+  "nodeCount" : 8,
+  "primitiveCount" : 8,
+  "scenario" : "render_features",
+  "scenarioHash" : "218e4565291ebf67af9bc2ea5d6e59f01963dff29c72edd436b3c223bc66aedd",
+  "sceneCount" : 1,
+  "schemaVersion" : 2,
+  "triangleCount" : 350,
+  "vertexCount" : 700
+}

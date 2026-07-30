@@ -75,6 +75,10 @@ def cliArgs = { String command ->
     if (scenarioFile) {
         result += ['--scenario-file', rootProject.file(scenarioFile).absolutePath]
     }
+    def scenarioManifest = providers.gradleProperty('scenarioManifest').orNull
+    if (scenarioManifest) {
+        result += ['--scenario-manifest', rootProject.file(scenarioManifest).absolutePath]
+    }
     return result
 }
 

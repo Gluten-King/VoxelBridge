@@ -1,0 +1,12 @@
+{
+    "required": true,
+    "package": "com.voxelbridge.mixin",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "TextureAtlasAccessor",
+        "SpriteContentsAccessor"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

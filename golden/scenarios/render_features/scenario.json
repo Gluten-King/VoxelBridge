@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 1,
+  "id": "render_features",
+  "settleTicks": 40,
+  "selection": {
+    "min": [0, 60, 0],
+    "max": [15, 72, 15]
+  },
+  "export": {
+    "threadCount": 1,
+    "atlasMode": "individual",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "features": [
+    "entity",
+    "block_entity",
+    "same_nonsolid_face_deduplication_xyz",
+    "leaves_against_solid",
+    "stairs_against_solid",
+    "slab_against_solid",
+    "glass_against_solid_xyz",
+    "solid_side_preservation"
+  ],
+  "assertions": [
+    {
+      "id": "entity_geometry",
+      "type": "material",
+      "materialRegex": "^entity:",
+      "expectedMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1
+    },
+    {
+      "id": "block_entity_geometry",
+      "type": "material",
+      "materialRegex": "^blockentity:",
+      "expectedMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1,
+      "minColorVertices": 1,
+      "minNonBlackColorVertices": 1
+    },
+    {
+      "id": "leaves_pair_shared_face_deduplicated",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_leaves(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 2,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "leaves_pair_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_leaves(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 1,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "leaves_pair_south_shared_face_deduplicated",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_leaves(?:__|$)",
+      "face": {
+        "axis": "z",
+        "coordinate": 9,
+        "bounds": {"x": [1, 2], "y": [64, 65]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "leaves_pair_south_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_leaves(?:__|$)",
+      "face": {
+        "axis": "z",
+        "coordinate": 8,
+        "bounds": {"x": [1, 2], "y": [64, 65]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "leaves_pair_up_shared_face_deduplicated",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_leaves(?:__|$)",
+      "face": {
+        "axis": "y",
+        "coordinate": 65,
+        "bounds": {"x": [4, 5], "z": [8, 9]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "leaves_pair_down_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_leaves(?:__|$)",
+      "face": {
+        "axis": "y",
+        "coordinate": 64,
+        "bounds": {"x": [4, 5], "z": [8, 9]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "leaves_vs_solid_contact_culled",
+      "type": "face",
+      "materialRegex": "^minecraft:block/spruce_leaves(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 5,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 0
+    },
+    {
+      "id": "leaves_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/spruce_leaves(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 4,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "solid_face_next_to_leaves_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/stone(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 5,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "stairs_vs_solid_contact_culled",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_planks(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 8,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 0
+    },
+    {
+      "id": "stairs_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/oak_planks(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 7,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "minTriangles": 2
+    },
+    {
+      "id": "solid_face_next_to_stairs_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/stone(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 8,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "slab_vs_solid_contact_culled",
+      "type": "face",
+      "materialRegex": "^minecraft:block/birch_planks(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 11,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 0
+    },
+    {
+      "id": "slab_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/birch_planks(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 10,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "solid_face_next_to_slab_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/stone(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 11,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "glass_vs_solid_contact_culled",
+      "type": "face",
+      "materialRegex": "^minecraft:block/glass(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 14,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 0
+    },
+    {
+      "id": "glass_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/glass(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 13,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "solid_face_next_to_glass_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/stone(?:__|$)",
+      "face": {
+        "axis": "x",
+        "coordinate": 14,
+        "bounds": {"y": [64, 65], "z": [5, 6]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "glass_vs_solid_south_contact_culled",
+      "type": "face",
+      "materialRegex": "^minecraft:block/glass(?:__|$)",
+      "face": {
+        "axis": "z",
+        "coordinate": 10,
+        "bounds": {"x": [7, 8], "y": [64, 65]}
+      },
+      "expectedTriangles": 0
+    },
+    {
+      "id": "glass_north_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/glass(?:__|$)",
+      "face": {
+        "axis": "z",
+        "coordinate": 9,
+        "bounds": {"x": [7, 8], "y": [64, 65]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "solid_face_next_to_south_glass_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/stone(?:__|$)",
+      "face": {
+        "axis": "z",
+        "coordinate": 10,
+        "bounds": {"x": [7, 8], "y": [64, 65]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "glass_vs_solid_up_contact_culled",
+      "type": "face",
+      "materialRegex": "^minecraft:block/glass(?:__|$)",
+      "face": {
+        "axis": "y",
+        "coordinate": 65,
+        "bounds": {"x": [10, 11], "z": [9, 10]}
+      },
+      "expectedTriangles": 0
+    },
+    {
+      "id": "glass_down_exterior_face_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/glass(?:__|$)",
+      "face": {
+        "axis": "y",
+        "coordinate": 64,
+        "bounds": {"x": [10, 11], "z": [9, 10]}
+      },
+      "expectedTriangles": 2
+    },
+    {
+      "id": "solid_face_next_to_up_glass_preserved",
+      "type": "face",
+      "materialRegex": "^minecraft:block/stone(?:__|$)",
+      "face": {
+        "axis": "y",
+        "coordinate": 65,
+        "bounds": {"x": [10, 11], "z": [9, 10]}
+      },
+      "expectedTriangles": 2
+    }
+  ]
+}

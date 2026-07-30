@@ -19,5 +19,23 @@
     "fluid",
     "block_entity",
     "entity"
+  ],
+  "assertions": [
+    {
+      "id": "entity_geometry",
+      "type": "material",
+      "materialRegex": "^entity:",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1
+    },
+    {
+      "id": "block_entity_geometry",
+      "type": "material",
+      "materialRegex": "^blockentity:",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1
+    }
   ]
 }

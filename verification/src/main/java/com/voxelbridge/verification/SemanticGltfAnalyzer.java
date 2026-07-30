@@ -2,6 +2,7 @@ package com.voxelbridge.verification;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.voxelbridge.verification.GoldenSnapshot.AssertionSnapshot;
 import com.voxelbridge.verification.GoldenSnapshot.ImageSnapshot;
 import com.voxelbridge.verification.GoldenSnapshot.MaterialSnapshot;
 
@@ -28,10 +29,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 public final class SemanticGltfAnalyzer {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final int SNAPSHOT_SCHEMA_VERSION = 1;
+    private static final int SNAPSHOT_SCHEMA_VERSION = 2;
 
     private SemanticGltfAnalyzer() {}
 
@@ -40,6 +43,16 @@ public final class SemanticGltfAnalyzer {
             String scenario,
             String minecraftVersion,
             Path scenarioFile,
+            double epsilon) throws IOException {
+        return analyze(gltfPath, scenario, minecraftVersion, scenarioFile, null, epsilon);
+    }
+
+    public static GoldenSnapshot analyze(
+            Path gltfPath,
+            String scenario,
+            String minecraftVersion,
+            Path scenarioFile,
+            Path scenarioManifest,
             double epsilon) throws IOException {
         if (!(epsilon > 0.0) || !Double.isFinite(epsilon)) {
             throw new IllegalArgumentException("epsilon must be finite and greater than zero");
@@ -65,6 +78,8 @@ public final class SemanticGltfAnalyzer {
 
         JsonNode meshes = array(root, "meshes");
         Map<String, MaterialAccumulator> materialData = new TreeMap<>();
+        List<TriangleGeometry> triangleGeometry = new ArrayList<>();
+        List<PrimitiveAttributeStats> primitiveAttributeStats = new ArrayList<>();
         long totalVertices = 0;
         long totalTriangles = 0;
         int primitiveCount = 0;
@@ -103,12 +118,21 @@ public final class SemanticGltfAnalyzer {
                     throw new IOException("TRIANGLES index count must be divisible by three");
                 }
 
+                int materialIndex = primitive.path("material").asInt(-1);
+                String materialName = materialName(root, materialIndex);
+                primitiveAttributeStats.add(attributeStats(
+                        materialName, positions.count(), uv0, colors, epsilon));
                 List<String> triangles = new ArrayList<>(indices.length / 3);
                 for (int i = 0; i < indices.length; i += 3) {
                     String a = vertexToken(indices[i], positions, normals, uv0, uv1, colors, epsilon);
                     String b = vertexToken(indices[i + 1], positions, normals, uv0, uv1, colors, epsilon);
                     String c = vertexToken(indices[i + 2], positions, normals, uv0, uv1, colors, epsilon);
                     triangles.add(canonicalTriangle(a, b, c));
+                    triangleGeometry.add(new TriangleGeometry(
+                            materialName,
+                            positionAt(indices[i], positions),
+                            positionAt(indices[i + 1], positions),
+                            positionAt(indices[i + 2], positions)));
                 }
 
                 for (double[] position : positions.values()) {
@@ -119,8 +143,6 @@ public final class SemanticGltfAnalyzer {
                     }
                 }
 
-                int materialIndex = primitive.path("material").asInt(-1);
-                String materialName = materialName(root, materialIndex);
                 MaterialAccumulator accumulator = materialData.computeIfAbsent(
                         materialName, ignored -> new MaterialAccumulator());
                 accumulator.primitiveCount++;
@@ -156,7 +178,10 @@ public final class SemanticGltfAnalyzer {
                     List.copyOf(value.textureHashes)));
         }
 
-        String scenarioHash = scenarioFile == null ? "" : sha256(Files.readAllBytes(scenarioFile));
+        List<AssertionSnapshot> assertionSnapshots = evaluateAssertions(
+                scenarioManifest, materialSnapshots, triangleGeometry,
+                primitiveAttributeStats, epsilon);
+        String scenarioHash = scenarioHash(scenarioFile, scenarioManifest);
         return new GoldenSnapshot(
                 SNAPSHOT_SCHEMA_VERSION,
                 scenario,
@@ -172,8 +197,16 @@ public final class SemanticGltfAnalyzer {
                 quantizedVector(boundsMin, epsilon),
                 quantizedVector(boundsMax, epsilon),
                 HexFormat.of().formatHex(overallGeometry.digest()),
+                assertionSnapshots,
                 List.copyOf(materialSnapshots),
                 imageSnapshots);
+    }
+
+    private static double[] positionAt(long index, AccessorData positions) throws IOException {
+        if (index < 0 || index >= positions.count()) {
+            throw new IOException("Index " + index + " is outside POSITION count " + positions.count());
+        }
+        return positions.values()[Math.toIntExact(index)];
     }
 
     private static AccessorData optionalAccessor(Accessors accessors, JsonNode attributes, String name)
@@ -281,6 +314,358 @@ public final class SemanticGltfAnalyzer {
             result.add(imageInfos.get(imageIndex).snapshot().rgbaHash());
         }
         return result;
+    }
+
+    private static List<AssertionSnapshot> evaluateAssertions(
+            Path scenarioManifest,
+            List<MaterialSnapshot> materials,
+            List<TriangleGeometry> triangles,
+            List<PrimitiveAttributeStats> primitiveAttributes,
+            double epsilon) throws IOException {
+        if (scenarioManifest == null) {
+            return List.of();
+        }
+        if (!Files.isRegularFile(scenarioManifest)) {
+            throw new IOException("Scenario manifest does not exist: " + scenarioManifest);
+        }
+
+        JsonNode manifest = JSON.readTree(scenarioManifest.toFile());
+        int schemaVersion = manifest.path("schemaVersion").asInt(-1);
+        if (schemaVersion != 1) {
+            throw new IOException("Unsupported scenario manifest schemaVersion " + schemaVersion
+                    + ": " + scenarioManifest);
+        }
+        JsonNode definitions = manifest.path("assertions");
+        if (definitions.isMissingNode() || definitions.isNull()) {
+            return List.of();
+        }
+        if (!definitions.isArray()) {
+            throw new IOException("Scenario manifest assertions must be an array: " + scenarioManifest);
+        }
+
+        double[] center = selectionCenter(manifest.path("selection"));
+        String coordinateMode = manifest.path("export").path("coordinateMode").asText("centered");
+        boolean centeredCoordinates = !"world_origin".equalsIgnoreCase(coordinateMode)
+                && !"world-origin".equalsIgnoreCase(coordinateMode);
+        Set<String> ids = new LinkedHashSet<>();
+        List<AssertionSnapshot> results = new ArrayList<>();
+        for (JsonNode definition : definitions) {
+            String id = requiredText(definition, "id", "semantic assertion");
+            if (!ids.add(id)) {
+                throw new IOException("Duplicate semantic assertion id: " + id);
+            }
+            String type = requiredText(definition, "type", "semantic assertion " + id);
+            Pattern materialPattern = compilePattern(
+                    requiredText(definition, "materialRegex", "semantic assertion " + id), id);
+
+            List<MaterialSnapshot> matchingMaterials = materials.stream()
+                    .filter(material -> materialPattern.matcher(material.name()).find())
+                    .toList();
+            int materialCount = matchingMaterials.size();
+            int primitiveCount = matchingMaterials.stream()
+                    .mapToInt(MaterialSnapshot::primitiveCount)
+                    .sum();
+            long vertexCount = matchingMaterials.stream()
+                    .mapToLong(MaterialSnapshot::vertexCount)
+                    .sum();
+            long triangleCount = matchingMaterials.stream()
+                    .mapToLong(MaterialSnapshot::triangleCount)
+                    .sum();
+            List<PrimitiveAttributeStats> matchingAttributes = primitiveAttributes.stream()
+                    .filter(stats -> materialPattern.matcher(stats.material()).find())
+                    .toList();
+            long colorVertices = matchingAttributes.stream()
+                    .mapToLong(PrimitiveAttributeStats::colorVertices)
+                    .sum();
+            long nonBlackColorVertices = matchingAttributes.stream()
+                    .mapToLong(PrimitiveAttributeStats::nonBlackColorVertices)
+                    .sum();
+            long nonWhiteColorVertices = matchingAttributes.stream()
+                    .mapToLong(PrimitiveAttributeStats::nonWhiteColorVertices)
+                    .sum();
+            long uvVertices = matchingAttributes.stream()
+                    .mapToLong(PrimitiveAttributeStats::uvVertices)
+                    .sum();
+            long outOfRangeUvVertices = matchingAttributes.stream()
+                    .mapToLong(PrimitiveAttributeStats::outOfRangeUvVertices)
+                    .sum();
+            long fullRangeUvPrimitives = matchingAttributes.stream()
+                    .filter(PrimitiveAttributeStats::fullRangeUv)
+                    .count();
+
+            if ("face".equals(type)) {
+                FaceSelector face = parseFaceSelector(
+                        definition.path("face"), center, centeredCoordinates, epsilon, id);
+                triangleCount = triangles.stream()
+                        .filter(triangle -> materialPattern.matcher(triangle.material()).find())
+                        .filter(face::matches)
+                        .count();
+                vertexCount = triangleCount * 3L;
+            } else if (!"material".equals(type)) {
+                throw new IOException("Semantic assertion " + id
+                        + " has unsupported type '" + type + "'");
+            }
+
+            assertMetric(definition, id, "Materials", materialCount);
+            assertMetric(definition, id, "Primitives", primitiveCount);
+            assertMetric(definition, id, "Vertices", vertexCount);
+            assertMetric(definition, id, "Triangles", triangleCount);
+            assertMetric(definition, id, "ColorVertices", colorVertices);
+            assertMetric(definition, id, "NonBlackColorVertices", nonBlackColorVertices);
+            assertMetric(definition, id, "NonWhiteColorVertices", nonWhiteColorVertices);
+            assertMetric(definition, id, "UvVertices", uvVertices);
+            assertMetric(definition, id, "OutOfRangeUvVertices", outOfRangeUvVertices);
+            assertMetric(definition, id, "FullRangeUvPrimitives", fullRangeUvPrimitives);
+            results.add(new AssertionSnapshot(
+                    id, type, materialCount, primitiveCount, vertexCount, triangleCount));
+        }
+        return List.copyOf(results);
+    }
+
+    private static PrimitiveAttributeStats attributeStats(
+            String material,
+            int vertexCount,
+            AccessorData uv0,
+            AccessorData colors,
+            double epsilon) throws IOException {
+        long nonBlackColorVertices = 0;
+        long nonWhiteColorVertices = 0;
+        if (colors != null) {
+            for (double[] color : colors.values()) {
+                int rgbComponents = Math.min(3, color.length);
+                boolean nonBlack = false;
+                boolean nonWhite = false;
+                for (int component = 0; component < rgbComponents; component++) {
+                    double value = requireFinite(color[component], "COLOR_0");
+                    nonBlack |= value > epsilon;
+                    nonWhite |= value < 1.0 - epsilon;
+                }
+                if (nonBlack) {
+                    nonBlackColorVertices++;
+                }
+                if (nonWhite) {
+                    nonWhiteColorVertices++;
+                }
+            }
+        }
+
+        long outOfRangeUvVertices = 0;
+        boolean fullRangeUv = false;
+        if (uv0 != null) {
+            double minU = Double.POSITIVE_INFINITY;
+            double minV = Double.POSITIVE_INFINITY;
+            double maxU = Double.NEGATIVE_INFINITY;
+            double maxV = Double.NEGATIVE_INFINITY;
+            for (double[] uv : uv0.values()) {
+                double u = requireFinite(uv[0], "TEXCOORD_0");
+                double v = requireFinite(uv[1], "TEXCOORD_0");
+                minU = Math.min(minU, u);
+                minV = Math.min(minV, v);
+                maxU = Math.max(maxU, u);
+                maxV = Math.max(maxV, v);
+                if (u < -epsilon || u > 1.0 + epsilon || v < -epsilon || v > 1.0 + epsilon) {
+                    outOfRangeUvVertices++;
+                }
+            }
+            fullRangeUv = minU <= epsilon && minV <= epsilon
+                    && maxU >= 1.0 - epsilon && maxV >= 1.0 - epsilon;
+        }
+
+        return new PrimitiveAttributeStats(
+                material,
+                colors == null ? 0 : vertexCount,
+                nonBlackColorVertices,
+                nonWhiteColorVertices,
+                uv0 == null ? 0 : vertexCount,
+                outOfRangeUvVertices,
+                fullRangeUv);
+    }
+
+    private static FaceSelector parseFaceSelector(
+            JsonNode face,
+            double[] center,
+            boolean centeredCoordinates,
+            double epsilon,
+            String assertionId) throws IOException {
+        if (!face.isObject()) {
+            throw new IOException("Semantic face assertion " + assertionId + " is missing a face object");
+        }
+        String axisName = requiredText(face, "axis", "semantic face assertion " + assertionId);
+        int axis = switch (axisName) {
+            case "x" -> 0;
+            case "y" -> 1;
+            case "z" -> 2;
+            default -> throw new IOException("Semantic face assertion " + assertionId
+                    + " has invalid axis '" + axisName + "'");
+        };
+        if (!face.has("coordinate") || !face.path("coordinate").isNumber()) {
+            throw new IOException("Semantic face assertion " + assertionId
+                    + " requires a numeric coordinate");
+        }
+
+        String space = face.path("space").asText("world");
+        if (!"world".equals(space) && !"gltf".equals(space)) {
+            throw new IOException("Semantic face assertion " + assertionId
+                    + " has invalid coordinate space '" + space + "'");
+        }
+        if ("world".equals(space) && centeredCoordinates && center == null) {
+            throw new IOException("Semantic face assertion " + assertionId
+                    + " uses world coordinates but the scenario has no valid selection");
+        }
+
+        double coordinate = requireFinite(face.path("coordinate").asDouble(), "face coordinate");
+        if ("world".equals(space) && centeredCoordinates) {
+            coordinate -= center[axis];
+        }
+        double tolerance = face.has("tolerance")
+                ? requireFinite(face.path("tolerance").asDouble(), "face tolerance")
+                : Math.max(1.0e-3, epsilon * 2.0);
+        if (!(tolerance > 0.0)) {
+            throw new IOException("Semantic face assertion " + assertionId
+                    + " requires a positive tolerance");
+        }
+
+        double[][] bounds = {
+                {Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY},
+                {Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY},
+                {Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY}
+        };
+        JsonNode boundsNode = face.path("bounds");
+        if (!boundsNode.isMissingNode() && !boundsNode.isObject()) {
+            throw new IOException("Semantic face assertion " + assertionId
+                    + " bounds must be an object");
+        }
+        String[] axisNames = {"x", "y", "z"};
+        for (int component = 0; component < 3; component++) {
+            JsonNode range = boundsNode.path(axisNames[component]);
+            if (range.isMissingNode()) {
+                continue;
+            }
+            if (!range.isArray() || range.size() != 2
+                    || !range.get(0).isNumber() || !range.get(1).isNumber()) {
+                throw new IOException("Semantic face assertion " + assertionId
+                        + " bound " + axisNames[component] + " must be [min, max]");
+            }
+            double min = requireFinite(range.get(0).asDouble(), "face bound");
+            double max = requireFinite(range.get(1).asDouble(), "face bound");
+            if (min > max) {
+                throw new IOException("Semantic face assertion " + assertionId
+                        + " bound " + axisNames[component] + " has min > max");
+            }
+            if ("world".equals(space) && centeredCoordinates) {
+                min -= center[component];
+                max -= center[component];
+            }
+            bounds[component][0] = min;
+            bounds[component][1] = max;
+        }
+        return new FaceSelector(axis, coordinate, bounds, tolerance);
+    }
+
+    private static double[] selectionCenter(JsonNode selection) throws IOException {
+        if (selection.isMissingNode() || selection.isNull()) {
+            return null;
+        }
+        if (!selection.isObject()) {
+            throw new IOException("Scenario selection must be an object");
+        }
+        double[] min = vector3(selection.path("min"), "scenario selection min");
+        double[] max = vector3(selection.path("max"), "scenario selection max");
+        return new double[] {
+                (min[0] + max[0]) / 2.0,
+                (min[1] + max[1]) / 2.0,
+                (min[2] + max[2]) / 2.0
+        };
+    }
+
+    private static double[] vector3(JsonNode node, String description) throws IOException {
+        if (!node.isArray() || node.size() != 3) {
+            throw new IOException(description + " must contain three numbers");
+        }
+        double[] result = new double[3];
+        for (int i = 0; i < result.length; i++) {
+            if (!node.get(i).isNumber()) {
+                throw new IOException(description + " must contain three numbers");
+            }
+            result[i] = requireFinite(node.get(i).asDouble(), description);
+        }
+        return result;
+    }
+
+    private static String requiredText(JsonNode owner, String field, String description) throws IOException {
+        String value = owner.path(field).asText("").trim();
+        if (value.isEmpty()) {
+            throw new IOException(description + " requires a non-empty " + field);
+        }
+        return value;
+    }
+
+    private static Pattern compilePattern(String expression, String assertionId) throws IOException {
+        try {
+            return Pattern.compile(expression);
+        } catch (PatternSyntaxException e) {
+            throw new IOException("Semantic assertion " + assertionId
+                    + " has invalid materialRegex: " + e.getMessage(), e);
+        }
+    }
+
+    private static void assertMetric(
+            JsonNode definition,
+            String assertionId,
+            String suffix,
+            long actual) throws IOException {
+        String expectedField = "expected" + suffix;
+        String minimumField = "min" + suffix;
+        String maximumField = "max" + suffix;
+        if (definition.has(expectedField)) {
+            long expected = nonNegativeLong(definition.path(expectedField), expectedField, assertionId);
+            if (actual != expected) {
+                throw assertionFailure(assertionId, expectedField + "=" + expected, actual);
+            }
+        }
+        if (definition.has(minimumField)) {
+            long minimum = nonNegativeLong(definition.path(minimumField), minimumField, assertionId);
+            if (actual < minimum) {
+                throw assertionFailure(assertionId, minimumField + "=" + minimum, actual);
+            }
+        }
+        if (definition.has(maximumField)) {
+            long maximum = nonNegativeLong(definition.path(maximumField), maximumField, assertionId);
+            if (actual > maximum) {
+                throw assertionFailure(assertionId, maximumField + "=" + maximum, actual);
+            }
+        }
+    }
+
+    private static long nonNegativeLong(JsonNode node, String field, String assertionId) throws IOException {
+        if (!node.isIntegralNumber() || !node.canConvertToLong() || node.asLong() < 0L) {
+            throw new IOException("Semantic assertion " + assertionId
+                    + " requires " + field + " to be a non-negative integer");
+        }
+        return node.asLong();
+    }
+
+    private static AssertionError assertionFailure(String id, String expected, long actual) {
+        return new AssertionError("Semantic assertion '" + id + "' failed: "
+                + expected + ", actual=" + actual);
+    }
+
+    private static String scenarioHash(Path scenarioFile, Path scenarioManifest) throws IOException {
+        if (scenarioFile == null && scenarioManifest == null) {
+            return "";
+        }
+        if (scenarioManifest == null) {
+            return sha256(Files.readAllBytes(scenarioFile));
+        }
+        MessageDigest digest = sha256();
+        if (scenarioFile != null) {
+            updateString(digest, "scene.mcfunction");
+            digest.update(Files.readAllBytes(scenarioFile));
+            digest.update((byte) '\n');
+        }
+        updateString(digest, "scenario.json");
+        digest.update(Files.readAllBytes(scenarioManifest));
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private static List<ImageInfo> readImages(JsonNode root, Accessors accessors, Path baseDir) throws IOException {
@@ -409,7 +794,42 @@ public final class SemanticGltfAnalyzer {
         return value.isArray() ? value : JSON.createArrayNode();
     }
 
+    private record TriangleGeometry(String material, double[] a, double[] b, double[] c) {}
+
+    private record FaceSelector(int axis, double coordinate, double[][] bounds, double tolerance) {
+        boolean matches(TriangleGeometry triangle) {
+            return matchesVertex(triangle.a())
+                    && matchesVertex(triangle.b())
+                    && matchesVertex(triangle.c());
+        }
+
+        private boolean matchesVertex(double[] vertex) {
+            if (Math.abs(vertex[axis] - coordinate) > tolerance) {
+                return false;
+            }
+            for (int component = 0; component < 3; component++) {
+                if (component == axis) {
+                    continue;
+                }
+                if (vertex[component] < bounds[component][0] - tolerance
+                        || vertex[component] > bounds[component][1] + tolerance) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     private record ImageInfo(ImageSnapshot snapshot) {}
+
+    private record PrimitiveAttributeStats(
+            String material,
+            long colorVertices,
+            long nonBlackColorVertices,
+            long nonWhiteColorVertices,
+            long uvVertices,
+            long outOfRangeUvVertices,
+            boolean fullRangeUv) {}
 
     private static final class MaterialAccumulator {
         int primitiveCount;

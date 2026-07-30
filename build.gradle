@@ -1,5 +1,6 @@
 plugins {
     id 'base'
+    id 'fabric-loom' version '1.13.6' apply false
 }
 
 import groovy.json.JsonSlurper
@@ -15,6 +16,7 @@ def stableCompileTasks = [
     ':fabric:1.21.1:mod:compileJava',
     ':fabric:1.21.4:mod:compileJava',
     ':fabric:1.21.8:mod:compileJava',
+    ':fabric:1.21.11:mod:compileJava',
     ':neoforge:1.21.1:mod:compileJava',
     ':neoforge:1.21.4:mod:compileJava',
     ':neoforge:1.21.8:mod:compileJava'
@@ -25,6 +27,7 @@ def goldenTargets = [
     'fabric-1.21.1'  : [projectPath: ':fabric:1.21.1:mod',   platform: 'fabric',   minecraft: '1.21.1'],
     'fabric-1.21.4'  : [projectPath: ':fabric:1.21.4:mod',   platform: 'fabric',   minecraft: '1.21.4'],
     'fabric-1.21.8'  : [projectPath: ':fabric:1.21.8:mod',   platform: 'fabric',   minecraft: '1.21.8'],
+    'fabric-1.21.11' : [projectPath: ':fabric:1.21.11:mod',  platform: 'fabric',   minecraft: '1.21.11'],
     'neoforge-1.21.1': [projectPath: ':neoforge:1.21.1:mod', platform: 'neoforge', minecraft: '1.21.1'],
     'neoforge-1.21.4': [projectPath: ':neoforge:1.21.4:mod', platform: 'neoforge', minecraft: '1.21.4'],
     'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8']
@@ -42,6 +45,45 @@ def goldenRunRoot = goldenTargetName == null
         : layout.buildDirectory.dir("golden-runs/${goldenTargetName}/${goldenScenario}").get().asFile
 def goldenResultFile = new File(goldenRunRoot, 'result.json')
 def goldenExportDir = new File(goldenRunRoot, 'export')
+def goldenLockChannel = null
+def goldenFileLock = null
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def needsGoldenLock = goldenTarget != null && taskGraph.allTasks.any { task ->
+        task.path == ':prepareGoldenWorld'
+                || task.path == ':captureGoldenWorld'
+                || task.path == "${goldenTarget.projectPath}:runClient"
+    }
+    if (!needsGoldenLock) {
+        return
+    }
+
+    def lockFile = layout.buildDirectory.file("golden-locks/${goldenTargetName}.lock").get().asFile
+    lockFile.parentFile.mkdirs()
+    goldenLockChannel = java.nio.channels.FileChannel.open(
+            lockFile.toPath(),
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.WRITE)
+    try {
+        goldenFileLock = goldenLockChannel.tryLock()
+    } catch (java.nio.channels.OverlappingFileLockException ignored) {
+        goldenFileLock = null
+    }
+    if (goldenFileLock == null) {
+        goldenLockChannel.close()
+        goldenLockChannel = null
+        throw new GradleException(
+                "Another golden client run is already using target '${goldenTargetName}'.")
+    }
+}
+
+gradle.buildFinished {
+    try {
+        goldenFileLock?.release()
+    } finally {
+        goldenLockChannel?.close()
+    }
+}
 
 tasks.register('compileStableMatrix') {
     group = 'verification'
@@ -166,7 +208,8 @@ tasks.register('snapshotGoldenClient') {
                     '--snapshot', actual.absolutePath,
                     '--scenario', goldenScenario,
                     '--minecraft', goldenTarget.minecraft,
-                    '--scenario-file', goldenScenarioFile.absolutePath
+                    '--scenario-file', goldenScenarioFile.absolutePath,
+                    '--scenario-manifest', goldenManifestFile.absolutePath
         }
         logger.lifecycle("Golden snapshot for review: ${actual}")
     }
@@ -215,6 +258,16 @@ gradle.projectsEvaluated {
         def pos1 = manifest.selection.min.join(',')
         def pos2 = manifest.selection.max.join(',')
         def settleTicks = manifest.settleTicks as int
+        def exportConfig = manifest.export ?: [:]
+        def exportThreadCount = exportConfig.threadCount ?: 1
+        def atlasMode = exportConfig.atlasMode ?: 'individual'
+        def coordinateMode = exportConfig.coordinateMode ?: 'centered'
+        def exportDoubleSided = exportConfig.containsKey('exportDoubleSided')
+                ? exportConfig.exportDoubleSided
+                : true
+        def nonsolidCulling = exportConfig.containsKey('nonsolidCulling')
+                ? exportConfig.nonsolidCulling
+                : true
         def runTask = project(goldenTarget.projectPath).tasks.named('runClient')
         runTask.configure {
             dependsOn rootProject.tasks.named('prepareGoldenWorld')
@@ -226,6 +279,12 @@ gradle.projectsEvaluated {
                     "-Dvoxelbridge.golden.pos1=${pos1}", \
                     "-Dvoxelbridge.golden.pos2=${pos2}", \
                     "-Dvoxelbridge.golden.settleTicks=${settleTicks}", \
+                    "-Dvoxelbridge.golden.minecraftVersion=${goldenTarget.minecraft}", \
+                    "-Dvoxelbridge.golden.exportThreadCount=${exportThreadCount}", \
+                    "-Dvoxelbridge.golden.atlasMode=${atlasMode}", \
+                    "-Dvoxelbridge.golden.coordinateMode=${coordinateMode}", \
+                    "-Dvoxelbridge.golden.exportDoubleSided=${exportDoubleSided}", \
+                    "-Dvoxelbridge.golden.nonsolidCulling=${nonsolidCulling}", \
                     "-Dvoxelbridge.golden.timeoutSeconds=300", \
                     "-Dvoxelbridge.golden.autoStop=true"
             args '--quickPlaySingleplayer', goldenWorldName

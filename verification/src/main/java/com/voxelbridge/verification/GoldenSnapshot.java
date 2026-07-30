@@ -17,8 +17,17 @@ public record GoldenSnapshot(
         List<Double> boundsMin,
         List<Double> boundsMax,
         String geometryHash,
+        List<AssertionSnapshot> assertions,
         List<MaterialSnapshot> materials,
         List<ImageSnapshot> images) {
+
+    public record AssertionSnapshot(
+            String id,
+            String type,
+            int materialCount,
+            int primitiveCount,
+            long vertexCount,
+            long triangleCount) {}
 
     public record MaterialSnapshot(
             String name,

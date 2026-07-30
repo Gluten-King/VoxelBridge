@@ -1,4 +1,19 @@
 {
+  "assertions" : [ {
+    "id" : "entity_geometry",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 108,
+    "type" : "material",
+    "vertexCount" : 216
+  }, {
+    "id" : "block_entity_geometry",
+    "materialCount" : 1,
+    "primitiveCount" : 1,
+    "triangleCount" : 36,
+    "type" : "material",
+    "vertexCount" : 72
+  } ],
   "boundsMax" : [ 6.5, -0.124, -0.5 ],
   "boundsMin" : [ -6.5, -3.0, -6.5002 ],
   "geometryHash" : "4feec5826bcb620f57b3f88e06a8e6e9738d19ae8db2a4270dcea0b5f682d453",
@@ -159,9 +174,9 @@
   "nodeCount" : 12,
   "primitiveCount" : 12,
   "scenario" : "vanilla_smoke",
-  "scenarioHash" : "8577aced55c7ce68bab99db92703103ecf414d8824afe6b2b1f86f3b227f86aa",
+  "scenarioHash" : "cb8e14969b99901b82ae117ff6c9aac08b6f574140f4ca0363e4cc72bd60260f",
   "sceneCount" : 1,
-  "schemaVersion" : 1,
+  "schemaVersion" : 2,
   "triangleCount" : 436,
   "vertexCount" : 872
 }

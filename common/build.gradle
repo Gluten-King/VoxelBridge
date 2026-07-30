@@ -1,6 +1,6 @@
 plugins {
     id 'java-library'
-    id 'fabric-loom' version '1.10.0-alpha.13'
+    id 'fabric-loom'
 }
 
 base {
