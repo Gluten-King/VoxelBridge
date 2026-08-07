@@ -163,6 +163,25 @@ Unknown extension fields must be ignored for forward compatibility. Contract
 v3 keeps the v2 vertex layout unchanged; v2 consumers can display v3 assets
 while ignoring the added material identity fields.
 
+## Linker / Blender compatibility extras
+
+Each exported mesh contains one primitive with one Minecraft semantic identity.
+VoxelBridge mirrors the data needed by Linker's Blender-side static render
+contract into glTF mesh `extras`, which Blender 5.0 imports as custom properties:
+
+- `linker_static_render_contract`: `3`.
+- `linker_static_render_shader_semantics`: `true`.
+- `voxelbridge:linkerUvLayout`: the mapping from glTF UV sets to Linker roles.
+- `voxelbridge:materialIdentity`: local identity index, currently `0`.
+- `voxelbridge:materialIdentityTable`: compact JSON string using Linker's
+  `{version:1, identities:[...]}` storage schema.
+
+The local table deliberately contains only the primitive identity. The root
+extension retains the stable scene-global dictionary and `TEXCOORD_4` index for
+format-native consumers. Linker's glTF import hook renames the imported UV maps,
+converts the local identity to a FACE-domain `_VOXELBRIDGE_MATERIAL_ID`, and
+normalizes `_VOXELBRIDGE_MID_BLOCK` for its native Blender mesh reader.
+
 ## Planned compatible additions
 
 Future versions may add biome identity and scene environment values. They

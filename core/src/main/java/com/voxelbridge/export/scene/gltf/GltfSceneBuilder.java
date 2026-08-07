@@ -1158,12 +1158,76 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         Mesh mesh = new Mesh();
         mesh.setName(visualMatKey);
         mesh.setPrimitives(Collections.singletonList(prim));
+        Map<String, Object> meshExtras = new LinkedHashMap<>();
+        meshExtras.put("linker_static_render_contract", 3);
+        meshExtras.put("linker_static_render_shader_semantics", true);
+        meshExtras.put(
+            "voxelbridge:linkerUvLayout",
+            "TEXCOORD_0=render;TEXCOORD_2=light;TEXCOORD_3=mid;TEXCOORD_4=identity"
+        );
+        if (semanticId != null) {
+            // Each exported mesh contains exactly one primitive and one semantic
+            // identity.  A local one-entry table is therefore sufficient for
+            // Linker's Blender FACE-domain contract and avoids copying the full
+            // scene dictionary into every mesh custom property.
+            meshExtras.put("voxelbridge:materialIdentity", 0);
+            meshExtras.put(
+                "voxelbridge:materialIdentityTable",
+                linkerIdentityTableJson(semantic)
+            );
+        }
+        mesh.setExtras(meshExtras);
         meshes.add(mesh);
 
         Node node = new Node();
         node.setName(visualMatKey);
         node.setMesh(meshes.size() - 1);
         nodes.add(node);
+    }
+
+    private static String linkerIdentityTableJson(QuadSemantic semantic) {
+        StringBuilder json = new StringBuilder(192);
+        json.append("{\"version\":1,\"identities\":[{");
+        boolean first = true;
+        for (Map.Entry<String, Object> entry : semanticMap(semantic).entrySet()) {
+            if (!first) {
+                json.append(',');
+            }
+            first = false;
+            appendJsonString(json, entry.getKey());
+            json.append(':');
+            Object value = entry.getValue();
+            if (value instanceof Boolean || value instanceof Number) {
+                json.append(value);
+            } else {
+                appendJsonString(json, String.valueOf(value));
+            }
+        }
+        return json.append("}]}" ).toString();
+    }
+
+    private static void appendJsonString(StringBuilder json, String value) {
+        json.append('"');
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            switch (character) {
+                case '"' -> json.append("\\\"");
+                case '\\' -> json.append("\\\\");
+                case '\b' -> json.append("\\b");
+                case '\f' -> json.append("\\f");
+                case '\n' -> json.append("\\n");
+                case '\r' -> json.append("\\r");
+                case '\t' -> json.append("\\t");
+                default -> {
+                    if (character < 0x20) {
+                        json.append(String.format(Locale.ROOT, "\\u%04x", (int) character));
+                    } else {
+                        json.append(character);
+                    }
+                }
+            }
+        }
+        json.append('"');
     }
 
     private static int renderLayerPriority(RenderLayer layer) {
