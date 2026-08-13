@@ -54,7 +54,7 @@
       "instance": "vb-fabric-1.20.1-restworld",
       "target": "fabric-1.20.1",
       "minecraft": "1.20.1",
-      "jar": "build/fabric/1.20.1/libs/VoxelBridge-fabric-1.20.1-1.0.4.jar",
+      "jar": "build/fabric/1.20.1/libs/VoxelBridge-fabric-1.20.1-1.0.5.jar",
       "buildTask": ":fabric:1.20.1:mod:remapJar",
       "ctm": true
     },
@@ -63,7 +63,7 @@
       "instance": "vb-fabric-1.21.1-restworld",
       "target": "fabric-1.21.1",
       "minecraft": "1.21.1",
-      "jar": "build/fabric/1.21.1/libs/VoxelBridge-fabric-1.21.1-1.0.4.jar",
+      "jar": "build/fabric/1.21.1/libs/VoxelBridge-fabric-1.21.1-1.0.5.jar",
       "buildTask": ":fabric:1.21.1:mod:remapJar",
       "ctm": true
     },
@@ -72,7 +72,7 @@
       "instance": "vb-fabric-1.21.4-restworld",
       "target": "fabric-1.21.4",
       "minecraft": "1.21.4",
-      "jar": "build/fabric/1.21.4/libs/VoxelBridge-fabric-1.21.4-1.0.4.jar",
+      "jar": "build/fabric/1.21.4/libs/VoxelBridge-fabric-1.21.4-1.0.5.jar",
       "buildTask": ":fabric:1.21.4:mod:remapJar",
       "ctm": true
     },
@@ -81,7 +81,7 @@
       "instance": "vb-fabric-1.21.8-restworld",
       "target": "fabric-1.21.8",
       "minecraft": "1.21.8",
-      "jar": "build/fabric/1.21.8/libs/VoxelBridge-fabric-1.21.8-1.0.4.jar",
+      "jar": "build/fabric/1.21.8/libs/VoxelBridge-fabric-1.21.8-1.0.5.jar",
       "buildTask": ":fabric:1.21.8:mod:remapJar",
       "ctm": true
     },
@@ -90,7 +90,7 @@
       "instance": "vb-fabric-1.21.11-restworld",
       "target": "fabric-1.21.11",
       "minecraft": "1.21.11",
-      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.4.jar",
+      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.5.jar",
       "buildTask": ":fabric:1.21.11:mod:remapJar",
       "ctm": true,
       "expectedMaterialQuads": {
@@ -103,7 +103,7 @@
       "instance": "vb-fabric-1.21.11-continuity",
       "target": "fabric-1.21.11",
       "minecraft": "1.21.11",
-      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.4.jar",
+      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.5.jar",
       "buildTask": ":fabric:1.21.11:mod:remapJar",
       "ctm": true
     },
@@ -112,7 +112,7 @@
       "instance": "vb-neoforge-1.21.1-restworld",
       "target": "neoforge-1.21.1",
       "minecraft": "1.21.1",
-      "jar": "build/neoforge/1.21.1/libs/VoxelBridge-neoforge-1.21.1-1.0.4.jar",
+      "jar": "build/neoforge/1.21.1/libs/VoxelBridge-neoforge-1.21.1-1.0.5.jar",
       "buildTask": ":neoforge:1.21.1:mod:shadowJar",
       "ctm": false
     },
@@ -121,7 +121,7 @@
       "instance": "vb-neoforge-1.21.4-restworld",
       "target": "neoforge-1.21.4",
       "minecraft": "1.21.4",
-      "jar": "build/neoforge/1.21.4/libs/VoxelBridge-neoforge-1.21.4-1.0.4.jar",
+      "jar": "build/neoforge/1.21.4/libs/VoxelBridge-neoforge-1.21.4-1.0.5.jar",
       "buildTask": ":neoforge:1.21.4:mod:shadowJar",
       "ctm": false
     },
@@ -130,7 +130,7 @@
       "instance": "vb-neoforge-1.21.8-restworld",
       "target": "neoforge-1.21.8",
       "minecraft": "1.21.8",
-      "jar": "build/neoforge/1.21.8/libs/VoxelBridge-neoforge-1.21.8-1.0.4.jar",
+      "jar": "build/neoforge/1.21.8/libs/VoxelBridge-neoforge-1.21.8-1.0.5.jar",
       "buildTask": ":neoforge:1.21.8:mod:shadowJar",
       "ctm": false
     },
@@ -139,7 +139,7 @@
       "instance": "vb-neoforge-1.21.11-restworld",
       "target": "neoforge-1.21.11",
       "minecraft": "1.21.11",
-      "jar": "build/neoforge/1.21.11/libs/VoxelBridge-neoforge-1.21.11-1.0.4.jar",
+      "jar": "build/neoforge/1.21.11/libs/VoxelBridge-neoforge-1.21.11-1.0.5.jar",
       "buildTask": ":neoforge:1.21.11:mod:shadowJar",
       "ctm": false,
       "expectedMaterialQuads": {

@@ -77,7 +77,7 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.136.1+1.21.8.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-19.0.147-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.6.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.8-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.8-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
@@ -96,7 +96,7 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
@@ -114,7 +114,7 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
@@ -131,7 +131,7 @@
       "mods": [
         { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
     },
@@ -151,7 +151,7 @@
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
         { "role": "sodium", "source": "mods\\sodium-fabric-0.8.7+mc1.21.11.jar.disabled" },
         { "role": "iris", "source": "mods\\iris-fabric-1.10.7+mc1.21.11.jar.disabled" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
       ],
       "configs": [
         "config\\voxelbridge.json",
@@ -175,7 +175,7 @@
       "sourceProfile": "1.21.1",
       "mods": [
         { "role": "cloth-config", "source": "mods\\cloth-config-15.0.140-neoforge.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.4.jar.disabled" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.5.jar.disabled" }
       ],
       "configs": ["config\\voxelbridge.json"]
     },
@@ -194,7 +194,7 @@
         { "role": "architectury", "source": "mods\\architectury-13.0.8-neoforge.jar" },
         { "role": "yuushya", "source": "mods\\yuushya-1.21.0-neoforge-2.2.3.jar" },
         { "role": "yuushya-modelling", "source": "mods\\yuushya_modelling-neoforge-2.3.0.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.4.jar.disabled" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.5.jar.disabled" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\com.yuushya\\client_config.json"]
     },
@@ -228,7 +228,7 @@
       "sourceProfile": "1.21.8NF",
       "mods": [
         { "role": "cloth-config", "source": "mods\\cloth-config-19.0.147-neoforge.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.8-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.8-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
     },
@@ -244,7 +244,7 @@
       "sourceProfile": "@launcher/voxelbridge-artifacts/neoforge-1.21.11",
       "mods": [
         { "role": "cloth-config", "source": "mods\\cloth-config-neoforge-21.11.153-neoforge.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.11-1.0.4.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.11-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
     }
