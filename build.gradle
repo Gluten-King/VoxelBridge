@@ -25,7 +25,8 @@ def stableCompileTasks = [
     ':fabric:1.21.11:mod:compileJava',
     ':neoforge:1.21.1:mod:compileJava',
     ':neoforge:1.21.4:mod:compileJava',
-    ':neoforge:1.21.8:mod:compileJava'
+    ':neoforge:1.21.8:mod:compileJava',
+    ':neoforge:1.21.11:mod:compileJava'
 ]
 
 def goldenTargets = [
@@ -36,7 +37,8 @@ def goldenTargets = [
     'fabric-1.21.11' : [projectPath: ':fabric:1.21.11:mod',  platform: 'fabric',   minecraft: '1.21.11'],
     'neoforge-1.21.1': [projectPath: ':neoforge:1.21.1:mod', platform: 'neoforge', minecraft: '1.21.1'],
     'neoforge-1.21.4': [projectPath: ':neoforge:1.21.4:mod', platform: 'neoforge', minecraft: '1.21.4'],
-    'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8']
+    'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8'],
+    'neoforge-1.21.11': [projectPath: ':neoforge:1.21.11:mod', platform: 'neoforge', minecraft: '1.21.11']
 ]
 
 def goldenTargetName = providers.gradleProperty('goldenTarget').orNull

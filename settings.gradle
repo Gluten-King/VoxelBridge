@@ -18,10 +18,11 @@ project(':shared:core').projectDir = file('core')
 project(':shared:common').projectDir = file('common')
 project(':verification').projectDir = file('verification')
 
-include 'neoforge:1.21.1:mod', 'neoforge:1.21.4:mod', 'neoforge:1.21.8:mod'
+include 'neoforge:1.21.1:mod', 'neoforge:1.21.4:mod', 'neoforge:1.21.8:mod', 'neoforge:1.21.11:mod'
 project(':neoforge:1.21.1:mod').projectDir = file('neoforge/1.21.1/mod')
 project(':neoforge:1.21.4:mod').projectDir = file('neoforge/1.21.4/mod')
 project(':neoforge:1.21.8:mod').projectDir = file('neoforge/1.21.8/mod')
+project(':neoforge:1.21.11:mod').projectDir = file('neoforge/1.21.11/mod')
 
 if (file('fabric/1.21.1/mod').exists()) {
     include 'fabric:1.21.1:mod'

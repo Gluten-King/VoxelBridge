@@ -1,9 +1,10 @@
 """Deterministic Blender renderer for VoxelBridge golden review bundles.
 
-Invoked by Gradle, not directly by Minecraft. It imports every glTF listed in
-blender-manifest.json into one review.blend and emits one current/reference/diff
-set per declared camera. The script intentionally uses only Blender's bundled
-Python modules and never downloads dependencies.
+Invoked by Gradle or the Prism runner, not directly by Minecraft. It imports
+every glTF in the supplied manifest and emits one current/reference/diff set
+per declared camera. Prism passes a per-instance manifest and blend filename;
+other callers retain the review.blend default. The script intentionally uses
+only Blender's bundled Python modules and never downloads dependencies.
 """
 
 import argparse
@@ -22,6 +23,7 @@ def arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--blend-name", default="review.blend")
     return parser.parse_args(values)
 
 
@@ -259,7 +261,10 @@ def main():
         root.hide_render = False
     scene["voxelbridge_review_manifest"] = str(manifest_path)
     scene["voxelbridge_review_case_count"] = len(imported_cases)
-    bpy.ops.wm.save_as_mainfile(filepath=str(output / "review.blend"))
+    blend_name = Path(args.blend_name).name
+    if not blend_name.lower().endswith(".blend"):
+        raise ValueError("--blend-name must end with .blend")
+    bpy.ops.wm.save_as_mainfile(filepath=str(output / blend_name))
 
 
 if __name__ == "__main__":

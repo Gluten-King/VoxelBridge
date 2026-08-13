@@ -1,0 +1,232 @@
+import org.gradle.api.tasks.bundling.Jar
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.116'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+ext {
+    active_mc = "1.21.11"
+    minecraft_version = "1.21.11"
+    minecraft_version_range = "[1.21.11,1.22)"
+    neo_version = "21.11.45"
+    forgified_fabric_api_version = ""
+}
+
+evaluationDependsOn(':shared:common')
+evaluationDependsOn(':shared:core')
+
+def activeMc = (project.findProperty('active_mc') ?: '1.21.11').toString()
+def platform = "neoforge"
+def mcProjectDir = rootProject.file("neoforge/${activeMc}")
+def platformSourceDir = rootProject.file("neoforge/1.21.8")
+
+buildDir = rootProject.file("build/${platform}/${activeMc}")
+version = mod_version
+group = mod_group_id
+
+repositories {
+    maven { url "https://maven.su5ed.dev/releases" }
+    maven { url "https://maven.architectury.dev/" }
+    mavenCentral()
+}
+
+base {
+    archivesName = "VoxelBridge-neoforge-${activeMc}"
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+def jgltfVersion = '2.0.4'
+def pngjVersion = '2.1.0'
+def troveVersion = '3.0.3'
+def jacksonDatabindVersion = '2.13.4.2'
+def jacksonCoreVersion = '2.13.4'
+def jacksonAnnotationsVersion = '2.13.4'
+def forgifiedFabricApiVersion = (project.findProperty('forgified_fabric_api_version') ?: '').toString().trim()
+
+configurations {
+    shaded
+}
+
+neoForge {
+    version = project.neo_version
+
+    runs {
+        client {
+            client()
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        gameTestServer {
+            type = "gameTestServer"
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        data {
+            data()
+            programArguments.addAll '--mod', project.mod_id, '--all',
+                    '--output', file("${mcProjectDir}/src/generated/resources/").getAbsolutePath(),
+                    '--existing', file("${platformSourceDir}/src/main/resources/").getAbsolutePath()
+        }
+
+        configureEach {
+            if (name != 'goldenProductionClient') {
+                gameDirectory.set(rootProject.layout.projectDirectory.dir("run/${platform}/${activeMc}"))
+            }
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+def runtimeLibs = [
+        "de.javagl:jgltf-model:${jgltfVersion}",
+        "de.javagl:jgltf-impl-v1:${jgltfVersion}",
+        "de.javagl:jgltf-impl-v2:${jgltfVersion}",
+        "ar.com.hjg:pngj:${pngjVersion}",
+        "net.sf.trove4j:trove4j:${troveVersion}",
+        "com.fasterxml.jackson.core:jackson-annotations:${jacksonAnnotationsVersion}",
+        "com.fasterxml.jackson.core:jackson-core:${jacksonCoreVersion}",
+        "com.fasterxml.jackson.core:jackson-databind:${jacksonDatabindVersion}"
+]
+
+sourceSets {
+    main {
+        java.srcDirs = [
+                rootProject.file("neoforge/1.21.11/src/main/java"),
+                rootProject.file("neoforge/1.21.8/src/main/java"),
+                rootProject.file("common/1.21.11/src/main/java"),
+                rootProject.file("core/src/main/java")
+        ]
+        resources.srcDirs = [
+                rootProject.file("neoforge/1.21.11/src/main/resources"),
+                rootProject.file("neoforge/1.21.8/src/main/resources"),
+                rootProject.file("common/src/main/resources"),
+                rootProject.file("core/src/main/resources")
+        ]
+    }
+}
+
+def replacedPlatformSources = [
+        'com/voxelbridge/adapter/NeoForgeBlockEntityRenderBridge.java',
+        'com/voxelbridge/adapter/NeoForgeDynamicTextureReader.java',
+        'com/voxelbridge/adapter/NeoForgeEntityRenderBridge.java',
+        'com/voxelbridge/adapter/NeoForgePlatformModelHelper.java',
+        'com/voxelbridge/adapter/NeoForgePlatformRenderHelper.java',
+        'com/voxelbridge/adapter/NeoForgePlatformTextureHelper.java',
+        'com/voxelbridge/adapter/NeoForgeRenderAdapter.java',
+        'com/voxelbridge/client/SelectionRendererCompat.java',
+        'com/voxelbridge/export/exporter/entity/EntityTextureResolverCompat.java',
+        'com/voxelbridge/mixin/CompositeRenderTypeAccessor.java',
+        'com/voxelbridge/mixin/CompositeStateAccessor.java',
+        'com/voxelbridge/mixin/EmptyTextureStateShardAccessor.java',
+        'com/voxelbridge/mixin/SpriteContentsAccessor.java',
+        'com/voxelbridge/mixin/TextureAtlasAccessor.java'
+]
+
+tasks.named('compileJava') {
+    setSource(files(
+            fileTree(rootProject.file("neoforge/1.21.8/src/main/java")) {
+                replacedPlatformSources.each { exclude it }
+            },
+            fileTree(rootProject.file("neoforge/1.21.11/src/main/java")),
+            fileTree(rootProject.file("common/1.21.11/src/main/java")),
+            fileTree(rootProject.file("core/src/main/java"))
+    ))
+}
+
+dependencies {
+    if (forgifiedFabricApiVersion) {
+        implementation "org.sinytra.forgified-fabric-api:forgified-fabric-api:${forgifiedFabricApiVersion}"
+    }
+
+    compileOnly "org.apache.logging.log4j:log4j-api:2.20.0"
+    compileOnly "org.apache.logging.log4j:log4j-core:2.20.0"
+    implementation "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_neoforge_version_1_21_11}"
+
+    runtimeLibs.each { dep ->
+        implementation dep
+        shaded dep
+    }
+}
+
+tasks.named('processResources') {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    filesMatching('META-INF/neoforge.mods.toml') {
+        filter { line -> line
+                .replace('versionRange = "[21.8,)"', 'versionRange = "[21.11,)"')
+                .replace('versionRange = "[1.21.8,1.22)"', 'versionRange = "[1.21.11,1.22)"')
+        }
+    }
+}
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            artifact tasks.shadowJar
+        }
+    }
+    repositories {
+        maven { url "file://${project.projectDir}/repo" }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('shadowJar') {
+    archiveClassifier.set('')
+    configurations = [project.configurations.shaded]
+    relocate 'de.javagl.jgltf', 'com.voxelbridge.shadow.jgltf'
+    relocate 'ar.com.hjg.pngj', 'com.voxelbridge.shadow.pngj'
+    relocate 'gnu.trove', 'com.voxelbridge.shadow.trove'
+    relocate 'com.fasterxml.jackson', 'com.voxelbridge.shadow.jackson'
+    mergeServiceFiles()
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    destinationDirectory = layout.buildDirectory.dir("libs")
+}
+
+tasks.named('assemble') { dependsOn tasks.shadowJar }
+tasks.named('jar') { enabled = false }
+
+tasks.named('clean') {
+    delete rootProject.file('common/build'), rootProject.file('core/build')
+}
+
+def taskGroupRoot = "voxelbridge/neoforge/mod"
+def groupForTask = { Task task ->
+    def name = task.name
+    def category
+    if (name ==~ /^(run|prepare).*/ || name.endsWith("Run") || name.startsWith("genIntellijRuns")) {
+        category = "moddev"
+    } else if (name.startsWith("publish") || name == "publishToMavenLocal") {
+        category = "publish"
+    } else if (task instanceof org.gradle.api.tasks.VerificationTask || name == "check" || name.endsWith("Test")) {
+        category = "verification"
+    } else if (name == "build" || name == "assemble" || name == "clean" || name.endsWith("Jar") || name.endsWith("SourcesJar")) {
+        category = "build"
+    } else {
+        category = "misc"
+    }
+    return "${taskGroupRoot}/${activeMc}/${category}"
+}
+
+tasks.configureEach { task ->
+    task.group = groupForTask(task)
+}

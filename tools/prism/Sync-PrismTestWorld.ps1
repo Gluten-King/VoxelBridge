@@ -110,24 +110,27 @@ function Set-ResourcePacks {
     param(
         [Parameter(Mandatory = $true)][string]$InstancePath,
         [Parameter(Mandatory = $true)][string[]]$ResourcePacks,
-        [Parameter(Mandatory = $true)][string]$TemplateOptions
+        [Parameter(Mandatory = $true)][string]$TemplateOptions,
+        [Parameter(Mandatory = $true)][bool]$RequireContinuity
     )
 
     $minecraftPath = Join-Path $InstancePath '.minecraft'
-    $continuityJar = Get-ChildItem -LiteralPath (Join-Path $minecraftPath 'mods') -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like 'continuity-*.jar' } |
-        Select-Object -First 1
-    if ($null -eq $continuityJar) {
-        throw "Continuity is missing from $InstancePath"
-    }
+    if ($RequireContinuity) {
+        $continuityJar = Get-ChildItem -LiteralPath (Join-Path $minecraftPath 'mods') -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'continuity-*.jar' } |
+            Select-Object -First 1
+        if ($null -eq $continuityJar) {
+            throw "Continuity is missing from $InstancePath"
+        }
 
-    $continuityConfig = Join-Path $minecraftPath 'config\continuity.json'
-    if (-not (Test-Path -LiteralPath $continuityConfig)) {
-        throw "Continuity config is missing from $InstancePath"
-    }
-    $continuitySettings = Get-Content -LiteralPath $continuityConfig -Raw | ConvertFrom-Json
-    if ($continuitySettings.connected_textures -ne $true) {
-        throw "connected_textures is not enabled in $continuityConfig"
+        $continuityConfig = Join-Path $minecraftPath 'config\continuity.json'
+        if (-not (Test-Path -LiteralPath $continuityConfig)) {
+            throw "Continuity config is missing from $InstancePath"
+        }
+        $continuitySettings = Get-Content -LiteralPath $continuityConfig -Raw | ConvertFrom-Json
+        if ($continuitySettings.connected_textures -ne $true) {
+            throw "connected_textures is not enabled in $continuityConfig"
+        }
     }
 
     $optionsPath = Join-Path $minecraftPath 'options.txt'
@@ -156,14 +159,59 @@ function Set-ResourcePacks {
     }
 
     [System.IO.File]::WriteAllLines($optionsPath, $lines, [System.Text.UTF8Encoding]::new($false))
-    Write-Host "CTM resource packs enabled: $($InstancePath | Split-Path -Leaf)"
+    $provider = if ($RequireContinuity) { 'Continuity' } else { 'vanilla resource-pack content only' }
+    Write-Host "Resource packs enabled ($provider): $($InstancePath | Split-Path -Leaf)"
+}
+
+function Sync-ResourcePackFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceInstance,
+        [Parameter(Mandatory = $true)][string]$TargetInstance,
+        [Parameter(Mandatory = $true)][string[]]$ResourcePacks,
+        [Parameter(Mandatory = $true)][string]$Timestamp
+    )
+
+    if ([System.IO.Path]::GetFullPath($SourceInstance) -eq [System.IO.Path]::GetFullPath($TargetInstance)) {
+        return
+    }
+
+    $sourceRoot = Join-Path $SourceInstance '.minecraft\resourcepacks'
+    $targetRoot = Join-Path $TargetInstance '.minecraft\resourcepacks'
+    [System.IO.Directory]::CreateDirectory($targetRoot) | Out-Null
+    foreach ($resourcePack in $ResourcePacks) {
+        if (-not $resourcePack.StartsWith('file/', [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        $fileName = $resourcePack.Substring('file/'.Length)
+        if ([System.IO.Path]::GetFileName($fileName) -ne $fileName) {
+            throw "Invalid resource-pack filename: $fileName"
+        }
+        $sourcePath = Join-Path $sourceRoot $fileName
+        $targetPath = Join-Path $targetRoot $fileName
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            throw "Template resource pack is missing: $sourcePath"
+        }
+        $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
+        if (Test-Path -LiteralPath $targetPath -PathType Leaf) {
+            $targetHash = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash
+            if ($targetHash -ne $sourceHash) {
+                $backupRoot = Join-Path $TargetInstance ".voxelbridge-resourcepack-backups\$Timestamp"
+                [System.IO.Directory]::CreateDirectory($backupRoot) | Out-Null
+                Move-Item -LiteralPath $targetPath -Destination (Join-Path $backupRoot $fileName)
+            }
+        }
+        Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
+        if ((Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash -ne $sourceHash) {
+            throw "Resource-pack hash mismatch after copying to $TargetInstance`: $fileName"
+        }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $Definition)) {
     throw "World definition does not exist: $Definition"
 }
 
-$definitionData = Get-Content -LiteralPath $Definition -Raw | ConvertFrom-Json
+$definitionData = [System.IO.File]::ReadAllText($Definition, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $instancesRoot = Join-Path $PrismRoot 'instances'
 $sourceInstancePath = Join-Path $instancesRoot $definitionData.world.sourceInstance
 $sourceWorld = Join-Path $sourceInstancePath ".minecraft\saves\$($definitionData.world.folder)"
@@ -264,16 +312,31 @@ foreach ($targetId in $definitionData.world.targets) {
     $copiedTargets += $targetId
 }
 
-$templateOptions = Join-Path (Join-Path $instancesRoot 'vb-fabric-1.21.11-base') '.minecraft\options.txt'
+$templateOptions = Join-Path $sourceInstancePath '.minecraft\options.txt'
 if (-not (Test-Path -LiteralPath $templateOptions)) {
-    throw "The 1.21.11 base options template is missing: $templateOptions"
+    throw "The RestWorld template options are missing: $templateOptions"
 }
-foreach ($ctmInstanceId in $definitionData.ctm.instances) {
-    $ctmInstance = Join-Path $instancesRoot $ctmInstanceId
-    Set-ResourcePacks `
-        -InstancePath $ctmInstance `
+$continuityInstances = @($definitionData.ctm.instances)
+foreach ($targetId in $definitionData.world.targets) {
+    $targetInstance = Join-Path $instancesRoot $targetId
+    $requiresContinuity = $targetId -in $continuityInstances
+    $enabledPacks = if ($requiresContinuity) {
+        @($definitionData.ctm.resourcePacks)
+    } else {
+        @($definitionData.ctm.resourcePacks | Where-Object {
+            $_ -ne 'fabric' -and -not $_.StartsWith('continuity:', [System.StringComparison]::Ordinal)
+        })
+    }
+    Sync-ResourcePackFiles `
+        -SourceInstance $sourceInstancePath `
+        -TargetInstance $targetInstance `
         -ResourcePacks @($definitionData.ctm.resourcePacks) `
-        -TemplateOptions $templateOptions
+        -Timestamp $timestamp
+    Set-ResourcePacks `
+        -InstancePath $targetInstance `
+        -ResourcePacks $enabledPacks `
+        -TemplateOptions $templateOptions `
+        -RequireContinuity $requiresContinuity
 }
 
 Write-Host ''

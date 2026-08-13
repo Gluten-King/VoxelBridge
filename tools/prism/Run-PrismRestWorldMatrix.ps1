@@ -146,12 +146,14 @@ function Ensure-Options {
     Set-Option -Lines $lines -Key 'narrator' -Value '0'
     Set-Option -Lines $lines -Key 'onboardAccessibility' -Value 'false'
     Set-Option -Lines $lines -Key 'incompatibleResourcePacks' -Value '[]'
-    if ($Ctm) {
-        Set-Option -Lines $lines -Key 'resourcePacks' -Value '["continuity:default","continuity:glass_pane_culling_fix"]'
+    $enabledPacks = if ($Ctm) {
+        @($definitionData.ctm.resourcePacks)
+    } else {
+        @($definitionData.ctm.resourcePacks | Where-Object {
+            $_ -ne 'fabric' -and -not $_.StartsWith('continuity:', [System.StringComparison]::Ordinal)
+        })
     }
-    else {
-        Set-Option -Lines $lines -Key 'resourcePacks' -Value '[]'
-    }
+    Set-Option -Lines $lines -Key 'resourcePacks' -Value (ConvertTo-Json -Compress -InputObject @($enabledPacks))
     Write-Utf8NoBom -Path $optionsPath -Text (($lines -join [Environment]::NewLine) + [Environment]::NewLine)
 }
 
@@ -318,8 +320,9 @@ function Copy-GltfBundle {
 if (-not (Test-Path -LiteralPath $Definition)) {
     throw "Definition not found: $Definition"
 }
-$definitionData = Get-Content -LiteralPath $Definition -Raw | ConvertFrom-Json
-$instanceDefinitions = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $Definition) 'instances.json') -Raw | ConvertFrom-Json
+$definitionData = [System.IO.File]::ReadAllText($Definition, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+$instanceDefinitionsPath = Join-Path (Split-Path -Parent $Definition) 'instances.json'
+$instanceDefinitions = [System.IO.File]::ReadAllText($instanceDefinitionsPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $instancesRoot = Join-Path $PrismRoot 'instances'
 $launcherExe = Join-Path $PrismRoot 'prismlauncher.exe'
 $scenarioFile = Join-Path (Split-Path -Parent $Definition) 'restworld-prepare.mcfunction'
@@ -464,6 +467,7 @@ foreach ($case in $selectedCases) {
     $caseResults += $caseRecord
     $blenderItems += [ordered]@{
         caseId = $case.id
+        instance = $case.instance
         gltf = $collectedGltf
         outputDirectory = (Join-Path $caseRoot 'review')
         referenceDirectory = (Join-Path $RepositoryRoot "golden\references\restworld_core\$($case.id)")
@@ -498,20 +502,26 @@ if (-not $SkipBlender) {
     if (-not (Test-Path -LiteralPath $Blender)) {
         throw "Blender executable not found: $Blender"
     }
-    $reviewOutput = Join-Path $runRoot 'blender-review'
     $renderScript = Join-Path $RepositoryRoot 'golden\blender\render_review.py'
     Write-Host ''
-    Write-Host 'Rendering combined Blender review ...'
-    & $Blender --background --python $renderScript -- --manifest $manifestPath --output $reviewOutput
-    if ($LASTEXITCODE -ne 0) {
-        throw "Blender review render failed with exit code $LASTEXITCODE"
+    Write-Host 'Rendering one Blender review per Prism instance ...'
+    foreach ($item in $blenderItems) {
+        $caseRoot = Split-Path -Parent ([string]$item.outputDirectory)
+        $caseManifest = Join-Path $caseRoot 'blender-manifest.json'
+        Write-Utf8NoBom -Path $caseManifest -Text ((ConvertTo-Json -InputObject @($item) -Depth 10) + [Environment]::NewLine)
+        $reviewOutput = Join-Path $caseRoot 'blender-review'
+        $blendName = "$($item.instance).blend"
+        & $Blender --background --python $renderScript -- --manifest $caseManifest --output $reviewOutput --blend-name $blendName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Blender review render failed for $($item.instance) with exit code $LASTEXITCODE"
+        }
+        $blendFile = Join-Path $reviewOutput $blendName
+        if (-not (Test-Path -LiteralPath $blendFile)) {
+            throw "Blender did not create $blendFile"
+        }
+        Start-Process -FilePath $Blender -ArgumentList @($blendFile)
+        Write-Host "Opened Blender review: $blendFile"
     }
-    $blendFile = Join-Path $reviewOutput 'review.blend'
-    if (-not (Test-Path -LiteralPath $blendFile)) {
-        throw "Blender did not create $blendFile"
-    }
-    Start-Process -FilePath $Blender -ArgumentList @($blendFile)
-    Write-Host "Opened Blender review: $blendFile"
 }
 
 Write-Host ''

@@ -67,7 +67,7 @@ if (-not (Test-Path -LiteralPath $worldDir -PathType Container)) {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($worldArchive, $worldDir)
 }
 
-$baseOptions = Join-Path (Join-Path (Join-Path $LauncherRoot 'instances') 'vb-fabric-1.21.11-base') '.minecraft\options.txt'
+$baseOptions = Join-Path (Join-Path (Join-Path $LauncherRoot 'instances') 'vb-fabric-1.21.11-restworld') '.minecraft\options.txt'
 $showcaseOptions = Join-Path $minecraftDir 'options.txt'
 if ((Test-Path -LiteralPath $baseOptions -PathType Leaf) -and -not (Test-Path -LiteralPath $showcaseOptions -PathType Leaf)) {
     Copy-Item -LiteralPath $baseOptions -Destination $showcaseOptions

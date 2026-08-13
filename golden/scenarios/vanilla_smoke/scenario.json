@@ -3,7 +3,7 @@
   "id": "vanilla_smoke",
   "targets": [
     "fabric-1.20.1", "fabric-1.21.1", "fabric-1.21.4", "fabric-1.21.8", "fabric-1.21.11",
-    "neoforge-1.21.1", "neoforge-1.21.4", "neoforge-1.21.8"
+    "neoforge-1.21.1", "neoforge-1.21.4", "neoforge-1.21.8", "neoforge-1.21.11"
   ],
   "settleTicks": 40,
   "selection": {

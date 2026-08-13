@@ -84,7 +84,9 @@ foreach ($definition in $matrix.instances) {
     if (-not (Test-Path -LiteralPath $javaPath -PathType Leaf)) {
         throw "Java executable was not found for $($definition.id): $javaPath"
     }
-    $sourceProfilePath = if ([System.IO.Path]::IsPathRooted([string]$definition.sourceProfile)) {
+    $sourceProfilePath = if ([string]$definition.sourceProfile -like '@launcher/*') {
+        Join-Path $LauncherRoot ([string]$definition.sourceProfile).Substring('@launcher/'.Length)
+    } elseif ([System.IO.Path]::IsPathRooted([string]$definition.sourceProfile)) {
         [string]$definition.sourceProfile
     } else {
         Join-Path $ModrinthProfilesRoot ([string]$definition.sourceProfile)
@@ -106,7 +108,15 @@ foreach ($definition in $matrix.instances) {
     if (Test-Path -LiteralPath $managedManifestPath -PathType Leaf) {
         $oldManifest = ([System.IO.File]::ReadAllText($managedManifestPath) | ConvertFrom-Json)
         if ($oldManifest.instanceId -ne $definition.id) {
-            throw "Managed marker does not match instance id: $managedManifestPath"
+            $migrationSources = if ($definition.PSObject.Properties.Name -contains 'migrateFrom') {
+                @($definition.migrateFrom)
+            } else {
+                @()
+            }
+            if ($oldManifest.instanceId -notin $migrationSources) {
+                throw "Managed marker does not match instance id: $managedManifestPath"
+            }
+            Write-Host "Migrating managed instance $($oldManifest.instanceId) -> $($definition.id)"
         }
         $oldManagedFiles = @($oldManifest.managedFiles)
     }
