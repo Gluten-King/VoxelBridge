@@ -27,7 +27,9 @@ Thumbs.db
 *~
 .claude/
 .eclipse/
-/tools/
+/tools/*
+!/tools/prism/
+!/tools/prism/**
 /docs/
 /temp/
 /fabric/1.21.1/mod/build/

@@ -17,6 +17,7 @@ public record GoldenSnapshot(
         List<Double> boundsMin,
         List<Double> boundsMax,
         String geometryHash,
+        String appearanceHash,
         List<AssertionSnapshot> assertions,
         List<MaterialSnapshot> materials,
         List<ImageSnapshot> images) {
@@ -35,6 +36,7 @@ public record GoldenSnapshot(
             long vertexCount,
             long triangleCount,
             String geometryHash,
+            String appearanceHash,
             List<String> textureRgbaHashes) {}
 
     public record ImageSnapshot(

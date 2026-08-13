@@ -36,8 +36,16 @@ tasks.register('goldenSelfTest', JavaExec) {
     mainClass = 'com.voxelbridge.verification.SemanticGltfAnalyzerTest'
 }
 
+tasks.register('goldenReviewSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs hash-bound golden review workflow tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.GoldenReviewCliTest'
+}
+
 tasks.test {
-    dependsOn 'goldenSelfTest'
+    dependsOn 'goldenSelfTest', 'goldenReviewSelfTest'
 }
 
 def cliArgs = { String command ->
@@ -53,7 +61,7 @@ def cliArgs = { String command ->
             throw new GradleException('Missing -Psnapshot=<output-snapshot>')
         }
         result += ['--snapshot', rootProject.file(snapshot).absolutePath]
-    } else {
+    } else if (command == 'verify') {
         def expected = providers.gradleProperty('expected').orNull
         if (!expected) {
             throw new GradleException('Missing -Pexpected=<expected-snapshot>')
@@ -99,5 +107,15 @@ tasks.register('verifyGoldenSnapshot', JavaExec) {
     mainClass = application.mainClass
     doFirst {
         args = cliArgs('verify')
+    }
+}
+
+tasks.register('inspectGltfSnapshot', JavaExec) {
+    group = 'verification'
+    description = 'Prints a semantic glTF report and evaluates optional scenario assertions.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    doFirst {
+        args = cliArgs('inspect')
     }
 }

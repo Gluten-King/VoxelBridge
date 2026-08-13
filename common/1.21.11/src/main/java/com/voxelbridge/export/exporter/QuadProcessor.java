@@ -12,6 +12,8 @@ import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.quad.QuadData;
 import com.voxelbridge.export.util.geometry.VertexExtractor;
+import com.voxelbridge.export.semantic.MinecraftLightSampler;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
@@ -42,6 +44,8 @@ public final class QuadProcessor {
     private final PlaneOffsetTracker planeOffset;
 
     private final Set<String> pbrLoadedSprites = new HashSet<>();
+    private final Map<BlockState, com.voxelbridge.core.ir.QuadSemantic> semanticCache =
+        new HashMap<>();
     private final NonsolidGeometryCleaner nonsolidCleaner;
 
     // Pending quads for per-block dedup/cull decisions.
@@ -228,10 +232,33 @@ public final class QuadProcessor {
                 ? TintMode.COLORMAP
                 : TintMode.VERTEX_COLOR;
             sceneSink.addQuad(ctx.intern(quad.materialKey), ctx.intern(quad.spriteKey), null,
-                RenderLayer.UNKNOWN, tintMode, quad.doubleSided, false,
-                quad.positions, quad.uvs, quad.colorData.uv1(), quad.normal, quad.colorData.colors());
+                semanticCache.computeIfAbsent(quad.state, MinecraftQuadSemantic::terrain),
+                renderLayer(quad.state), tintMode, quad.doubleSided, quad.state.getLightEmission() > 0,
+                quad.positions, quad.uvs, quad.colorData.uv1(),
+                MinecraftLightSampler.sampleFace(
+                    level, quad.pos, quad.dir, quad.state.getLightEmission()
+                ),
+                MinecraftQuadSemantic.atMidBlock(
+                    quad.pos, offsetX, offsetY, offsetZ, quad.positions,
+                    quad.state.getLightEmission()
+                ),
+                quad.normal, quad.colorData.colors());
         }
         pendingQuads.clear();
+    }
+
+    private static RenderLayer renderLayer(BlockState state) {
+        String name = net.minecraft.client.renderer.ItemBlockRenderTypes
+            .getChunkRenderType(state)
+            .toString()
+            .toLowerCase(java.util.Locale.ROOT);
+        if (name.contains("translucent") || name.contains("tripwire")) {
+            return RenderLayer.TRANSLUCENT;
+        }
+        if (name.contains("cutout")) {
+            return RenderLayer.CUTOUT;
+        }
+        return RenderLayer.SOLID;
     }
 
     /**

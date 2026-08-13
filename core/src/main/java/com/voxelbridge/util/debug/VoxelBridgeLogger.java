@@ -13,7 +13,10 @@ import org.apache.logging.log4j.core.layout.PatternLayout;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -23,7 +26,9 @@ import java.util.Map;
 public final class VoxelBridgeLogger {
 
     private static final String LOGGER_PREFIX = "voxelbridge.";
+    private static final String PROBE_PROPERTY = "voxelbridge.probe.enabled";
     private static final String PATTERN = "[%d{yyyy-MM-dd'T'HH:mm:ss.SSS}][%p][%c{1}][%t] %m%n";
+    private static final Logger PROBE_CONSOLE = LogManager.getLogger("VoxelBridgeProbe");
 
     private static final Map<LogModule, Logger> LOGGERS = new EnumMap<>(LogModule.class);
     private static final Map<LogModule, String> APPENDER_NAMES = new EnumMap<>(LogModule.class);
@@ -217,6 +222,104 @@ public final class VoxelBridgeLogger {
         }
         Logger logger = getLogger(module);
         return logger != null && logger.isTraceEnabled();
+    }
+
+    /**
+     * Returns whether bounded diagnostic probes should be emitted. Normal logging
+     * enables the dedicated probe file; the JVM property also mirrors probes to
+     * the ordinary Minecraft log for one-off reproduction runs.
+     */
+    public static boolean isProbeEnabled() {
+        return Boolean.getBoolean(PROBE_PROPERTY) || isDebugEnabled(LogModule.PROBE);
+    }
+
+    public static void probe(String message) {
+        if (!isProbeEnabled()) {
+            return;
+        }
+        if (Boolean.getBoolean(PROBE_PROPERTY)) {
+            PROBE_CONSOLE.info("[VoxelBridge][Probe] " + message);
+        }
+        if (enabled) {
+            info(LogModule.PROBE, message);
+        }
+        String event = message == null ? "message" : message.strip();
+        int separator = event.indexOf(' ');
+        if (separator > 0) {
+            event = event.substring(0, separator);
+        }
+        probeEvent(event, Map.of("message", message == null ? "" : message));
+    }
+
+    /**
+     * Appends one machine-readable JSON object per line to {@code probe.jsonl}.
+     * Probe failures never abort an export; the ordinary probe log remains as a
+     * human-readable fallback.
+     */
+    public static synchronized void probeEvent(String event, Map<String, ?> fields) {
+        if (!isProbeEnabled() || outputDir == null) {
+            return;
+        }
+        try {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("timestamp", Instant.now().toString());
+            values.put("event", event == null || event.isBlank() ? "unknown" : event);
+            values.put("thread", Thread.currentThread().getName());
+            if (fields != null) {
+                values.putAll(fields);
+            }
+            Files.writeString(
+                    outputDir.resolve("probe.jsonl"),
+                    jsonObject(values) + System.lineSeparator(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.APPEND);
+        } catch (IOException exception) {
+            PROBE_CONSOLE.warn("[VoxelBridge][Probe] Could not append probe.jsonl", exception);
+        }
+    }
+
+    private static String jsonObject(Map<String, ?> values) {
+        StringBuilder json = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, ?> entry : values.entrySet()) {
+            if (!first) {
+                json.append(',');
+            }
+            first = false;
+            json.append(jsonString(entry.getKey())).append(':');
+            Object value = entry.getValue();
+            if (value == null) {
+                json.append("null");
+            } else if (value instanceof Number || value instanceof Boolean) {
+                json.append(value);
+            } else {
+                json.append(jsonString(String.valueOf(value)));
+            }
+        }
+        return json.append('}').toString();
+    }
+
+    private static String jsonString(String value) {
+        StringBuilder result = new StringBuilder(value.length() + 2).append('"');
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            switch (character) {
+                case '"' -> result.append("\\\"");
+                case '\\' -> result.append("\\\\");
+                case '\n' -> result.append("\\n");
+                case '\r' -> result.append("\\r");
+                case '\t' -> result.append("\\t");
+                default -> {
+                    if (character < 0x20) {
+                        result.append(String.format("\\u%04x", (int) character));
+                    } else {
+                        result.append(character);
+                    }
+                }
+            }
+        }
+        return result.append('"').toString();
     }
 
     private static void log(LogModule module, Level level, String message, Throwable throwable) {

@@ -1,0 +1,518 @@
+[CmdletBinding()]
+param(
+    [string]$PrismRoot = 'D:\PrismLauncher-Windows-MinGW-w64-Portable-11.0.3',
+    [string]$ModrinthProfiles = 'D:\ModrinthApp\profiles',
+    [string]$RepositoryRoot = '',
+    [string]$Definition = '',
+    [string]$Blender = 'F:\Program Files\Steam\steamapps\common\Blender\blender.exe',
+    [string[]]$Cases = @(),
+    [switch]$SkipBuild,
+    [switch]$SkipBlender,
+    [int]$TimeoutSeconds = 900
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = (Resolve-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\..')).Path
+}
+if ([string]::IsNullOrWhiteSpace($Definition)) {
+    $Definition = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'restworld-test.json'
+}
+
+function Write-Utf8NoBom {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Set-CfgValue {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $replacement = "$Key=$Value"
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index].StartsWith($Key + '=', [System.StringComparison]::Ordinal)) {
+            $Lines[$index] = $replacement
+            return
+        }
+    }
+    $Lines.Add($replacement) | Out-Null
+}
+
+function Get-CfgState {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][string[]]$Keys
+    )
+
+    $state = [ordered]@{}
+    foreach ($key in $Keys) {
+        $entry = $null
+        foreach ($line in $Lines) {
+            if ($line.StartsWith($key + '=', [System.StringComparison]::Ordinal)) {
+                $entry = $line.Substring($key.Length + 1)
+                break
+            }
+        }
+        $state[$key] = [ordered]@{ exists = $null -ne $entry; value = $entry }
+    }
+    return $state
+}
+
+function Restore-CfgState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$State
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $lines.Add($line)
+    }
+    foreach ($key in $State.Keys) {
+        for ($index = $lines.Count - 1; $index -ge 0; $index--) {
+            if ($lines[$index].StartsWith($key + '=', [System.StringComparison]::Ordinal)) {
+                $lines.RemoveAt($index)
+            }
+        }
+        if ($State[$key].exists) {
+            $lines.Add("$key=$($State[$key].value)") | Out-Null
+        }
+    }
+    Write-Utf8NoBom -Path $Path -Text (($lines -join [Environment]::NewLine) + [Environment]::NewLine)
+}
+
+function ConvertTo-QSettingsString {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    # JvmArgs is a scalar string. Quoting the complete value is essential:
+    # otherwise QSettings interprets coordinate commas as a QStringList and
+    # Prism's scalar lookup silently yields no custom JVM arguments.
+    return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
+}
+
+function Set-Option {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        if ($Lines[$index].StartsWith($Key + ':', [System.StringComparison]::Ordinal)) {
+            $Lines[$index] = "$Key`:$Value"
+            return
+        }
+    }
+    $Lines.Add("$Key`:$Value") | Out-Null
+}
+
+function Ensure-Options {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstanceId,
+        [Parameter(Mandatory = $true)][bool]$Ctm
+    )
+
+    $instancePath = Join-Path $instancesRoot $InstanceId
+    $optionsPath = Join-Path $instancePath '.minecraft\options.txt'
+    if (-not (Test-Path -LiteralPath $optionsPath)) {
+        $instanceDefinition = $instanceDefinitions.instances | Where-Object { $_.id -eq $InstanceId } | Select-Object -First 1
+        if ($null -eq $instanceDefinition) {
+            throw "No instance definition was found for $InstanceId"
+        }
+        $template = Join-Path (Join-Path $ModrinthProfiles $instanceDefinition.sourceProfile) 'options.txt'
+        if (-not (Test-Path -LiteralPath $template)) {
+            throw "No options template was found for $InstanceId at $template"
+        }
+        Copy-Item -LiteralPath $template -Destination $optionsPath
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in [System.IO.File]::ReadAllLines($optionsPath)) {
+        $lines.Add($line)
+    }
+    Set-Option -Lines $lines -Key 'narrator' -Value '0'
+    Set-Option -Lines $lines -Key 'onboardAccessibility' -Value 'false'
+    Set-Option -Lines $lines -Key 'incompatibleResourcePacks' -Value '[]'
+    if ($Ctm) {
+        Set-Option -Lines $lines -Key 'resourcePacks' -Value '["continuity:default","continuity:glass_pane_culling_fix"]'
+    }
+    else {
+        Set-Option -Lines $lines -Key 'resourcePacks' -Value '[]'
+    }
+    Write-Utf8NoBom -Path $optionsPath -Text (($lines -join [Environment]::NewLine) + [Environment]::NewLine)
+}
+
+function Test-GoldenController {
+    param([Parameter(Mandatory = $true)][string]$Jar)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Jar)
+    try {
+        return $null -ne ($archive.Entries | Where-Object {
+            $_.FullName -eq 'com/voxelbridge/client/GoldenTestController.class'
+        } | Select-Object -First 1)
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
+function Install-ProductionJar {
+    param(
+        [Parameter(Mandatory = $true)]$Case,
+        [Parameter(Mandatory = $true)][string]$RunId
+    )
+
+    $builtJar = Join-Path $RepositoryRoot $Case.jar
+    if (-not (Test-Path -LiteralPath $builtJar)) {
+        throw "Built production JAR does not exist: $builtJar"
+    }
+    if (-not (Test-GoldenController -Jar $builtJar)) {
+        throw "Built production JAR does not contain GoldenTestController: $builtJar"
+    }
+
+    $instancePath = Join-Path $instancesRoot $Case.instance
+    $modsPath = Join-Path $instancePath '.minecraft\mods'
+    [System.IO.Directory]::CreateDirectory($modsPath) | Out-Null
+    $backupPath = Join-Path $instancePath ".voxelbridge-jar-backups\$RunId"
+    foreach ($oldJar in Get-ChildItem -LiteralPath $modsPath -Filter 'VoxelBridge-*.jar' -File -ErrorAction SilentlyContinue) {
+        [System.IO.Directory]::CreateDirectory($backupPath) | Out-Null
+        Move-Item -LiteralPath $oldJar.FullName -Destination (Join-Path $backupPath $oldJar.Name)
+    }
+    $installedJar = Join-Path $modsPath (Split-Path -Leaf $builtJar)
+    Copy-Item -LiteralPath $builtJar -Destination $installedJar
+
+    $sourceHash = (Get-FileHash -LiteralPath $builtJar -Algorithm SHA256).Hash
+    $installedHash = (Get-FileHash -LiteralPath $installedJar -Algorithm SHA256).Hash
+    if ($sourceHash -ne $installedHash) {
+        throw "Production JAR hash mismatch after installing $($Case.id)"
+    }
+    return $installedJar
+}
+
+function Close-PrismLauncher {
+    param([int]$WaitSeconds = 20)
+
+    $launcherPath = [System.IO.Path]::GetFullPath($launcherExe)
+    $running = @(Get-Process -Name 'prismlauncher' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and [System.IO.Path]::GetFullPath($_.Path) -eq $launcherPath
+    })
+    foreach ($process in $running) {
+        $null = $process.CloseMainWindow()
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $remaining = @(Get-Process -Name 'prismlauncher' -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and [System.IO.Path]::GetFullPath($_.Path) -eq $launcherPath
+        })
+        if ($remaining.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw 'Prism Launcher did not close cleanly. Close it manually and run again.'
+}
+
+function Close-MinecraftInstance {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstanceId,
+        [int]$WaitSeconds = 30
+    )
+
+    $escapedInstance = [regex]::Escape("instances/$InstanceId/")
+    $processIds = @(Get-CimInstance Win32_Process -Filter "Name='javaw.exe' or Name='java.exe'" |
+        Where-Object { $_.CommandLine -replace '\\', '/' -match $escapedInstance } |
+        ForEach-Object { $_.ProcessId })
+    foreach ($processId in $processIds) {
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if ($null -ne $process -and $process.MainWindowHandle -ne 0) {
+            $null = $process.CloseMainWindow()
+        }
+    }
+    if ($processIds.Count -gt 0) {
+        Wait-Process -Id $processIds -Timeout $WaitSeconds -ErrorAction SilentlyContinue
+    }
+}
+
+function Ensure-SourceRunWorld {
+    param([Parameter(Mandatory = $true)][string]$InstanceId)
+
+    if ($InstanceId -ne $definitionData.world.sourceInstance) {
+        return $definitionData.world.folder
+    }
+
+    $instancePath = Join-Path $instancesRoot $InstanceId
+    $sourceWorld = Join-Path $instancePath ".minecraft\saves\$($definitionData.world.folder)"
+    $runWorldName = "$($definitionData.world.folder)_VBTest"
+    $runWorld = Join-Path $instancePath ".minecraft\saves\$runWorldName"
+    if (-not (Test-Path -LiteralPath $runWorld)) {
+        [System.IO.Directory]::CreateDirectory($runWorld) | Out-Null
+        Write-Host "Creating protected run copy for the hand-maintained source world ..."
+        & robocopy.exe $sourceWorld $runWorld /E /XJ /COPY:DAT /DCOPY:DAT /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -gt 7) {
+            throw "Could not create protected source-world run copy (robocopy exit $LASTEXITCODE)"
+        }
+        Write-Utf8NoBom -Path (Join-Path $runWorld '.voxelbridge-automation-copy.json') -Text (([ordered]@{
+            source = $definitionData.world.folder
+            createdAtUtc = [DateTime]::UtcNow.ToString('o')
+            levelDatSha256 = (Get-FileHash -LiteralPath (Join-Path $sourceWorld 'level.dat') -Algorithm SHA256).Hash.ToLowerInvariant()
+        } | ConvertTo-Json) + [Environment]::NewLine)
+    }
+    return $runWorldName
+}
+
+function Wait-ForResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResultFile,
+        [Parameter(Mandatory = $true)][string]$CaseId,
+        [Parameter(Mandatory = $true)][int]$Timeout
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($Timeout)
+    $nextUpdate = [DateTime]::UtcNow.AddSeconds(15)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $ResultFile) {
+            return Get-Content -LiteralPath $ResultFile -Raw | ConvertFrom-Json
+        }
+        if ([DateTime]::UtcNow -ge $nextUpdate) {
+            Write-Host "Waiting for $CaseId export ..."
+            $nextUpdate = [DateTime]::UtcNow.AddSeconds(15)
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "$CaseId did not produce result.json within $Timeout seconds"
+}
+
+function Copy-GltfBundle {
+    param(
+        [Parameter(Mandatory = $true)][string]$Gltf,
+        [Parameter(Mandatory = $true)][string]$CaseRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $Gltf)) {
+        throw "Export result points to a missing glTF: $Gltf"
+    }
+    $sourceDirectory = Split-Path -Parent $Gltf
+    $destination = Join-Path $CaseRoot 'gltf'
+    [System.IO.Directory]::CreateDirectory($destination) | Out-Null
+    & robocopy.exe $sourceDirectory $destination /E /XJ /COPY:DAT /DCOPY:DAT /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -gt 7) {
+        throw "Could not collect glTF bundle for $Gltf (robocopy exit $LASTEXITCODE)"
+    }
+    return Join-Path $destination (Split-Path -Leaf $Gltf)
+}
+
+if (-not (Test-Path -LiteralPath $Definition)) {
+    throw "Definition not found: $Definition"
+}
+$definitionData = Get-Content -LiteralPath $Definition -Raw | ConvertFrom-Json
+$instanceDefinitions = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $Definition) 'instances.json') -Raw | ConvertFrom-Json
+$instancesRoot = Join-Path $PrismRoot 'instances'
+$launcherExe = Join-Path $PrismRoot 'prismlauncher.exe'
+$scenarioFile = Join-Path (Split-Path -Parent $Definition) 'restworld-prepare.mcfunction'
+foreach ($required in @($launcherExe, $scenarioFile)) {
+    if (-not (Test-Path -LiteralPath $required)) {
+        throw "Required file not found: $required"
+    }
+}
+
+$selectedCases = @($definitionData.matrix)
+if ($Cases.Count -gt 0) {
+    $selectedCases = @($selectedCases | Where-Object { $Cases -contains $_.id })
+    $unknownCases = @($Cases | Where-Object { $_ -notin @($definitionData.matrix | ForEach-Object { $_.id }) })
+    if ($unknownCases.Count -gt 0) {
+        throw "Unknown case(s): $($unknownCases -join ', ')"
+    }
+}
+if ($selectedCases.Count -eq 0) {
+    throw 'No matrix cases were selected.'
+}
+
+$scene = $definitionData.scenes | Where-Object { $_.id -eq 'restworld_core' } | Select-Object -First 1
+if ($null -eq $scene) {
+    throw 'Scene restworld_core was not found in the definition.'
+}
+
+Close-PrismLauncher
+if (-not $SkipBuild) {
+    $tasks = @($selectedCases | ForEach-Object { $_.buildTask } | Select-Object -Unique)
+    Write-Host "Building production JARs: $($tasks -join ', ')"
+    & (Join-Path $RepositoryRoot 'gradlew.bat') @tasks
+    if ($LASTEXITCODE -ne 0) {
+        throw "Production JAR build failed with exit code $LASTEXITCODE"
+    }
+}
+
+$runId = [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'")
+$runRoot = Join-Path $RepositoryRoot "build\prism-restworld-runs\$runId"
+[System.IO.Directory]::CreateDirectory($runRoot) | Out-Null
+$caseResults = @()
+$blenderItems = @()
+
+foreach ($case in $selectedCases) {
+    Write-Host ''
+    Write-Host "=== $($case.id) ==="
+    $caseRoot = Join-Path $runRoot $case.id
+    [System.IO.Directory]::CreateDirectory($caseRoot) | Out-Null
+    $instancePath = Join-Path $instancesRoot $case.instance
+    if (-not (Test-Path -LiteralPath $instancePath)) {
+        throw "Prism instance not found: $instancePath"
+    }
+    $worldId = Ensure-SourceRunWorld -InstanceId $case.instance
+    $worldPath = Join-Path $instancePath ".minecraft\saves\$worldId"
+    if (-not (Test-Path -LiteralPath (Join-Path $worldPath 'level.dat'))) {
+        throw "Test world not found for $($case.id): $worldPath"
+    }
+
+    Ensure-Options -InstanceId $case.instance -Ctm ([bool]$case.ctm)
+    $installedJar = Install-ProductionJar -Case $case -RunId $runId
+    $jarHash = (Get-FileHash -LiteralPath $installedJar -Algorithm SHA256).Hash.ToLowerInvariant()
+    $resultFile = Join-Path $caseRoot 'result.json'
+    $instanceConfig = Join-Path $instancePath 'instance.cfg'
+    $configLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in [System.IO.File]::ReadAllLines($instanceConfig)) {
+        $configLines.Add($line)
+    }
+    $managedKeys = @('OverrideJavaArgs', 'JvmArgs', 'QuitAfterGameStop', 'AutoCloseConsole', 'ShowConsoleOnError')
+    $originalConfig = Get-CfgState -Lines $configLines -Keys $managedKeys
+
+    $javaArguments = @(
+        '-Dvoxelbridge.golden.enabled=true',
+        '-Dvoxelbridge.golden.requireProductionJar=true',
+        "-Dvoxelbridge.golden.expectedJar=$($installedJar.Replace('\', '/'))",
+        "-Dvoxelbridge.golden.scenarioFile=$($scenarioFile.Replace('\', '/'))",
+        "-Dvoxelbridge.golden.resultFile=$($resultFile.Replace('\', '/'))",
+        "-Dvoxelbridge.golden.minecraftVersion=$($case.minecraft)",
+        "-Dvoxelbridge.golden.pos1=$($scene.pos1 -join ',')",
+        "-Dvoxelbridge.golden.pos2=$($scene.pos2 -join ',')",
+        '-Dvoxelbridge.golden.settleTicks=100',
+        '-Dvoxelbridge.golden.exportThreadCount=16',
+        '-Dvoxelbridge.golden.atlasMode=atlas',
+        '-Dvoxelbridge.golden.coordinateMode=centered',
+        '-Dvoxelbridge.golden.autoStop=true',
+        "-Dvoxelbridge.golden.timeoutSeconds=$TimeoutSeconds"
+    )
+    Set-CfgValue -Lines $configLines -Key 'OverrideJavaArgs' -Value 'true'
+    Set-CfgValue -Lines $configLines -Key 'JvmArgs' -Value (ConvertTo-QSettingsString -Value ($javaArguments -join ' '))
+    Set-CfgValue -Lines $configLines -Key 'QuitAfterGameStop' -Value 'true'
+    Set-CfgValue -Lines $configLines -Key 'AutoCloseConsole' -Value 'true'
+    Set-CfgValue -Lines $configLines -Key 'ShowConsoleOnError' -Value 'true'
+    Write-Utf8NoBom -Path $instanceConfig -Text (($configLines -join [Environment]::NewLine) + [Environment]::NewLine)
+
+    $result = $null
+    try {
+        Write-Host "Launching $($case.instance) / $worldId"
+        $launcherStdout = Join-Path $caseRoot 'prism-stdout.log'
+        $launcherStderr = Join-Path $caseRoot 'prism-stderr.log'
+        Start-Process -FilePath $launcherExe `
+            -ArgumentList @('--launch', $case.instance, '--world', $worldId) `
+            -RedirectStandardOutput $launcherStdout `
+            -RedirectStandardError $launcherStderr `
+            -WindowStyle Hidden | Out-Null
+        $result = Wait-ForResult -ResultFile $resultFile -CaseId $case.id -Timeout $TimeoutSeconds
+    }
+    finally {
+        try {
+            Close-MinecraftInstance -InstanceId $case.instance -WaitSeconds 30
+            Close-PrismLauncher -WaitSeconds 30
+        }
+        finally {
+            Restore-CfgState -Path $instanceConfig -State $originalConfig
+        }
+    }
+
+    $latestLog = Join-Path $instancePath '.minecraft\logs\latest.log'
+    if (Test-Path -LiteralPath $latestLog) {
+        Copy-Item -LiteralPath $latestLog -Destination (Join-Path $caseRoot 'latest.log')
+    }
+    if ($result.status -ne 'passed') {
+        throw "$($case.id) export failed: $($result.error)"
+    }
+    if ($result.productionJarVerified -ne $true) {
+        throw "$($case.id) did not verify its production JAR"
+    }
+    if ($result.jarSha256 -ne $jarHash) {
+        throw "$($case.id) reported JAR hash $($result.jarSha256), expected $jarHash"
+    }
+
+    $collectedGltf = Copy-GltfBundle -Gltf $result.gltf -CaseRoot $caseRoot
+    $caseRecord = [ordered]@{
+        id = $case.id
+        instance = $case.instance
+        target = $case.target
+        minecraft = $case.minecraft
+        ctm = [bool]$case.ctm
+        status = $result.status
+        durationMillis = $result.durationMillis
+        jarSha256 = $jarHash
+        gltf = $collectedGltf
+        originalGltf = $result.gltf
+    }
+    $caseResults += $caseRecord
+    $blenderItems += [ordered]@{
+        caseId = $case.id
+        gltf = $collectedGltf
+        outputDirectory = (Join-Path $caseRoot 'review')
+        referenceDirectory = (Join-Path $RepositoryRoot "golden\references\restworld_core\$($case.id)")
+        cameras = @(
+            [ordered]@{ id = 'overview'; azimuth = 45; elevation = 35; margin = 1.2 },
+            [ordered]@{ id = 'reverse'; azimuth = 225; elevation = 28; margin = 1.2 }
+        )
+    }
+    Write-Host "PASS $($case.id): $collectedGltf"
+}
+
+$summary = [ordered]@{
+    schemaVersion = 1
+    runId = $runId
+    createdAtUtc = [DateTime]::UtcNow.ToString('o')
+    scene = [ordered]@{
+        id = $scene.id
+        dimension = $scene.dimension
+        pos1 = @($scene.pos1)
+        pos2 = @($scene.pos2)
+        min = @($scene.min)
+        max = @($scene.max)
+    }
+    cases = $caseResults
+}
+Write-Utf8NoBom -Path (Join-Path $runRoot 'run.json') -Text (($summary | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+$manifestPath = Join-Path $runRoot 'blender-manifest.json'
+Write-Utf8NoBom -Path $manifestPath -Text ((ConvertTo-Json -InputObject @($blenderItems) -Depth 10) + [Environment]::NewLine)
+Write-Utf8NoBom -Path (Join-Path $RepositoryRoot 'build\prism-restworld-runs\latest.txt') -Text ($runRoot + [Environment]::NewLine)
+
+if (-not $SkipBlender) {
+    if (-not (Test-Path -LiteralPath $Blender)) {
+        throw "Blender executable not found: $Blender"
+    }
+    $reviewOutput = Join-Path $runRoot 'blender-review'
+    $renderScript = Join-Path $RepositoryRoot 'golden\blender\render_review.py'
+    Write-Host ''
+    Write-Host 'Rendering combined Blender review ...'
+    & $Blender --background --python $renderScript -- --manifest $manifestPath --output $reviewOutput
+    if ($LASTEXITCODE -ne 0) {
+        throw "Blender review render failed with exit code $LASTEXITCODE"
+    }
+    $blendFile = Join-Path $reviewOutput 'review.blend'
+    if (-not (Test-Path -LiteralPath $blendFile)) {
+        throw "Blender did not create $blendFile"
+    }
+    Start-Process -FilePath $Blender -ArgumentList @($blendFile)
+    Write-Host "Opened Blender review: $blendFile"
+}
+
+Write-Host ''
+Write-Host "Matrix run complete: $runRoot"

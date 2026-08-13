@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "id": "culling_oracle",
+  "targets": [
+    "fabric-1.20.1", "fabric-1.21.1", "fabric-1.21.4", "fabric-1.21.8", "fabric-1.21.11",
+    "neoforge-1.21.1", "neoforge-1.21.4", "neoforge-1.21.8"
+  ],
+  "settleTicks": 40,
+  "selection": {"min": [0, 60, 0], "max": [15, 72, 15]},
+  "export": {"threadCount": 1, "atlasMode": "individual", "coordinateMode": "centered", "exportDoubleSided": true, "nonsolidCulling": true},
+  "variants": [
+    {"id": "culling_on"},
+    {"id": "atlas", "export": {"threadCount": 16, "atlasMode": "atlas"}}
+  ],
+  "requiredProbes": ["export-start", "export-complete"],
+  "cameras": [{"id": "overview", "azimuth": 45, "elevation": 40, "margin": 1.15}],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["same_material_deduplication_xyz", "nonsolid_solid_boundary", "partial_shape_boundary", "transparent_boundary"],
+  "assertions": [
+    {"id": "leaves_present", "type": "material", "materialRegex": "minecraft:block/(oak|spruce)_leaves", "minPrimitives": 1, "minTriangles": 1},
+    {"id": "glass_present", "type": "material", "materialRegex": "minecraft:block/glass", "minPrimitives": 1, "minTriangles": 1},
+    {"id": "solid_controls_present", "type": "material", "materialRegex": "minecraft:block/stone", "minPrimitives": 1, "minTriangles": 6}
+  ]
+}

@@ -2,6 +2,7 @@ package com.voxelbridge.export.exporter;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.QuadSemantic;
 import com.voxelbridge.core.ir.RenderLayer;
 import com.voxelbridge.core.ir.TintMode;
 import com.voxelbridge.core.util.color.ColorMode;
@@ -9,6 +10,7 @@ import com.voxelbridge.core.util.color.ColorModeHandler;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.capture.CapturedQuadProcessor;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 
@@ -24,6 +26,8 @@ final class QuadCollector implements VertexConsumer {
     private final double regionMinX, regionMaxX, regionMinZ, regionMaxZ;
     private final boolean hasRegionBounds;
     private final String materialGroupKey;
+    private final QuadSemantic semantic;
+    private final int blockEmission;
 
     // Coordinate system detection
     private final float[] rawPositions = new float[12];
@@ -38,6 +42,9 @@ final class QuadCollector implements VertexConsumer {
     // Vertex buffers
     private final float[] positions = new float[12];
     private final float[] uvs = new float[8];
+    private final float[] lightUvs = new float[] {
+        240f, 240f, 240f, 240f, 240f, 240f, 240f, 240f
+    };
     private final float[] colors = new float[16];
     private int vertexIndex = 0;
     private int quadArgb = 0xFFFFFFFF;
@@ -45,7 +52,8 @@ final class QuadCollector implements VertexConsumer {
 
     QuadCollector(IrSink sink, ExportContext ctx, BlockPos pos, TextureAtlasSprite[] sprites,
                   double offsetX, double offsetY, double offsetZ,
-                  BlockPos regionMin, BlockPos regionMax, String materialGroupKey) {
+                  BlockPos regionMin, BlockPos regionMax, String materialGroupKey,
+                  QuadSemantic semantic, int blockEmission) {
         this.sink = sink;
         this.ctx = ctx;
         this.pos = pos;
@@ -54,6 +62,8 @@ final class QuadCollector implements VertexConsumer {
         this.offsetY = offsetY;
         this.offsetZ = offsetZ;
         this.materialGroupKey = materialGroupKey;
+        this.semantic = semantic;
+        this.blockEmission = blockEmission;
         if (regionMin != null) {
              this.regionMinX = regionMin.getX() + offsetX;
              this.regionMaxX = regionMax.getX() + offsetX + 1;
@@ -129,7 +139,12 @@ final class QuadCollector implements VertexConsumer {
     }
 
     @Override public VertexConsumer setUv1(int u, int v) { return this; }
-    @Override public VertexConsumer setUv2(int u, int v) { return this; }
+    @Override
+    public VertexConsumer setUv2(int u, int v) {
+        lightUvs[vertexIndex * 2] = u;
+        lightUvs[vertexIndex * 2 + 1] = v;
+        return this;
+    }
 
     @Override
     public VertexConsumer setNormal(float x, float y, float z) {
@@ -173,8 +188,13 @@ final class QuadCollector implements VertexConsumer {
             : TintMode.VERTEX_COLOR;
         String materialKey = ctx.resolveMaterialKey(spriteKey, materialGroupKey);
         sink.addQuad(materialKey, spriteKey, CapturedQuadProcessor.TRANSPARENT_SPRITE_KEY,
-            RenderLayer.UNKNOWN, tintMode, true, false,
-            positions.clone(), normalizedUVs, colorData.uv1(), normal, colorData.colors());
+            semantic,
+            RenderLayer.TRANSLUCENT, tintMode, true, false,
+            positions.clone(), normalizedUVs, colorData.uv1(), lightUvs.clone(),
+            MinecraftQuadSemantic.atMidBlock(
+                pos, offsetX, offsetY, offsetZ, positions, blockEmission
+            ),
+            normal, colorData.colors());
 
         resetQuadState();
     }
@@ -186,6 +206,7 @@ final class QuadCollector implements VertexConsumer {
         useChunkOffset = false;
         quadColorCaptured = false;
         quadArgb = 0xFFFFFFFF;
+        java.util.Arrays.fill(lightUvs, 240f);
     }
 
     private TextureAtlasSprite chooseSpriteForQuad() {

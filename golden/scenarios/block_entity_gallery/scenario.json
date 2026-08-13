@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "id": "block_entity_gallery",
+  "settleTicks": 50,
+  "selection": {"min": [0, 60, 0], "max": [20, 72, 12]},
+  "export": {"threadCount": 1, "atlasMode": "individual", "coordinateMode": "centered", "exportDoubleSided": true, "nonsolidCulling": true},
+  "variants": [
+    {"id": "individual"},
+    {"id": "atlas", "export": {"threadCount": 16, "atlasMode": "atlas"}}
+  ],
+  "requiredProbes": ["export-start", "export-complete"],
+  "cameras": [{"id": "overview", "azimuth": 30, "elevation": 25, "margin": 1.2}],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["chest", "banner", "sign", "bed", "bell", "shulker_box"],
+  "assertions": [
+    {"id": "block_entity_geometry", "type": "material", "materialRegex": "^blockentity:", "minMaterials": 2, "minPrimitives": 2, "minTriangles": 2, "minUvVertices": 1, "maxOutOfRangeUvVertices": 0}
+  ]
+}

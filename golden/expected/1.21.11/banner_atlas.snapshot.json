@@ -1,0 +1,53 @@
+{
+  "assertions" : [ {
+    "id" : "banner_geometry",
+    "materialCount" : 1,
+    "primitiveCount" : 3,
+    "triangleCount" : 108,
+    "type" : "material",
+    "vertexCount" : 216
+  } ],
+  "boundsMax" : [ 2.09642, 1.83399, 0.41687 ],
+  "boundsMin" : [ -2.19795, 0.0, -0.42203 ],
+  "geometryHash" : "8b24741ca7e46ba016779b34c80a4d677b2e0b269de4319908d6a170c45f0092",
+  "imageReferenceCount" : 4,
+  "images" : [ {
+    "height" : 8192,
+    "id" : "textures/atlas/atlas_1001.png",
+    "rgbaHash" : "185b0dd6c0bffc799082424a87e4ccf9f0bf5c72506e2324165d2a20ef499c81",
+    "width" : 8192
+  }, {
+    "height" : 8192,
+    "id" : "textures/atlas/atlas_n_1001.png",
+    "rgbaHash" : "c00b61cab0a1100b5b613a782966f436ecba328ebdd10b95261a1009f5094274",
+    "width" : 8192
+  }, {
+    "height" : 8192,
+    "id" : "textures/atlas/atlas_s_1001.png",
+    "rgbaHash" : "a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484",
+    "width" : 8192
+  }, {
+    "height" : 8192,
+    "id" : "textures/colormap/colormap_1001.png",
+    "rgbaHash" : "0d27b4b44cc224229868fdc86c0cdfa836c89df9b8009fa5069f2a7fc2a3e26b",
+    "width" : 8192
+  } ],
+  "materials" : [ {
+    "geometryHash" : "5c4fa2f7c239eb6dd709f5d921b5aa6188e22365a59c49e9e83235d7f703769e",
+    "name" : "blockentity:minecraft:banner",
+    "primitiveCount" : 3,
+    "textureRgbaHashes" : [ "185b0dd6c0bffc799082424a87e4ccf9f0bf5c72506e2324165d2a20ef499c81" ],
+    "triangleCount" : 108,
+    "vertexCount" : 216
+  } ],
+  "meshCount" : 3,
+  "minecraftVersion" : "1.21.11",
+  "nodeCount" : 3,
+  "primitiveCount" : 3,
+  "scenario" : "banner_atlas",
+  "scenarioHash" : "8acc67b9b0341ae67e137466d6d021560e8be356a1b480ec44757e987b7d787a",
+  "sceneCount" : 1,
+  "schemaVersion" : 2,
+  "triangleCount" : 108,
+  "vertexCount" : 216
+}

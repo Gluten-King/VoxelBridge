@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 2,
+  "id": "showcase",
+  "targets": ["fabric-1.21.11"],
+  "settleTicks": 80,
+  "selection": {"min": [0, 60, 0], "max": [47, 75, 31]},
+  "export": {
+    "threadCount": 16,
+    "atlasMode": "atlas",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "variants": [{"id": "atlas_review"}],
+  "requiredProbes": ["export-start", "export-complete"],
+  "cameras": [
+    {"id": "overview", "azimuth": 35, "elevation": 32, "margin": 1.12},
+    {"id": "block-entities", "target": [24, 64.5, 24], "margin": 1.2},
+    {"id": "culling", "target": [24, 64.5, 10], "margin": 1.2}
+  ],
+  "performanceBudget": {"timeoutSeconds": 600, "warningRegressionPercent": 20},
+  "features": [
+    "texture_orientation",
+    "rotated_models",
+    "culling_xyz",
+    "partial_shape_culling",
+    "transparent_boundaries",
+    "biome_tint",
+    "water_and_lava",
+    "banner_atlas",
+    "block_entity_gallery",
+    "entity_gallery"
+  ],
+  "assertions": [
+    {"id": "block_models", "type": "material", "materialRegex": "^minecraft:block/", "minMaterials": 20, "minPrimitives": 20, "minTriangles": 100},
+    {"id": "block_entities", "type": "material", "materialRegex": "^blockentity:", "minMaterials": 3, "minPrimitives": 5, "minTriangles": 20, "minUvVertices": 1},
+    {"id": "entities", "type": "material", "materialRegex": "^entity:", "minMaterials": 2, "minPrimitives": 3, "minTriangles": 10, "minUvVertices": 1},
+    {"id": "fluids", "type": "material", "materialRegex": "minecraft:block/(water|lava)", "minPrimitives": 2, "minTriangles": 4}
+  ]
+}

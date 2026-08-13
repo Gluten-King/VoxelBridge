@@ -47,6 +47,7 @@ public final class GoldenCli {
                 }
                 System.out.println("Golden snapshot verified: " + expectedPath.toAbsolutePath());
             }
+            case "inspect" -> System.out.println(GoldenJson.pretty(actual));
             default -> {
                 usage();
                 System.exit(2);
@@ -83,6 +84,8 @@ public final class GoldenCli {
         System.err.println("  generate --gltf FILE --snapshot FILE --scenario ID --minecraft VERSION"
                 + " [--scenario-file FILE] [--scenario-manifest FILE]");
         System.err.println("  verify   --gltf FILE --expected FILE --actual FILE --scenario ID --minecraft VERSION"
+                + " [--scenario-file FILE] [--scenario-manifest FILE]");
+        System.err.println("  inspect  --gltf FILE --scenario ID --minecraft VERSION"
                 + " [--scenario-file FILE] [--scenario-manifest FILE]");
     }
 }

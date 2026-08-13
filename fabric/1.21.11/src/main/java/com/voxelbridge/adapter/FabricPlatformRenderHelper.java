@@ -1,20 +1,45 @@
 package com.voxelbridge.adapter;
 
+import com.voxelbridge.mixin.RenderSetupAccessor;
+import com.voxelbridge.mixin.RenderTypeAccessor;
+import com.voxelbridge.mixin.TextureBindingAccessor;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.resources.Identifier;
+
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Fabric implementation of PlatformRenderHelper using public APIs.
  */
 public class FabricPlatformRenderHelper implements PlatformRenderHelper {
 
+    private static final Set<Identifier> PROBED_STRUCTURED_TEXTURES = ConcurrentHashMap.newKeySet();
+
     @Override
     public Identifier getRenderTypeTexture(RenderType renderType) {
         if (renderType == null) {
             return null;
         }
+        Identifier structured = getStructuredTexture(renderType);
+        if (structured != null) {
+            if (VoxelBridgeLogger.isProbeEnabled() && PROBED_STRUCTURED_TEXTURES.add(structured)) {
+                VoxelBridgeLogger.probe("render-type-texture source=structured texture=" + structured);
+            }
+            return structured;
+        }
+        if (Boolean.getBoolean("voxelbridge.renderType.requireStructuredTexture")) {
+            return null;
+        }
         try {
             String name = renderType.toString();
+            String binding = parseTextureBindingLocation(name);
+            if (binding != null) {
+                return Identifier.parse(binding);
+            }
             if (name.contains("RenderType[")) {
                 int texIdx = name.indexOf("texture=");
                 if (texIdx >= 0) {
@@ -36,6 +61,76 @@ public class FabricPlatformRenderHelper implements PlatformRenderHelper {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /**
+     * Reads the actual 1.21.11 render-state texture binding. Accessor names are
+     * remapped by Loom, unlike the text emitted by record {@code toString()}.
+     */
+    private static Identifier getStructuredTexture(RenderType renderType) {
+        try {
+            RenderSetup setup = ((RenderTypeAccessor) (Object) renderType).voxelbridge$getState();
+            if (setup == null) {
+                return null;
+            }
+            Map<String, ?> bindings = ((RenderSetupAccessor) (Object) setup).voxelbridge$getTextureBindings();
+            if (bindings == null || bindings.isEmpty()) {
+                return null;
+            }
+
+            Object primary = bindings.get("Sampler0");
+            Identifier location = getBindingLocation(primary);
+            if (location != null) {
+                return location;
+            }
+            for (Object binding : bindings.values()) {
+                location = getBindingLocation(binding);
+                if (location != null) {
+                    return location;
+                }
+            }
+        } catch (ClassCastException | LinkageError ignored) {
+            // Preserve the string fallback for unusual third-party RenderTypes.
+        }
+        return null;
+    }
+
+    private static Identifier getBindingLocation(Object binding) {
+        if (binding == null) {
+            return null;
+        }
+        try {
+            return ((TextureBindingAccessor) binding).voxelbridge$getLocation();
+        } catch (ClassCastException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Minecraft 1.21.11 exposes sampler textures as
+     * {@code TextureBinding[location=minecraft:..., sampler=...]}. Keep this
+     * parser local to the 1.21.11 adapter so older RenderType formats remain
+     * untouched.
+     */
+    private static String parseTextureBindingLocation(String renderTypeString) {
+        if (renderTypeString == null) {
+            return null;
+        }
+        String marker = "TextureBinding[location=";
+        int markerStart = renderTypeString.indexOf(marker);
+        if (markerStart < 0) {
+            return null;
+        }
+        int valueStart = markerStart + marker.length();
+        int valueEnd = renderTypeString.indexOf(',', valueStart);
+        if (valueEnd < 0) {
+            valueEnd = renderTypeString.indexOf(']', valueStart);
+        }
+        if (valueEnd <= valueStart) {
+            return null;
+        }
+        String texture = renderTypeString.substring(valueStart, valueEnd).trim();
+        return texture.isEmpty() ? null : texture;
     }
 
     @Override

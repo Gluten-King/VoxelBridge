@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "id": "banner_atlas",
+  "targets": ["fabric-1.21.11"],
+  "settleTicks": 40,
+  "selection": {
+    "min": [0, 60, 0],
+    "max": [7, 68, 3]
+  },
+  "export": {
+    "threadCount": 16,
+    "atlasMode": "atlas",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "variants": [
+    {"id": "atlas_on"},
+    {"id": "atlas_single_thread", "export": {"threadCount": 1}},
+    {"id": "individual", "export": {"threadCount": 1, "atlasMode": "individual"}}
+  ],
+  "requiredProbes": ["banner-bake", "banner-layer", "export-complete"],
+  "forbiddenProbes": ["banner-atlas-uv-fallback-failed"],
+  "cameras": [
+    {"id": "overview", "azimuth": 20, "elevation": 12, "margin": 1.2},
+    {"id": "front", "azimuth": 0, "elevation": 0, "margin": 1.08},
+    {"id": "back", "azimuth": 180, "elevation": 0, "margin": 1.08}
+  ],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": [
+    "banner_block_entity",
+    "packed_atlas_uv"
+  ],
+  "assertions": [
+    {
+      "id": "banner_geometry",
+      "type": "material",
+      "materialRegex": "^blockentity:minecraft:banner$",
+      "expectedMaterials": 1,
+      "expectedPrimitives": 3,
+      "expectedTriangles": 108,
+      "expectedVertices": 216,
+      "minUvVertices": 1,
+      "maxOutOfRangeUvVertices": 0,
+      "maxUvSpanU": 0.02,
+      "maxUvSpanV": 0.02
+    }
+  ]
+}

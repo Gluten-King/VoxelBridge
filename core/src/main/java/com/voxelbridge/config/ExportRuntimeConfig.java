@@ -95,6 +95,8 @@ public final class ExportRuntimeConfig {
     private static boolean nonsolidCullingEnabled = true;
     private static boolean lightmapExportEnabled = true;
     private static MaterialIdentityMode materialIdentityMode = MaterialIdentityMode.REGISTRY;
+    // Width of the in-world selection and export-progress outlines, in pixels.
+    private static int selectionLineWidth = 2;
     private static Runnable changeListener;
 
     private static void notifyChanged() {
@@ -284,6 +286,18 @@ public final class ExportRuntimeConfig {
         }
     }
 
+    public static int getSelectionLineWidth() {
+        return selectionLineWidth;
+    }
+
+    public static void setSelectionLineWidth(int width) {
+        int next = Math.max(1, Math.min(8, width));
+        if (selectionLineWidth != next) {
+            selectionLineWidth = next;
+            notifyChanged();
+        }
+    }
+
     public static void resetDefaults() {
         atlasMode = AtlasMode.ATLAS;
         atlasSize = AtlasSize.SIZE_8192;
@@ -300,6 +314,7 @@ public final class ExportRuntimeConfig {
         nonsolidCullingEnabled = true;
         lightmapExportEnabled = true;
         materialIdentityMode = MaterialIdentityMode.REGISTRY;
+        selectionLineWidth = 2;
         notifyChanged();
     }
 

@@ -1,6 +1,7 @@
 package com.voxelbridge.export.exporter.capture;
 
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.QuadSemantic;
 import com.voxelbridge.core.ir.RenderLayer;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
@@ -74,6 +75,16 @@ public final class CapturedQuadProcessor {
         }
     }
 
+    private static float[] capturedLightUvs(List<RenderCapture.Vertex> verts) {
+        float[] result = new float[8];
+        for (int i = 0; i < 4; i++) {
+            RenderCapture.Vertex vertex = verts.get(Math.min(i, verts.size() - 1));
+            result[i * 2] = vertex.lightU;
+            result[i * 2 + 1] = vertex.lightV;
+        }
+        return result;
+    }
+
     public static <T> void process(
         ExportContext ctx,
         IrSink sceneSink,
@@ -86,6 +97,7 @@ public final class CapturedQuadProcessor {
         float[] uv0,
         T source,
         String materialGroupKey,
+        QuadSemantic semantic,
         TextureHandler<T> textureHandler,
         UvMapper uvMapper,
         PlaneOffsetStrategy planeOffsetStrategy,
@@ -125,14 +137,60 @@ public final class CapturedQuadProcessor {
 
         String resolvedMaterialKey = ctx.resolveMaterialKey(spriteKey, materialGroupKey);
         ctx.registerSpriteMaterial(spriteKey, resolvedMaterialKey);
+        QuadSemantic quadSemantic = resolveQuadSemantic(semantic, spriteKey, textureRes);
         RenderCaptureUtil.ColorModeResult colorResult =
             RenderCaptureUtil.applyColorMode(ctx, colors, EMPTY_UV);
         float[] faceNormal = GeometryUtil.computeFaceNormal(positions);
         planeOffsetStrategy.apply(planeOffset, positions, faceNormal);
         sceneSink.addQuad(resolvedMaterialKey, spriteKey, TRANSPARENT_SPRITE_KEY,
-            RenderLayer.UNKNOWN, colorResult.tintMode(),
+            quadSemantic,
+            renderLayer(renderType), colorResult.tintMode(),
             renderTypeResolver.isDoubleSided(renderType),
             false,
-            positions, uv0, colorResult.uv1(), NORMAL_UP, colors);
+            positions, uv0, colorResult.uv1(), capturedLightUvs(verts), null, faceNormal, colors);
+    }
+
+    private static QuadSemantic resolveQuadSemantic(
+        QuadSemantic semantic,
+        String spriteKey,
+        ResolvedTexture texture
+    ) {
+        if (semantic == null || semantic.itemId() == null
+                || semantic.entityType() == null
+                || !semantic.entityType().endsWith("item_frame")) {
+            return semantic != null ? semantic : QuadSemantic.NONE;
+        }
+        String textureKey = texture != null && texture.texture() != null
+            ? texture.texture().toString()
+            : "";
+        String visualKey = (spriteKey + ' ' + textureKey)
+            .toLowerCase(java.util.Locale.ROOT);
+        if (!visualKey.contains("item_frame")) {
+            return semantic;
+        }
+        return new QuadSemantic(
+            semantic.objectClass(),
+            semantic.materialKey(),
+            semantic.blockId(),
+            semantic.blockState(),
+            semantic.entityType(),
+            semantic.blockEntityId(),
+            null,
+            semantic.fluidId(),
+            semantic.fluidState(),
+            semantic.fluid(),
+            semantic.irisRenderType()
+        );
+    }
+
+    private static RenderLayer renderLayer(RenderType renderType) {
+        String name = String.valueOf(renderType).toLowerCase(java.util.Locale.ROOT);
+        if (name.contains("translucent") || name.contains("tripwire")) {
+            return RenderLayer.TRANSLUCENT;
+        }
+        if (name.contains("cutout")) {
+            return RenderLayer.CUTOUT;
+        }
+        return RenderLayer.SOLID;
     }
 }

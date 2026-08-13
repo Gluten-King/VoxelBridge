@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 2,
+  "id": "scene_contract",
+  "settleTicks": 40,
+  "selection": {"min": [0, 60, 0], "max": [8, 70, 8]},
+  "export": {"threadCount": 1, "atlasMode": "individual", "coordinateMode": "centered", "exportDoubleSided": true, "nonsolidCulling": true},
+  "variants": [{"id": "default"}],
+  "requireSceneContract": true,
+  "requiredProbes": ["export-start", "export-complete"],
+  "cameras": [{"id": "overview", "azimuth": 45, "elevation": 30, "margin": 1.2}],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["voxelbridge_scene_extension", "tangent", "light_uv", "material_identity"],
+  "assertions": [
+    {"id": "contract_geometry", "type": "material", "materialRegex": "minecraft:block/", "minMaterials": 2, "minPrimitives": 2, "minTriangles": 2}
+  ]
+}

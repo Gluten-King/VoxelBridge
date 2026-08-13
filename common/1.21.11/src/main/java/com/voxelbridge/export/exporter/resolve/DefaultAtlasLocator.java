@@ -20,8 +20,8 @@ public final class DefaultAtlasLocator implements AtlasLocator {
         if (atlasLocation == null) {
             return null;
         }
-        var tex = clientAccess.getTextureManager().getTexture(atlasLocation);
-        if (!(tex instanceof TextureAtlas atlas)) {
+        TextureAtlas atlas = clientAccess.getTextureAtlasObject(atlasLocation);
+        if (atlas == null) {
             return null;
         }
         for (TextureAtlasSprite sprite : com.voxelbridge.compat.AtlasCompat.getAllSprites(atlas)) {

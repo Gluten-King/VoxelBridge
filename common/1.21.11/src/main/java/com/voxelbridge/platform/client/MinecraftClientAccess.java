@@ -2,6 +2,7 @@ package com.voxelbridge.platform.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.resources.model.ModelManager;
 import net.minecraft.data.AtlasIds;
@@ -43,6 +44,17 @@ public final class MinecraftClientAccess implements ClientAccess {
             }
         });
         return resolved[0] != null ? resolved[0]::getSprite : ignored -> null;
+    }
+
+    @Override
+    public TextureAtlas getTextureAtlasObject(Identifier atlas) {
+        final TextureAtlas[] resolved = { null };
+        Minecraft.getInstance().getAtlasManager().forEach((definition, candidate) -> {
+            if (atlas.equals(candidate.location())) {
+                resolved[0] = candidate;
+            }
+        });
+        return resolved[0];
     }
 
     @Override

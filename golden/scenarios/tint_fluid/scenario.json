@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "id": "tint_fluid",
+  "settleTicks": 50,
+  "selection": {"min": [0, 60, 0], "max": [15, 72, 15]},
+  "export": {"threadCount": 1, "atlasMode": "individual", "coordinateMode": "centered", "exportDoubleSided": true, "nonsolidCulling": true},
+  "variants": [
+    {"id": "individual"},
+    {"id": "atlas", "export": {"threadCount": 16, "atlasMode": "atlas"}}
+  ],
+  "requiredProbes": ["export-start", "export-complete"],
+  "cameras": [{"id": "overview", "azimuth": 40, "elevation": 32, "margin": 1.2}],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["biome_tint", "vertex_color", "water", "lava", "translucency"],
+  "assertions": [
+    {"id": "tinted_geometry", "type": "material", "materialRegex": "minecraft:block/(grass|oak_leaves|water)", "minColorVertices": 1, "minNonBlackColorVertices": 1},
+    {"id": "fluid_geometry", "type": "material", "materialRegex": "minecraft:block/(water|lava)", "minPrimitives": 1, "minTriangles": 1}
+  ]
+}

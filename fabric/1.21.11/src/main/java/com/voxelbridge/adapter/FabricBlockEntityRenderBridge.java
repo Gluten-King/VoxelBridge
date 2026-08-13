@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.platform.render.capture.ImmediateSubmitNodeCollector;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
+import net.minecraft.client.renderer.blockentity.state.BannerRenderState;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.Vec3;
 
@@ -23,6 +24,13 @@ public final class FabricBlockEntityRenderBridge implements BlockEntityRenderBri
             Vec3 cameraPos) {
         BlockEntityRenderState state = (BlockEntityRenderState) renderer.createRenderState();
         renderer.extractRenderState(blockEntity, state, partial, cameraPos, null);
+        if (Boolean.getBoolean("voxelbridge.golden.enabled")
+                && state instanceof BannerRenderState bannerState) {
+            // Banner cloth uses absolute world time even with a zero partial
+            // tick. Pin its phase only in golden runs so repeated snapshots
+            // exercise identical geometry and UVs.
+            bannerState.phase = 0.0f;
+        }
         renderer.submit(
             state,
             poseStack,

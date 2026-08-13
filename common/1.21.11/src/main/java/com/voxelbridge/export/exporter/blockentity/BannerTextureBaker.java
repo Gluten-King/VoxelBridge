@@ -4,6 +4,8 @@ import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.texture.EntityTextureManager;
 import com.voxelbridge.core.util.color.ColorUtil;
 import com.voxelbridge.core.util.image.ImageUtil;
+import com.voxelbridge.platform.client.ClientAccessHolder;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.resources.ResourceKey;
@@ -18,11 +20,18 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 final class BannerTextureBaker {
     private static final Identifier FLAG_ONLY_TEXTURE = Identifier.withDefaultNamespace("entity/banner/base");
     private static final Identifier BASE_WITH_POLE_TEXTURE = Identifier.withDefaultNamespace("entity/banner_base");
+    private static final Identifier BANNER_PATTERN_ATLAS =
+        Identifier.fromNamespaceAndPath("minecraft", "textures/atlas/banner_patterns.png");
+    private static final float ATLAS_UV_EPSILON = 1.0e-5f;
+    private static final boolean FORCE_ATLAS_UV_FALLBACK =
+        Boolean.getBoolean("voxelbridge.banner.forceAtlasUvFallback");
     private static final float[] NO_TINT = new float[]{1.0f, 1.0f, 1.0f};
 
     private BannerTextureBaker() {
@@ -32,6 +41,12 @@ final class BannerTextureBaker {
         String key = BannerTextureBaker.buildKey(banner);
         String bakedPath = resolveOutputDir(ctx) + "/" + BannerTextureBaker.safe(key) + ".png";
         BufferedImage bakedImage = ctx.getGeneratedEntityTextures().computeIfAbsent(key, k -> BannerTextureBaker.composeTexture(ctx, banner));
+        if (VoxelBridgeLogger.isProbeEnabled()) {
+            VoxelBridgeLogger.probe("banner-bake pos=" + banner.getBlockPos()
+                + " patterns=" + banner.getPatterns().layers().size()
+                + " image=" + bakedImage.getWidth() + "x" + bakedImage.getHeight()
+                + " key=" + key);
+        }
         EntityTextureManager.TextureHandle bakedHandle = EntityTextureManager.registerGenerated(ctx, key, bakedPath, bakedImage);
 
         BannerTextureOverrides overrides = new BannerTextureOverrides();
@@ -166,6 +181,8 @@ final class BannerTextureBaker {
     private static final class BannerTextureOverrides implements TextureOverrideMap {
         private final Map<Identifier, EntityTextureManager.TextureHandle> overrides = new HashMap<>();
         private final Set<Identifier> skipSprites = new HashSet<>();
+        private final Set<Identifier> probedSprites = new HashSet<>();
+        private volatile List<UvBounds> skipUvBounds;
         private EntityTextureManager.TextureHandle bakedHandle;
 
         void setBakedHandle(EntityTextureManager.TextureHandle handle) {
@@ -196,7 +213,112 @@ final class BannerTextureBaker {
 
         @Override
         public boolean skipQuad(Identifier spriteName, float[] localU, float[] localV) {
-            return spriteName != null && this.skipSprites.contains(spriteName);
+            boolean skip = !FORCE_ATLAS_UV_FALLBACK
+                && spriteName != null
+                && this.skipSprites.contains(spriteName);
+            String reason = skip ? "sprite-id" : "none";
+            if (!skip && matchesSkippedAtlasRegion(localU, localV)) {
+                skip = true;
+                reason = "atlas-uv-fallback";
+            }
+            if (VoxelBridgeLogger.isProbeEnabled() && this.probedSprites.add(spriteName)) {
+                VoxelBridgeLogger.probe("banner-layer sprite=" + spriteName
+                    + " action=" + (skip ? "skip-pattern-layer" : "keep-geometry")
+                    + " reason=" + reason
+                    + " uv=" + uvRange(localU, localV));
+            }
+            return skip;
+        }
+
+        /**
+         * Production renderers can expose only the banner atlas binding rather
+         * than the concrete sprite. Match the raw atlas UVs against the exact
+         * known pattern sprites so baked banner layers are still discarded.
+         */
+        private boolean matchesSkippedAtlasRegion(float[] u, float[] v) {
+            if (u == null || v == null || u.length == 0 || v.length == 0) {
+                return false;
+            }
+            for (UvBounds bounds : getSkipUvBounds()) {
+                if (bounds.contains(u, v)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private List<UvBounds> getSkipUvBounds() {
+            List<UvBounds> current = this.skipUvBounds;
+            if (current != null) {
+                return current;
+            }
+            synchronized (this) {
+                current = this.skipUvBounds;
+                if (current != null) {
+                    return current;
+                }
+                List<UvBounds> resolved = new ArrayList<>();
+                try {
+                    var atlas = ClientAccessHolder.get().getTextureAtlas(BANNER_PATTERN_ATLAS);
+                    if (atlas != null) {
+                        for (Identifier spriteName : this.skipSprites) {
+                            var sprite = atlas.apply(spriteName);
+                            if (sprite == null || sprite.contents().name().toString().contains("missingno")) {
+                                continue;
+                            }
+                            resolved.add(new UvBounds(
+                                sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1()
+                            ));
+                        }
+                    }
+                } catch (Exception e) {
+                    if (VoxelBridgeLogger.isProbeEnabled()) {
+                        VoxelBridgeLogger.probe("banner-atlas-uv-fallback unavailable: " + e.getMessage());
+                    }
+                }
+                current = List.copyOf(resolved);
+                this.skipUvBounds = current;
+                if (VoxelBridgeLogger.isProbeEnabled()) {
+                    VoxelBridgeLogger.probe("banner-atlas-uv-fallback regions=" + current.size());
+                }
+                return current;
+            }
+        }
+
+        private static String uvRange(float[] u, float[] v) {
+            if (u == null || v == null || u.length == 0 || v.length == 0) {
+                return "unavailable";
+            }
+            float minU = Float.POSITIVE_INFINITY;
+            float maxU = Float.NEGATIVE_INFINITY;
+            float minV = Float.POSITIVE_INFINITY;
+            float maxV = Float.NEGATIVE_INFINITY;
+            for (float value : u) {
+                minU = Math.min(minU, value);
+                maxU = Math.max(maxU, value);
+            }
+            for (float value : v) {
+                minV = Math.min(minV, value);
+                maxV = Math.max(maxV, value);
+            }
+            return String.format(java.util.Locale.ROOT, "[%.6f..%.6f,%.6f..%.6f]",
+                minU, maxU, minV, maxV);
+        }
+
+        private record UvBounds(float u0, float u1, float v0, float v1) {
+            boolean contains(float[] u, float[] v) {
+                for (float value : u) {
+                    if (value < u0 - ATLAS_UV_EPSILON || value > u1 + ATLAS_UV_EPSILON) {
+                        return false;
+                    }
+                }
+                for (float value : v) {
+                    if (value < v0 - ATLAS_UV_EPSILON || value > v1 + ATLAS_UV_EPSILON) {
+                        return false;
+                    }
+                }
+                return true;
+            }
         }
     }
 

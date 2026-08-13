@@ -34,7 +34,7 @@ import java.util.regex.PatternSyntaxException;
 
 public final class SemanticGltfAnalyzer {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final int SNAPSHOT_SCHEMA_VERSION = 2;
+    private static final int SNAPSHOT_SCHEMA_VERSION = 3;
 
     private SemanticGltfAnalyzer() {}
 
@@ -76,10 +76,14 @@ public final class SemanticGltfAnalyzer {
                 .distinct()
                 .toList();
         validateVoxelBridgeLightmap(root, imageInfos);
+        validateMarkerOnlyEmissiveMaterials(root);
 
         JsonNode meshes = array(root, "meshes");
         boolean voxelBridgeSceneContract = containsText(
                 array(root, "extensionsUsed"), "VOXELBRIDGE_minecraft_scene");
+        if (requiresSceneContract(scenarioManifest) && !voxelBridgeSceneContract) {
+            throw new IOException("Scenario requires VOXELBRIDGE_minecraft_scene, but the glTF does not declare it");
+        }
         JsonNode voxelBridgeScene = root.path("extensions").path("VOXELBRIDGE_minecraft_scene");
         int voxelBridgeSceneVersion = voxelBridgeScene.path("version").asInt(1);
         boolean standardSemanticTexCoords =
@@ -234,11 +238,16 @@ public final class SemanticGltfAnalyzer {
                 primitiveAttributeStats.add(attributeStats(
                         materialName, positions.count(), uv0, colors, epsilon));
                 List<String> triangles = new ArrayList<>(indices.length / 3);
+                List<String> appearanceTriangles = new ArrayList<>(indices.length / 3);
                 for (int i = 0; i < indices.length; i += 3) {
                     String a = vertexToken(indices[i], positions, normals, uv0, uv1, colors, epsilon);
                     String b = vertexToken(indices[i + 1], positions, normals, uv0, uv1, colors, epsilon);
                     String c = vertexToken(indices[i + 2], positions, normals, uv0, uv1, colors, epsilon);
                     triangles.add(canonicalTriangle(a, b, c));
+                    appearanceTriangles.add(appearanceTriangle(
+                            root, materialIndex,
+                            indices[i], indices[i + 1], indices[i + 2],
+                            positions, uv0, colors, imageInfos, epsilon));
                     triangleGeometry.add(new TriangleGeometry(
                             materialName,
                             positionAt(indices[i], positions),
@@ -260,6 +269,7 @@ public final class SemanticGltfAnalyzer {
                 accumulator.vertexCount += positions.count();
                 accumulator.triangleCount += indices.length / 3L;
                 accumulator.triangles.addAll(triangles);
+                accumulator.appearanceTriangles.addAll(appearanceTriangles);
                 accumulator.textureHashes.addAll(materialTextureHashes(root, materialIndex, imageInfos));
 
                 primitiveCount++;
@@ -274,18 +284,24 @@ public final class SemanticGltfAnalyzer {
 
         List<MaterialSnapshot> materialSnapshots = new ArrayList<>();
         MessageDigest overallGeometry = sha256();
+        MessageDigest overallAppearance = sha256();
         for (Map.Entry<String, MaterialAccumulator> entry : materialData.entrySet()) {
             MaterialAccumulator value = entry.getValue();
             Collections.sort(value.triangles);
+            Collections.sort(value.appearanceTriangles);
             String geometryHash = hashStrings(value.triangles);
+            String appearanceHash = hashStrings(value.appearanceTriangles);
             updateString(overallGeometry, entry.getKey());
             updateString(overallGeometry, geometryHash);
+            updateString(overallAppearance, entry.getKey());
+            updateString(overallAppearance, appearanceHash);
             materialSnapshots.add(new MaterialSnapshot(
                     entry.getKey(),
                     value.primitiveCount,
                     value.vertexCount,
                     value.triangleCount,
                     geometryHash,
+                    appearanceHash,
                     List.copyOf(value.textureHashes)));
         }
 
@@ -308,6 +324,7 @@ public final class SemanticGltfAnalyzer {
                 quantizedVector(boundsMin, epsilon),
                 quantizedVector(boundsMax, epsilon),
                 HexFormat.of().formatHex(overallGeometry.digest()),
+                HexFormat.of().formatHex(overallAppearance.digest()),
                 assertionSnapshots,
                 List.copyOf(materialSnapshots),
                 imageSnapshots);
@@ -598,6 +615,168 @@ public final class SemanticGltfAnalyzer {
                 : (second.compareTo(third) <= 0 ? second : third);
     }
 
+    private static void validateMarkerOnlyEmissiveMaterials(JsonNode root) throws IOException {
+        JsonNode materials = array(root, "materials");
+        for (int index = 0; index < materials.size(); index++) {
+            JsonNode material = materials.get(index);
+            JsonNode extras = material.path("extras");
+            JsonNode extension = material.path("extensions")
+                    .path("VOXELBRIDGE_minecraft_material");
+            JsonNode extrasMarker = extras.get("voxelbridge:emissive");
+            JsonNode extensionMarker = extension.get("emissive");
+
+            if (extrasMarker != null && extensionMarker != null
+                    && extrasMarker.asBoolean() != extensionMarker.asBoolean()) {
+                throw new IOException("VoxelBridge emissive markers disagree for material "
+                        + materialLabel(material, index));
+            }
+
+            boolean emissiveMarker = (extrasMarker != null && extrasMarker.asBoolean())
+                    || (extensionMarker != null && extensionMarker.asBoolean());
+            if (!emissiveMarker) {
+                continue;
+            }
+
+            boolean hasStandardEmission = material.has("emissiveFactor")
+                    || material.has("emissiveTexture")
+                    || material.path("extensions").has("KHR_materials_emissive_strength");
+            if (hasStandardEmission) {
+                throw new IOException("VoxelBridge marker-only emissive material must not "
+                        + "define standard glTF emission properties: "
+                        + materialLabel(material, index));
+            }
+        }
+    }
+
+    private static String materialLabel(JsonNode material, int index) {
+        String name = material.path("name").asText("");
+        return name.isBlank() ? "#" + index : "'" + name + "' (#" + index + ")";
+    }
+
+    /**
+     * Hashes sampled visible color together with geometry, but deliberately not
+     * raw UV coordinates or image dimensions. Equivalent individual textures
+     * and packed atlases therefore retain the same appearance hash while UV
+     * orientation, tint, or sampled texture changes still invalidate it.
+     */
+    private static String appearanceTriangle(
+            JsonNode root,
+            int materialIndex,
+            long ia,
+            long ib,
+            long ic,
+            AccessorData positions,
+            AccessorData uv0,
+            AccessorData colors,
+            List<ImageInfo> images,
+            double epsilon) throws IOException {
+        long[] indices = {ia, ib, ic};
+        double[][] barycentrics = {
+                {0.80, 0.10, 0.10},
+                {0.10, 0.80, 0.10},
+                {0.10, 0.10, 0.80}
+        };
+        double[] baseFactor = baseColorFactor(root, materialIndex);
+        BufferedImage texture = baseColorImage(root, materialIndex, images);
+        String[] tokens = new String[3];
+        for (int vertex = 0; vertex < 3; vertex++) {
+            double[] barycentric = barycentrics[vertex];
+            double[] rgba = baseFactor.clone();
+            if (texture != null && uv0 != null && uv0.components() >= 2) {
+                double u = interpolate(uv0, indices, barycentric, 0);
+                double v = interpolate(uv0, indices, barycentric, 1);
+                int argb = sampleTexture(texture, u, v);
+                rgba[0] *= ((argb >>> 16) & 0xff) / 255.0;
+                rgba[1] *= ((argb >>> 8) & 0xff) / 255.0;
+                rgba[2] *= (argb & 0xff) / 255.0;
+                rgba[3] *= ((argb >>> 24) & 0xff) / 255.0;
+            }
+            if (colors != null) {
+                int components = Math.min(colors.components(), 4);
+                for (int component = 0; component < components; component++) {
+                    rgba[component] *= interpolate(colors, indices, barycentric, component);
+                }
+            }
+            double[] position = positionAt(indices[vertex], positions);
+            tokens[vertex] = "p=" + quantized(position, epsilon)
+                    + ";rgba=" + quantized(rgba, 1.0 / 255.0);
+        }
+        return canonicalTriangle(tokens[0], tokens[1], tokens[2]);
+    }
+
+    private static double interpolate(
+            AccessorData data, long[] indices, double[] barycentric, int component)
+            throws IOException {
+        double result = 0.0;
+        for (int index = 0; index < 3; index++) {
+            long vertex = indices[index];
+            if (vertex < 0 || vertex >= data.count()) {
+                throw new IOException("Index " + vertex + " is outside attribute count " + data.count());
+            }
+            result += data.values()[Math.toIntExact(vertex)][component] * barycentric[index];
+        }
+        return result;
+    }
+
+    private static int sampleTexture(BufferedImage image, double u, double v) {
+        double wrappedU = u - Math.floor(u);
+        double wrappedV = v - Math.floor(v);
+        int x = Math.min(image.getWidth() - 1, (int) Math.floor(wrappedU * image.getWidth()));
+        int y = Math.min(image.getHeight() - 1,
+                (int) Math.floor((1.0 - wrappedV) * image.getHeight()));
+        if (y == image.getHeight()) {
+            y = 0;
+        }
+        return image.getRGB(Math.max(0, x), Math.max(0, y));
+    }
+
+    private static double[] baseColorFactor(JsonNode root, int materialIndex) {
+        double[] result = {1.0, 1.0, 1.0, 1.0};
+        JsonNode materials = array(root, "materials");
+        if (materialIndex < 0 || materialIndex >= materials.size()) {
+            return result;
+        }
+        JsonNode factor = materials.get(materialIndex)
+                .path("pbrMetallicRoughness").path("baseColorFactor");
+        if (factor.isArray() && factor.size() == 4) {
+            for (int index = 0; index < 4; index++) {
+                result[index] = factor.get(index).asDouble(1.0);
+            }
+        }
+        return result;
+    }
+
+    private static BufferedImage baseColorImage(
+            JsonNode root, int materialIndex, List<ImageInfo> images) throws IOException {
+        JsonNode materials = array(root, "materials");
+        if (materialIndex < 0 || materialIndex >= materials.size()) {
+            return null;
+        }
+        JsonNode textureInfo = materials.get(materialIndex)
+                .path("pbrMetallicRoughness").path("baseColorTexture");
+        if (!textureInfo.has("index")) {
+            return null;
+        }
+        JsonNode textures = array(root, "textures");
+        int textureIndex = textureInfo.path("index").asInt(-1);
+        if (textureIndex < 0 || textureIndex >= textures.size()) {
+            throw new IOException("Material references invalid base-color texture " + textureIndex);
+        }
+        int imageIndex = textures.get(textureIndex).path("source").asInt(-1);
+        if (imageIndex < 0 || imageIndex >= images.size()) {
+            throw new IOException("Base-color texture references invalid image " + imageIndex);
+        }
+        return images.get(imageIndex).decoded();
+    }
+
+    private static String quantized(double[] values, double epsilon) throws IOException {
+        StringBuilder result = new StringBuilder();
+        for (double value : values) {
+            result.append(quantize(requireFinite(value, "appearance"), epsilon)).append(',');
+        }
+        return result.toString();
+    }
+
     private static String materialName(JsonNode root, int materialIndex) {
         JsonNode materials = array(root, "materials");
         if (materialIndex < 0 || materialIndex >= materials.size()) {
@@ -657,7 +836,7 @@ public final class SemanticGltfAnalyzer {
 
         JsonNode manifest = JSON.readTree(scenarioManifest.toFile());
         int schemaVersion = manifest.path("schemaVersion").asInt(-1);
-        if (schemaVersion != 1) {
+        if (schemaVersion != 1 && schemaVersion != 2) {
             throw new IOException("Unsupported scenario manifest schemaVersion " + schemaVersion
                     + ": " + scenarioManifest);
         }
@@ -718,6 +897,14 @@ public final class SemanticGltfAnalyzer {
             long fullRangeUvPrimitives = matchingAttributes.stream()
                     .filter(PrimitiveAttributeStats::fullRangeUv)
                     .count();
+            double maxUvSpanU = matchingAttributes.stream()
+                    .mapToDouble(PrimitiveAttributeStats::uvSpanU)
+                    .max()
+                    .orElse(0.0);
+            double maxUvSpanV = matchingAttributes.stream()
+                    .mapToDouble(PrimitiveAttributeStats::uvSpanV)
+                    .max()
+                    .orElse(0.0);
 
             if ("face".equals(type)) {
                 FaceSelector face = parseFaceSelector(
@@ -742,6 +929,8 @@ public final class SemanticGltfAnalyzer {
             assertMetric(definition, id, "UvVertices", uvVertices);
             assertMetric(definition, id, "OutOfRangeUvVertices", outOfRangeUvVertices);
             assertMetric(definition, id, "FullRangeUvPrimitives", fullRangeUvPrimitives);
+            assertMaximumDouble(definition, id, "maxUvSpanU", maxUvSpanU, epsilon);
+            assertMaximumDouble(definition, id, "maxUvSpanV", maxUvSpanV, epsilon);
             results.add(new AssertionSnapshot(
                     id, type, materialCount, primitiveCount, vertexCount, triangleCount));
         }
@@ -777,6 +966,8 @@ public final class SemanticGltfAnalyzer {
 
         long outOfRangeUvVertices = 0;
         boolean fullRangeUv = false;
+        double uvSpanU = 0.0;
+        double uvSpanV = 0.0;
         if (uv0 != null) {
             double minU = Double.POSITIVE_INFINITY;
             double minV = Double.POSITIVE_INFINITY;
@@ -795,6 +986,8 @@ public final class SemanticGltfAnalyzer {
             }
             fullRangeUv = minU <= epsilon && minV <= epsilon
                     && maxU >= 1.0 - epsilon && maxV >= 1.0 - epsilon;
+            uvSpanU = maxU - minU;
+            uvSpanV = maxV - minV;
         }
 
         return new PrimitiveAttributeStats(
@@ -804,7 +997,41 @@ public final class SemanticGltfAnalyzer {
                 nonWhiteColorVertices,
                 uv0 == null ? 0 : vertexCount,
                 outOfRangeUvVertices,
-                fullRangeUv);
+                fullRangeUv,
+                uvSpanU,
+                uvSpanV);
+    }
+
+    private static boolean requiresSceneContract(Path scenarioManifest) throws IOException {
+        if (scenarioManifest == null || !Files.isRegularFile(scenarioManifest)) {
+            return false;
+        }
+        return JSON.readTree(scenarioManifest.toFile()).path("requireSceneContract").asBoolean(false);
+    }
+
+    private static void assertMaximumDouble(
+            JsonNode definition,
+            String assertionId,
+            String field,
+            double actual,
+            double epsilon) throws IOException {
+        JsonNode node = definition.path(field);
+        if (node.isMissingNode() || node.isNull()) {
+            return;
+        }
+        if (!node.isNumber()) {
+            throw new IOException("Semantic assertion " + assertionId
+                    + " requires " + field + " to be a non-negative number");
+        }
+        double maximum = node.asDouble(Double.NaN);
+        if (!Double.isFinite(maximum) || maximum < 0.0) {
+            throw new IOException("Semantic assertion " + assertionId
+                    + " requires " + field + " to be a finite non-negative number");
+        }
+        if (actual > maximum + epsilon) {
+            throw new AssertionError("Semantic assertion '" + assertionId + "' failed: "
+                    + field + "=" + maximum + ", actual=" + actual);
+        }
     }
 
     private static FaceSelector parseFaceSelector(
@@ -1040,7 +1267,7 @@ public final class SemanticGltfAnalyzer {
                     id,
                     decoded.getWidth(),
                     decoded.getHeight(),
-                    HexFormat.of().formatHex(rgba.digest())));
+                    HexFormat.of().formatHex(rgba.digest())), decoded);
             decodedCache.put(id, info);
             result.add(info);
         }
@@ -1146,7 +1373,7 @@ public final class SemanticGltfAnalyzer {
         }
     }
 
-    private record ImageInfo(ImageSnapshot snapshot) {}
+    private record ImageInfo(ImageSnapshot snapshot, BufferedImage decoded) {}
 
     private record PrimitiveAttributeStats(
             String material,
@@ -1155,13 +1382,16 @@ public final class SemanticGltfAnalyzer {
             long nonWhiteColorVertices,
             long uvVertices,
             long outOfRangeUvVertices,
-            boolean fullRangeUv) {}
+            boolean fullRangeUv,
+            double uvSpanU,
+            double uvSpanV) {}
 
     private static final class MaterialAccumulator {
         int primitiveCount;
         long vertexCount;
         long triangleCount;
         final List<String> triangles = new ArrayList<>();
+        final List<String> appearanceTriangles = new ArrayList<>();
         final Set<String> textureHashes = new java.util.TreeSet<>();
     }
 

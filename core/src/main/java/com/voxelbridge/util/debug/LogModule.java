@@ -21,6 +21,7 @@ public enum LogModule {
 
     ANIMATION("animation", "animation.log"),
     UV_REMAP("uv.remap", "uv_remap.log"),
+    PROBE("probe", "probe.log"),
 
     PERFORMANCE("performance", "performance.log"),
     BLOCKENTITY("blockentity", "blockentity.log"),

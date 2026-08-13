@@ -97,6 +97,7 @@ public final class ExportConfigStore {
         data.nonsolidCullingEnabled = ExportRuntimeConfig.isNonsolidCullingEnabled();
         data.lightmapExportEnabled = ExportRuntimeConfig.isLightmapExportEnabled();
         data.materialIdentityMode = ExportRuntimeConfig.getMaterialIdentityMode().name();
+        data.selectionLineWidth = ExportRuntimeConfig.getSelectionLineWidth();
         return data;
     }
 
@@ -152,6 +153,9 @@ public final class ExportConfigStore {
             } catch (IllegalArgumentException ignored) {
             }
         }
+        if (data.selectionLineWidth != null) {
+            ExportRuntimeConfig.setSelectionLineWidth(data.selectionLineWidth);
+        }
     }
 
     private static Path getConfigPath() {
@@ -178,6 +182,7 @@ public final class ExportConfigStore {
         Boolean nonsolidCullingEnabled;
         Boolean lightmapExportEnabled;
         String materialIdentityMode;
+        Integer selectionLineWidth;
         // Backward compatibility for older config key.
         Boolean cullNonsolidAgainstSolidEnabled;
     }

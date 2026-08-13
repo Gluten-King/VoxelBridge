@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "world": {
+    "sourceInstance": "vb-fabric-1.21.1-base",
+    "folder": "RestWorld_1.20",
+    "expectedDataVersion": 3955,
+    "targets": [
+      "vb-fabric-1.21.1-base",
+      "vb-fabric-1.21.4-base",
+      "vb-fabric-1.21.8-base",
+      "vb-fabric-1.21.11-base",
+      "vb-fabric-1.21.11-continuity",
+      "vb-fabric-1.21.11-sodium-iris-continuity",
+      "vb-neoforge-1.21.1-base",
+      "vb-neoforge-1.21.1-yuushya",
+      "vb-neoforge-1.21.4-base",
+      "vb-neoforge-1.21.8-base"
+    ]
+  },
+  "scenes": [
+    {
+      "id": "restworld_core",
+      "dimension": "minecraft:overworld",
+      "pos1": [-996, 103, 1047],
+      "pos2": [-1026, 132, 1071],
+      "min": [-1026, 103, 1047],
+      "max": [-996, 132, 1071]
+    }
+  ],
+  "ctm": {
+    "instances": [
+      "vb-fabric-1.21.11-continuity",
+      "vb-fabric-1.21.11-sodium-iris-continuity"
+    ],
+    "resourcePacks": [
+      "continuity:default",
+      "continuity:glass_pane_culling_fix"
+    ]
+  },
+  "matrix": [
+    {
+      "id": "fabric-1.21.1-base",
+      "instance": "vb-fabric-1.21.1-base",
+      "target": "fabric-1.21.1",
+      "minecraft": "1.21.1",
+      "jar": "build/fabric/1.21.1/libs/VoxelBridge-fabric-1.21.1-1.0.4.jar",
+      "buildTask": ":fabric:1.21.1:mod:remapJar",
+      "ctm": false
+    },
+    {
+      "id": "fabric-1.21.4-base",
+      "instance": "vb-fabric-1.21.4-base",
+      "target": "fabric-1.21.4",
+      "minecraft": "1.21.4",
+      "jar": "build/fabric/1.21.4/libs/VoxelBridge-fabric-1.21.4-1.0.4.jar",
+      "buildTask": ":fabric:1.21.4:mod:remapJar",
+      "ctm": false
+    },
+    {
+      "id": "fabric-1.21.8-base",
+      "instance": "vb-fabric-1.21.8-base",
+      "target": "fabric-1.21.8",
+      "minecraft": "1.21.8",
+      "jar": "build/fabric/1.21.8/libs/VoxelBridge-fabric-1.21.8-1.0.4.jar",
+      "buildTask": ":fabric:1.21.8:mod:remapJar",
+      "ctm": false
+    },
+    {
+      "id": "fabric-1.21.11-base",
+      "instance": "vb-fabric-1.21.11-base",
+      "target": "fabric-1.21.11",
+      "minecraft": "1.21.11",
+      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.4.jar",
+      "buildTask": ":fabric:1.21.11:mod:remapJar",
+      "ctm": false
+    },
+    {
+      "id": "fabric-1.21.11-continuity",
+      "instance": "vb-fabric-1.21.11-continuity",
+      "target": "fabric-1.21.11",
+      "minecraft": "1.21.11",
+      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.4.jar",
+      "buildTask": ":fabric:1.21.11:mod:remapJar",
+      "ctm": true
+    },
+    {
+      "id": "neoforge-1.21.1-base",
+      "instance": "vb-neoforge-1.21.1-base",
+      "target": "neoforge-1.21.1",
+      "minecraft": "1.21.1",
+      "jar": "build/neoforge/1.21.1/libs/VoxelBridge-neoforge-1.21.1-1.0.4.jar",
+      "buildTask": ":neoforge:1.21.1:mod:shadowJar",
+      "ctm": false
+    },
+    {
+      "id": "neoforge-1.21.4-base",
+      "instance": "vb-neoforge-1.21.4-base",
+      "target": "neoforge-1.21.4",
+      "minecraft": "1.21.4",
+      "jar": "build/neoforge/1.21.4/libs/VoxelBridge-neoforge-1.21.4-1.0.4.jar",
+      "buildTask": ":neoforge:1.21.4:mod:shadowJar",
+      "ctm": false
+    },
+    {
+      "id": "neoforge-1.21.8-base",
+      "instance": "vb-neoforge-1.21.8-base",
+      "target": "neoforge-1.21.8",
+      "minecraft": "1.21.8",
+      "jar": "build/neoforge/1.21.8/libs/VoxelBridge-neoforge-1.21.8-1.0.4.jar",
+      "buildTask": ":neoforge:1.21.8:mod:shadowJar",
+      "ctm": false
+    }
+  ]
+}

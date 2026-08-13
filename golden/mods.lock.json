@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "packs": {
+    "fabric-1.21.11-continuity": {
+      "target": "fabric-1.21.11",
+      "artifacts": [
+        {
+          "id": "continuity",
+          "source": "https://modrinth.com/mod/continuity",
+          "version": "3.0.1-beta.1+1.21.11",
+          "fileName": "continuity-3.0.1-beta.1+1.21.11.jar",
+          "pathProperty": "modContinuityJar",
+          "sha256": "1d4d4e86fb20bd0b078fcc518f4641d21985cc8bfaefa6dd49cfa1beff52ac83",
+          "dependencies": ["fabric-api"]
+        }
+      ]
+    },
+    "fabric-1.21.11-render-stack": {
+      "target": "fabric-1.21.11",
+      "artifacts": [
+        {
+          "id": "continuity",
+          "source": "https://modrinth.com/mod/continuity",
+          "version": "3.0.1-beta.1+1.21.11",
+          "fileName": "continuity-3.0.1-beta.1+1.21.11.jar",
+          "pathProperty": "modContinuityJar",
+          "sha256": "1d4d4e86fb20bd0b078fcc518f4641d21985cc8bfaefa6dd49cfa1beff52ac83",
+          "dependencies": ["fabric-api"]
+        },
+        {
+          "id": "sodium",
+          "source": "https://modrinth.com/mod/sodium",
+          "version": "0.8.7+mc1.21.11",
+          "fileName": "sodium-fabric-0.8.7+mc1.21.11.jar",
+          "pathProperty": "modSodiumJar",
+          "sha256": "c08fae86b350aaa8a8f37e7347929df38f01cc2348cf31c322615564bdc53983",
+          "dependencies": ["fabric-api"]
+        },
+        {
+          "id": "iris",
+          "source": "https://modrinth.com/mod/iris",
+          "version": "1.10.7+mc1.21.11",
+          "fileName": "iris-fabric-1.10.7+mc1.21.11.jar",
+          "pathProperty": "modIrisJar",
+          "sha256": "58c55da18189c91a49f847d3cee451633a23b575fb69c0c5b65ddb274436cb19",
+          "dependencies": ["sodium", "fabric-api"]
+        }
+      ]
+    },
+    "neoforge-1.21.1-yuushya": {
+      "target": "neoforge-1.21.1",
+      "artifacts": [
+        {
+          "id": "yuushya",
+          "source": "https://www.curseforge.com/minecraft/mc-mods/yuushya-townscape",
+          "version": "2.2.3",
+          "fileName": "yuushya-1.21.0-neoforge-2.2.3.jar",
+          "pathProperty": "modYuushyaJar",
+          "sha256": "193c1469ece0bd281364e817cd099aae1e0929c2bbd34f835358a2e5b194125f",
+          "dependencies": []
+        },
+        {
+          "id": "yuushya-modelling",
+          "source": "https://www.curseforge.com/minecraft/mc-mods/yuushya-modelling",
+          "version": "2.3.0",
+          "fileName": "yuushya_modelling-neoforge-2.3.0.jar",
+          "pathProperty": "modYuushyaModellingJar",
+          "sha256": "65aa881ba835bb933b4aaeda9ab823bbe2384185696a3eef57981035ef362109",
+          "dependencies": ["yuushya"]
+        }
+      ]
+    }
+  }
+}

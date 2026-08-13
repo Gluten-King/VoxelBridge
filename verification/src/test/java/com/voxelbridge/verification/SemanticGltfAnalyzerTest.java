@@ -27,6 +27,9 @@ public final class SemanticGltfAnalyzerTest {
         tests.worldOriginFaceAssertionsDoNotApplyCenterOffset();
         tests.semanticAttributeAssertionsAcceptTintedAtlasGeometry();
         tests.semanticAttributeAssertionsRejectBlackTintAndRawUvs();
+        tests.appearanceHashIgnoresAtlasPlacementButTracksTint();
+        tests.markerOnlyEmissiveMaterialHasNoStandardEmission();
+        tests.standardEmissionOnMarkerOnlyMaterialFailsVerification();
         System.out.println("Semantic glTF verifier self-tests passed.");
     }
 
@@ -201,7 +204,9 @@ public final class SemanticGltfAnalyzerTest {
                   "minNonWhiteColorVertices": 4,
                   "minUvVertices": 4,
                   "maxOutOfRangeUvVertices": 0,
-                  "maxFullRangeUvPrimitives": 0
+                  "maxFullRangeUvPrimitives": 0,
+                  "maxUvSpanU": 0.11,
+                  "maxUvSpanV": 0.11
                 }]
                 """);
 
@@ -214,10 +219,10 @@ public final class SemanticGltfAnalyzerTest {
                 tempDir.resolve("attribute-fail"),
                 "blockentity:minecraft:banner",
                 new float[]{
-                        0.0f, 0.0f,
-                        1.0f, 0.0f,
-                        1.0f, 1.0f,
-                        0.0f, 1.0f
+                        0.5654297f, 0.1308594f,
+                        0.6162109f, 0.1308594f,
+                        0.6162109f, 0.2207031f,
+                        0.5654297f, 0.2207031f
                 },
                 new float[]{
                         0.0f, 0.0f, 0.0f, 1.0f,
@@ -246,11 +251,94 @@ public final class SemanticGltfAnalyzerTest {
                   "id": "atlas_uv_was_remapped",
                   "type": "material",
                   "materialRegex": "^blockentity:",
-                  "maxFullRangeUvPrimitives": 0
+                  "maxUvSpanU": 0.02,
+                  "maxUvSpanV": 0.02
                 }]
                 """);
         requireAssertionFailure(
-                fixture, uvManifest, "atlas_uv_was_remapped", "actual=1");
+                fixture, uvManifest, "atlas_uv_was_remapped", "maxUvSpanU=0.02");
+    }
+
+    void appearanceHashIgnoresAtlasPlacementButTracksTint() throws Exception {
+        float[] white = {
+                1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1
+        };
+        float[] red = {
+                1, 0, 0, 1, 1, 0, 0, 1,
+                1, 0, 0, 1, 1, 0, 0, 1
+        };
+        Path individual = writeAttributeFixture(
+                tempDir.resolve("appearance-individual"), "minecraft:block/test",
+                new float[]{0, 0, 1, 0, 1, 1, 0, 1}, white);
+        Path atlas = writeAttributeFixture(
+                tempDir.resolve("appearance-atlas"), "minecraft:block/test",
+                new float[]{.25f, .25f, .50f, .25f, .50f, .50f, .25f, .50f}, white);
+        Path tinted = writeAttributeFixture(
+                tempDir.resolve("appearance-tinted"), "minecraft:block/test",
+                new float[]{.25f, .25f, .50f, .25f, .50f, .50f, .25f, .50f}, red);
+
+        GoldenSnapshot individualSnapshot = SemanticGltfAnalyzer.analyze(
+                individual, "appearance", "test", null, 1.0e-5);
+        GoldenSnapshot atlasSnapshot = SemanticGltfAnalyzer.analyze(
+                atlas, "appearance", "test", null, 1.0e-5);
+        GoldenSnapshot tintedSnapshot = SemanticGltfAnalyzer.analyze(
+                tinted, "appearance", "test", null, 1.0e-5);
+        requireEquals(individualSnapshot.appearanceHash(), atlasSnapshot.appearanceHash(),
+                "atlas placement changed the appearance hash");
+        if (individualSnapshot.geometryHash().equals(atlasSnapshot.geometryHash())) {
+            throw new AssertionError("raw UV placement was absent from geometry hash");
+        }
+        if (atlasSnapshot.appearanceHash().equals(tintedSnapshot.appearanceHash())) {
+            throw new AssertionError("vertex tint did not change the appearance hash");
+        }
+    }
+
+    void markerOnlyEmissiveMaterialHasNoStandardEmission() throws Exception {
+        Path fixture = writeFixture(
+                tempDir.resolve("marker-only-emissive"),
+                new int[]{0, 1, 2, 0, 2, 3});
+        addEmissiveMarker(fixture, false);
+
+        SemanticGltfAnalyzer.analyze(
+                fixture, "marker-only-emissive", "test", null, 1.0e-5);
+    }
+
+    void standardEmissionOnMarkerOnlyMaterialFailsVerification() throws Exception {
+        Path fixture = writeFixture(
+                tempDir.resolve("invalid-marker-only-emissive"),
+                new int[]{0, 1, 2, 0, 2, 3});
+        addEmissiveMarker(fixture, true);
+
+        try {
+            SemanticGltfAnalyzer.analyze(
+                    fixture, "invalid-marker-only-emissive", "test", null, 1.0e-5);
+            throw new AssertionError("standard glTF emission was accepted on a marker-only material");
+        } catch (IOException expected) {
+            if (!expected.getMessage().contains("marker-only emissive")
+                    || !expected.getMessage().contains("minecraft:block/test")) {
+                throw new AssertionError(
+                        "marker-only emission failure was not targeted: " + expected.getMessage());
+            }
+        }
+    }
+
+    private static void addEmissiveMarker(Path gltf, boolean includeStandardEmission)
+            throws IOException {
+        String json = Files.readString(gltf);
+        String materialName = "\"name\": \"minecraft:block/test\",";
+        String emission = includeStandardEmission
+                ? "\n                    \"emissiveFactor\": [1, 1, 1],"
+                : "";
+        String replacement = materialName
+                + "\n                    \"extras\": {\"voxelbridge:emissive\": true},"
+                + "\n                    \"extensions\": {"
+                + "\"VOXELBRIDGE_minecraft_material\": {\"emissive\": true}},"
+                + emission;
+        if (!json.contains(materialName)) {
+            throw new IOException("test fixture material was not found");
+        }
+        Files.writeString(gltf, json.replace(materialName, replacement));
     }
 
     private static void requireAssertionFailure(

@@ -3,11 +3,13 @@ package com.voxelbridge.export.exporter.entity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.QuadSemantic;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
 import com.voxelbridge.export.exporter.PlaneOffsetTracker;
 import com.voxelbridge.export.exporter.capture.CapturedQuadProcessor;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import com.voxelbridge.export.exporter.resolve.AtlasLocator;
 import com.voxelbridge.export.exporter.resolve.DefaultAtlasLocator;
 import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
@@ -259,6 +261,7 @@ public final class EntityRenderer {
         private static final ConcurrentHashMap<String, BufferedImage> TEXTURE_IMAGE_CACHE = new ConcurrentHashMap<>();
         private final double offsetX, offsetY, offsetZ;
         private final Entity entity;
+        private final QuadSemantic semantic;
         private final PlaneOffsetTracker planeOffset;
         private final double baseDeltaX;
         private final double baseDeltaY;
@@ -277,6 +280,7 @@ public final class EntityRenderer {
             this.offsetY = offsetY;
             this.offsetZ = offsetZ;
             this.entity = entity;
+            this.semantic = MinecraftQuadSemantic.entity(entity);
             this.baseDeltaX = baseDeltaX;
             this.baseDeltaY = baseDeltaY;
             this.baseDeltaZ = baseDeltaZ;
@@ -357,6 +361,7 @@ public final class EntityRenderer {
                 uv0,
                 entity,
                 materialGroupKey,
+                semantic,
                 this::resolveTexture,
                 this::writeUvs,
                 (tracker, quadPositions, faceNormal) ->

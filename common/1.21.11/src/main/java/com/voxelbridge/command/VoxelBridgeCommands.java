@@ -111,6 +111,8 @@ public final class VoxelBridgeCommands {
             ctx.getSource().sendSystemMessage(Component.literal("§b  Logging: " + (ExportRuntimeConfig.isLoggingEnabled() ? "§aon" : "§coff")));
             ctx.getSource().sendSystemMessage(Component.literal("§b  Collapse double-sided: " + (ExportRuntimeConfig.isExportDoubleSidedEnabled() ? "§aon" : "§coff")));
             ctx.getSource().sendSystemMessage(Component.literal("\u00a7b  Nonsolid culling: " + (ExportRuntimeConfig.isNonsolidCullingEnabled() ? "\u00a7aon" : "\u00a7coff")));
+            ctx.getSource().sendSystemMessage(Component.literal("\u00a7b  Lightmap export: " + (ExportRuntimeConfig.isLightmapExportEnabled() ? "\u00a7aon" : "\u00a7coff")));
+            ctx.getSource().sendSystemMessage(Component.literal("\u00a7b  Material identity: \u00a7f" + ExportRuntimeConfig.getMaterialIdentityMode().getDescription()));
             ctx.getSource().sendSystemMessage(Component.literal("§b  Export threads: §f" + ExportRuntimeConfig.getExportThreadCount()));
             return 1;
         }));

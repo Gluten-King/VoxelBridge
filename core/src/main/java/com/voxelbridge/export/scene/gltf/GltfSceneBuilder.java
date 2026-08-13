@@ -1090,9 +1090,10 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             case TRANSLUCENT -> material.setAlphaMode("BLEND");
             default -> material.setAlphaMode("OPAQUE");
         }
-        if (emissive) {
-            material.setEmissiveFactor(new float[] {1.0f, 1.0f, 1.0f});
-        }
+        // Minecraft emission is semantic metadata, not a request for the glTF
+        // consumer to add light to the material. Keep it in the VoxelBridge
+        // marker fields below and leave the standard glTF emission properties
+        // unset so consumers such as Blender import a zero-emission BSDF.
         boolean forceDoubleSided = com.voxelbridge.config.ExportRuntimeConfig.isExportDoubleSidedEnabled();
         material.setDoubleSided(forceDoubleSided || doubleSided);
 

@@ -3,9 +3,11 @@ package com.voxelbridge.export.exporter.blockentity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.QuadSemantic;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
+import com.voxelbridge.export.semantic.MinecraftQuadSemantic;
 import com.voxelbridge.export.exporter.resolve.AtlasLocator;
 import com.voxelbridge.export.exporter.resolve.DefaultAtlasLocator;
 import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
@@ -42,7 +44,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class BlockEntityRenderer {
 
     private static AtlasLocator ATLAS_LOCATOR = new DefaultAtlasLocator(ClientAccessHolder.get());
-    private static final ThreadLocal<TextureOverrideMap> OVERRIDES = new ThreadLocal<>();
     private static TextureResolver<BlockEntity> TEXTURE_RESOLVER = BlockEntityTextureResolver.INSTANCE;
     private static RenderTypeResolver RENDER_TYPE_RESOLVER = RenderTypeTextureResolver.INSTANCE;
     private static final ConcurrentHashMap<Long, PlaneOffsetTracker> CHUNK_PLANE_OFFSETS = new ConcurrentHashMap<>();
@@ -164,13 +165,10 @@ public final class BlockEntityRenderer {
     ) {
         try {
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] Starting render for " + blockEntity.getClass().getSimpleName());
-            if (overrides != null) {
-                OVERRIDES.set(overrides);
-            }
             PoseStack poseStack = new PoseStack();
             poseStack.translate(offsetX, offsetY, offsetZ);
 
-            CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, blockEntity, chunkX, chunkZ);
+            CaptureBuffer captureBuffer = new CaptureBuffer(ctx, sceneSink, blockEntity, chunkX, chunkZ, overrides);
 
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] Calling renderer.render()...");
             // Export-only camera spoof: keep BER distance checks at zero.
@@ -189,8 +187,6 @@ public final class BlockEntityRenderer {
             e.printStackTrace();
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer] Final result: false");
             return false;
-        } finally {
-            OVERRIDES.remove();
         }
     }
 
@@ -257,17 +253,26 @@ public final class BlockEntityRenderer {
         private static final Set<String> LOGGED_TEXT_MISSING_TEXTURE = ConcurrentHashMap.newKeySet();
         private static final ConcurrentHashMap<String, BufferedImage> TEXTURE_IMAGE_CACHE = new ConcurrentHashMap<>();
         private final BlockEntity blockEntity;
+        private final QuadSemantic semantic;
         private final TextureOverrideMap overrides;
         private final PlaneOffsetTracker planeOffset;
 
-        CaptureBuffer(ExportContext ctx, IrSink sceneSink, BlockEntity blockEntity, int chunkX, int chunkZ) {
+        CaptureBuffer(
+            ExportContext ctx,
+            IrSink sceneSink,
+            BlockEntity blockEntity,
+            int chunkX,
+            int chunkZ,
+            TextureOverrideMap overrides
+        ) {
             super(ctx, sceneSink, (renderType, queuedVertices) -> {
                 if (VoxelBridgeLogger.isDebugEnabled(LogModule.BLOCKENTITY)) {
                     VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[VertexCollector] setNormal called, vertices.size=" + queuedVertices);
                 }
             });
             this.blockEntity = blockEntity;
-            this.overrides = OVERRIDES.get();
+            this.semantic = MinecraftQuadSemantic.blockEntity(blockEntity);
+            this.overrides = overrides;
             this.planeOffset = CHUNK_PLANE_OFFSETS.computeIfAbsent(
                 chunkKey(chunkX, chunkZ),
                 key -> new PlaneOffsetTracker(3.0f, 1e-3f, 1e-3f, 1000f, 1000f, 1000f)
@@ -330,6 +335,7 @@ public final class BlockEntityRenderer {
                 uv0,
                 blockEntity,
                 materialGroupKey,
+                semantic,
                 this::resolveTexture,
                 this::writeUvs,
                 (tracker, quadPositions, faceNormal) -> tracker.applyOffset(quadPositions, faceNormal, approximateDirection(faceNormal)),
@@ -367,22 +373,23 @@ public final class BlockEntityRenderer {
             }
 
             TextureOverrideMap overrides = overrides();
-            if (textureRes != null && overrides != null) {
-                if (overrides.skipQuad(textureRes.texture(), uvStats.rawU(), uvStats.rawV())) {
+            Identifier sourceTexture = textureRes != null ? textureRes.texture() : rtTexture;
+            if (overrides != null) {
+                if (overrides.skipQuad(sourceTexture, uvStats.rawU(), uvStats.rawV())) {
                     return new CapturedQuadProcessor.TextureResult(
                         null, textureRes, false, 0f, 1f, 0f, 1f, true
                     );
                 }
-                var mappedHandle = overrides.resolve(textureRes.texture());
+                var mappedHandle = overrides.resolve(sourceTexture);
                 if (mappedHandle != null) {
                     return new CapturedQuadProcessor.TextureResult(
                         mappedHandle.spriteKey(),
                         textureRes,
-                        textureRes.isAtlasTexture(),
-                        textureRes.u0(),
-                        textureRes.u1(),
-                        textureRes.v0(),
-                        textureRes.v1(),
+                        textureRes != null && textureRes.isAtlasTexture(),
+                        textureRes != null ? textureRes.u0() : 0f,
+                        textureRes != null ? textureRes.u1() : 1f,
+                        textureRes != null ? textureRes.v0() : 0f,
+                        textureRes != null ? textureRes.v1() : 1f,
                         false
                     );
                 }
