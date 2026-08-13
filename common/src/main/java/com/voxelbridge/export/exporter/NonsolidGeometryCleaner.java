@@ -1,11 +1,11 @@
 package com.voxelbridge.export.exporter;
 
 import com.voxelbridge.compat.BlockStateCompat;
-import com.voxelbridge.core.util.geometry.GeometryUtil;
+import com.voxelbridge.core.util.geometry.QuadGeometryKey;
 import com.voxelbridge.export.quad.QuadData;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -18,7 +18,6 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * Applies non-solid face de-duplication and small insets that avoid z-fighting.
  */
 final class NonsolidGeometryCleaner {
-    private static final float SAME_FACE_QUANT = 1000f;
     private static final float SAME_FACE_CELL = 3.0f;
     private static final float AABB_EPS = 1e-3f;
     private static final float FACE_EPS = 1e-4f;
@@ -29,9 +28,13 @@ final class NonsolidGeometryCleaner {
     private final double offsetX;
     private final double offsetY;
     private final double offsetZ;
-    private final Int2ObjectOpenHashMap<LongOpenHashSet> sameFaceBuckets = new Int2ObjectOpenHashMap<>();
+    private final Int2ObjectOpenHashMap<ObjectOpenHashSet<SameFaceKey>> sameFaceBuckets =
+        new Int2ObjectOpenHashMap<>();
     private final Object2IntOpenHashMap<String> stringIds = new Object2IntOpenHashMap<>();
     private int nextStringId = 1;
+
+    private record SameFaceKey(int blockId, int spriteId, int nx, int ny, int nz,
+                               QuadGeometryKey geometry) {}
 
     NonsolidGeometryCleaner(Level level, double offsetX, double offsetY, double offsetZ) {
         this.level = level;
@@ -45,69 +48,24 @@ final class NonsolidGeometryCleaner {
         sameFaceBuckets.clear();
     }
 
-    boolean shouldCullSameNonSolidFace(Direction dir) {
-        return dir == Direction.EAST || dir == Direction.SOUTH || dir == Direction.UP;
-    }
-
-    boolean isSameNonSolidNeighborFace(BlockState state, BlockPos pos, QuadData quad, Direction dir) {
-        BlockPos neighbor = pos.relative(dir);
-        BlockState neighborState = level.getBlockState(neighbor);
-        if (neighborState.getBlock() != state.getBlock()) {
-            return false;
-        }
-        if (BlockStateCompat.isSolidRender(neighborState, level, neighbor)) {
-            return false;
-        }
-        float[] quadAabb = new float[4];
-        if (!getLocalFaceAabb(quad, dir, quadAabb)) {
-            return false;
-        }
-        float[] neighborAabb = new float[4];
-        if (!getNeighborFaceAabb(neighborState, neighbor, dir.getOpposite(), neighborAabb)) {
-            return false;
-        }
-        return aabbApproxEqual(quadAabb, neighborAabb);
-    }
-
     boolean registerSameFaceKey(String blockKey, String spriteKey, float[] positions, float[] uv, float[] normal) {
         if (blockKey == null || spriteKey == null || positions == null || positions.length < 12) {
             return true;
         }
-        float[] uvAabb = new float[4];
-        if (!GeometryUtil.computeUvBounds(uv, uvAabb)) {
-            uvAabb[0] = 0f;
-            uvAabb[1] = 0f;
-            uvAabb[2] = 0f;
-            uvAabb[3] = 0f;
-        }
         float[] n = normalizeCanonical(normal);
         int[] nKey = quantizeNormalSigned(n);
-        int plane = quantizePlane(positions, n);
-        float[] faceAabb = projectAabb2d(positions, n);
-        int cx = Math.round((positions[0] + positions[3] + positions[6] + positions[9]) * 0.25f * SAME_FACE_QUANT);
-        int cy = Math.round((positions[1] + positions[4] + positions[7] + positions[10]) * 0.25f * SAME_FACE_QUANT);
-        int cz = Math.round((positions[2] + positions[5] + positions[8] + positions[11]) * 0.25f * SAME_FACE_QUANT);
-        long key = hashSameFaceKey(
-            getStringId(blockKey),
-            getStringId(spriteKey),
-            nKey[0], nKey[1], nKey[2],
-            plane,
-            cx, cy, cz,
-            Math.round(faceAabb[0] * SAME_FACE_QUANT),
-            Math.round(faceAabb[1] * SAME_FACE_QUANT),
-            Math.round(faceAabb[2] * SAME_FACE_QUANT),
-            Math.round(faceAabb[3] * SAME_FACE_QUANT),
-            Math.round(uvAabb[0] * SAME_FACE_QUANT),
-            Math.round(uvAabb[1] * SAME_FACE_QUANT),
-            Math.round(uvAabb[2] * SAME_FACE_QUANT),
-            Math.round(uvAabb[3] * SAME_FACE_QUANT)
+        int blockId = getStringId(blockKey);
+        int spriteId = getStringId(spriteKey);
+        SameFaceKey key = new SameFaceKey(
+            blockId, spriteId, nKey[0], nKey[1], nKey[2],
+            QuadGeometryKey.of(spriteId, blockId, positions, null)
         );
         int[] bucket = bucketFor(positions);
         for (int dx = -1; dx <= 1; dx++) {
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dz = -1; dz <= 1; dz++) {
                     int neighborKey = bucketKeyFor(bucket[0] + dx, bucket[1] + dy, bucket[2] + dz);
-                    LongOpenHashSet set = sameFaceBuckets.get(neighborKey);
+                    ObjectOpenHashSet<SameFaceKey> set = sameFaceBuckets.get(neighborKey);
                     if (set != null && set.contains(key)) {
                         return false;
                     }
@@ -115,9 +73,9 @@ final class NonsolidGeometryCleaner {
             }
         }
         int bucketKey = bucketKeyFor(bucket[0], bucket[1], bucket[2]);
-        LongOpenHashSet bucketSet = sameFaceBuckets.get(bucketKey);
+        ObjectOpenHashSet<SameFaceKey> bucketSet = sameFaceBuckets.get(bucketKey);
         if (bucketSet == null) {
-            bucketSet = new LongOpenHashSet();
+            bucketSet = new ObjectOpenHashSet<>();
             sameFaceBuckets.put(bucketKey, bucketSet);
         }
         bucketSet.add(key);
@@ -237,24 +195,6 @@ final class NonsolidGeometryCleaner {
         return dz >= 0f ? Direction.SOUTH : Direction.NORTH;
     }
 
-    private static int quantizePlane(float[] positions, float[] normal) {
-        float cx = (positions[0] + positions[3] + positions[6] + positions[9]) * 0.25f;
-        float cy = (positions[1] + positions[4] + positions[7] + positions[10]) * 0.25f;
-        float cz = (positions[2] + positions[5] + positions[8] + positions[11]) * 0.25f;
-        float nx = normal[0];
-        float ny = normal[1];
-        float nz = normal[2];
-        float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-        if (len < 1e-6f) {
-            return 0;
-        }
-        nx /= len;
-        ny /= len;
-        nz /= len;
-        float d = nx * cx + ny * cy + nz * cz;
-        return Math.round(d * SAME_FACE_QUANT);
-    }
-
     private static int[] quantizeNormalSigned(float[] normal) {
         float nx = normal[0];
         float ny = normal[1];
@@ -325,89 +265,8 @@ final class NonsolidGeometryCleaner {
         return id;
     }
 
-    private static long hashSameFaceKey(int blockId, int spriteId,
-                                        int nx, int ny, int nz, int plane,
-                                        int cx, int cy, int cz,
-                                        int minU, int maxU, int minV, int maxV,
-                                        int uvMinU, int uvMaxU, int uvMinV, int uvMaxV) {
-        long h = 1469598103934665603L;
-        h = (h ^ blockId) * 1099511628211L;
-        h = (h ^ spriteId) * 1099511628211L;
-        h = (h ^ nx) * 1099511628211L;
-        h = (h ^ ny) * 1099511628211L;
-        h = (h ^ nz) * 1099511628211L;
-        h = (h ^ plane) * 1099511628211L;
-        h = (h ^ cx) * 1099511628211L;
-        h = (h ^ cy) * 1099511628211L;
-        h = (h ^ cz) * 1099511628211L;
-        h = (h ^ minU) * 1099511628211L;
-        h = (h ^ maxU) * 1099511628211L;
-        h = (h ^ minV) * 1099511628211L;
-        h = (h ^ maxV) * 1099511628211L;
-        h = (h ^ uvMinU) * 1099511628211L;
-        h = (h ^ uvMaxU) * 1099511628211L;
-        h = (h ^ uvMinV) * 1099511628211L;
-        h = (h ^ uvMaxV) * 1099511628211L;
-        return h;
-    }
-
     private static int floorDiv(float value, float size) {
         return (int) Math.floor(value / size);
-    }
-
-    private static float[] projectAabb2d(float[] positions, float[] normal) {
-        float anx = Math.abs(normal[0]);
-        float any = Math.abs(normal[1]);
-        float anz = Math.abs(normal[2]);
-        int axis;
-        if (anx >= any && anx >= anz) {
-            axis = 0;
-        } else if (any >= anz) {
-            axis = 1;
-        } else {
-            axis = 2;
-        }
-
-        float minU = Float.POSITIVE_INFINITY;
-        float maxU = Float.NEGATIVE_INFINITY;
-        float minV = Float.POSITIVE_INFINITY;
-        float maxV = Float.NEGATIVE_INFINITY;
-        for (int i = 0; i < 4; i++) {
-            float x = positions[i * 3];
-            float y = positions[i * 3 + 1];
-            float z = positions[i * 3 + 2];
-            float u;
-            float v;
-            if (axis == 0) {
-                u = y;
-                v = z;
-            } else if (axis == 1) {
-                u = x;
-                v = z;
-            } else {
-                u = x;
-                v = y;
-            }
-            if (u < minU) minU = u;
-            if (u > maxU) maxU = u;
-            if (v < minV) minV = v;
-            if (v > maxV) maxV = v;
-        }
-        return new float[]{minU, maxU, minV, maxV};
-    }
-
-    private static boolean aabbApproxEqual(float[] a, float[] b) {
-        return Math.abs(a[0] - b[0]) <= AABB_EPS
-            && Math.abs(a[1] - b[1]) <= AABB_EPS
-            && Math.abs(a[2] - b[2]) <= AABB_EPS
-            && Math.abs(a[3] - b[3]) <= AABB_EPS;
-    }
-
-    private static boolean aabbContains(float[] container, float[] inner) {
-        return container[0] - AABB_EPS <= inner[0]
-            && container[1] + AABB_EPS >= inner[1]
-            && container[2] - AABB_EPS <= inner[2]
-            && container[3] + AABB_EPS >= inner[3];
     }
 
     private static boolean getLocalFaceAabb(QuadData quad, Direction dir, float[] out) {
@@ -478,6 +337,13 @@ final class NonsolidGeometryCleaner {
             && a[0] - AABB_EPS < b[1]
             && a[3] + AABB_EPS > b[2]
             && a[2] - AABB_EPS < b[3];
+    }
+
+    private static boolean aabbContains(float[] container, float[] inner) {
+        return container[0] - AABB_EPS <= inner[0]
+            && container[1] + AABB_EPS >= inner[1]
+            && container[2] - AABB_EPS <= inner[2]
+            && container[3] + AABB_EPS >= inner[3];
     }
 
     private boolean getNeighborFaceAabb(BlockState state, BlockPos pos, Direction face, float[] out) {

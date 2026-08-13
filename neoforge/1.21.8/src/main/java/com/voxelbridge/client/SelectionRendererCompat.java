@@ -2,6 +2,7 @@ package com.voxelbridge.client;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportControl;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.ExportProgressTracker.ChunkState;
@@ -35,7 +36,8 @@ public final class SelectionRendererCompat {
         Vec3 camPos = event.getCamera().getPosition();
         PoseStack poseStack = event.getPoseStack();
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
-        VertexConsumer consumer = bufferSource.getBuffer(RenderType.lines());
+        RenderType lineRenderType = SelectionRenderTypes.lines(ExportRuntimeConfig.getSelectionLineWidth());
+        VertexConsumer consumer = bufferSource.getBuffer(lineRenderType);
 
         poseStack.pushPose();
         poseStack.translate(-camPos.x, -camPos.y, -camPos.z);
@@ -55,7 +57,7 @@ public final class SelectionRendererCompat {
         }
 
         poseStack.popPose();
-        bufferSource.endBatch(RenderType.lines());
+        bufferSource.endBatch(lineRenderType);
         bufferSource.endBatch();
     }
 

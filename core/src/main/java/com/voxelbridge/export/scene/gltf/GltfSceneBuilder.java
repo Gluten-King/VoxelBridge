@@ -1082,14 +1082,13 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         pbr.setMetallicFactor(0.0f);
         pbr.setRoughnessFactor(1.0f);
         material.setPbrMetallicRoughness(pbr);
-        switch (materialRenderLayer) {
-            case CUTOUT -> {
-                material.setAlphaMode("MASK");
-                material.setAlphaCutoff(0.1f);
-            }
-            case TRANSLUCENT -> material.setAlphaMode("BLEND");
-            default -> material.setAlphaMode("OPAQUE");
-        }
+        // Keep the standard glTF material deliberately minimal: texture color and
+        // COLOR_0 feed Base Color, while alpha is left at 1.0. Minecraft's source
+        // render layer remains available in VOXELBRIDGE_minecraft_material for
+        // consumers that explicitly want to reconstruct cutout/translucency.
+        // In particular, do not emit MASK/alphaCutoff: Blender otherwise builds an
+        // alpha-clip shader graph instead of the simple color-only node graph.
+        material.setAlphaMode("OPAQUE");
         // Minecraft emission is semantic metadata, not a request for the glTF
         // consumer to add light to the material. Keep it in the VoxelBridge
         // marker fields below and leave the standard glTF emission properties
@@ -1610,7 +1609,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 == com.voxelbridge.config.ExportRuntimeConfig.MaterialIdentityMode.NONE) {
             return QuadSemantic.NONE;
         }
-        return semantic != null ? semantic : QuadSemantic.NONE;
+        return semantic != null ? semantic.typeIdentity() : QuadSemantic.NONE;
     }
 
     private String resolveSemanticBucketKey(

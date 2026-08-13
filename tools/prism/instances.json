@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
   "group": "VoxelBridge Test Matrix",
+  "voxelbridgeConfigOverrides": {
+    "selectionLineWidth": 3
+  },
   "instances": [
     {
       "id": "vb-fabric-1.20.1-restworld",

@@ -8,6 +8,8 @@ import com.voxelbridge.export.CoordinateMode;
  */
 public final class ExportRuntimeConfig {
 
+    public static final int DEFAULT_SELECTION_LINE_WIDTH = 3;
+
     private ExportRuntimeConfig() {}
 
     public enum AtlasMode {
@@ -27,7 +29,7 @@ public final class ExportRuntimeConfig {
 
     public enum MaterialIdentityMode {
         NONE("Do not export Minecraft material identity"),
-        REGISTRY("Export BlockState and stable block, entity, block entity, and item keys");
+        REGISTRY("Group by stable block, entity, block entity, fluid, and item type");
 
         private final String description;
 
@@ -96,7 +98,7 @@ public final class ExportRuntimeConfig {
     private static boolean lightmapExportEnabled = true;
     private static MaterialIdentityMode materialIdentityMode = MaterialIdentityMode.REGISTRY;
     // Width of the in-world selection and export-progress outlines, in pixels.
-    private static int selectionLineWidth = 2;
+    private static int selectionLineWidth = DEFAULT_SELECTION_LINE_WIDTH;
     private static Runnable changeListener;
 
     private static void notifyChanged() {
@@ -314,7 +316,7 @@ public final class ExportRuntimeConfig {
         nonsolidCullingEnabled = true;
         lightmapExportEnabled = true;
         materialIdentityMode = MaterialIdentityMode.REGISTRY;
-        selectionLineWidth = 2;
+        selectionLineWidth = DEFAULT_SELECTION_LINE_WIDTH;
         notifyChanged();
     }
 

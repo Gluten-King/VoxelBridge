@@ -6,7 +6,7 @@ import com.voxelbridge.core.ir.TintMode;
 import com.voxelbridge.core.util.color.ColorUtil;
 import com.voxelbridge.core.util.color.ColorMode;
 import com.voxelbridge.core.util.color.ColorModeHandler;
-import com.voxelbridge.core.util.geometry.GeometryUtil;
+import com.voxelbridge.core.util.geometry.QuadGeometryKey;
 import com.voxelbridge.compat.BlockStateCompat;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
@@ -51,13 +51,11 @@ public final class QuadProcessor {
     // Pending quads for per-block dedup/cull decisions.
     private final List<PendingQuad> pendingQuads = new ArrayList<>();
 
-    private static final float CENTER_QUANT = 10000f;
     private static final float NORMAL_PARALLEL_DOT = 0.999f;
 
-    private record QuadDedupKey(int spriteHash, int tintArgb, int cx, int cy, int cz,
-                                int minU, int maxU, int minV, int maxV) {}
-    private record PendingQuad(QuadDedupKey key, BlockState state, BlockPos pos,
-                               QuadData quad, Direction dir, String materialKey, String spriteKey,
+    private record PendingQuad(QuadGeometryKey key, BlockState state, BlockPos pos,
+                               QuadData quad, Direction dir, Direction cullDir,
+                               String materialKey, String spriteKey,
                                float[] positions, float[] uvs, float[] normal,
                                ColorModeHandler.ColorData colorData, boolean doubleSided) {}
     public QuadProcessor(ExportContext ctx, Level level, IrSink sceneSink,
@@ -134,12 +132,8 @@ public final class QuadProcessor {
         boolean doubleSided = state.getBlock() instanceof BushBlock;
         boolean exportDoubleSided = ExportRuntimeConfig.isExportDoubleSidedEnabled();
         Direction dir = quad.direction();
+        Direction cullDir = quad.cullDirection();
         if (exportDoubleSided && !BlockStateCompat.isSolidRender(state, level, pos)) {
-            if (dir != null
-                && nonsolidCleaner.isSameNonSolidNeighborFace(state, pos, quad, dir)
-                && nonsolidCleaner.shouldCullSameNonSolidFace(dir)) {
-                return;
-            }
             if (!nonsolidCleaner.registerSameFaceKey(blockKey, spriteKey, data.positions(), data.uvs(), data.normal())) {
                 return;
             }
@@ -180,8 +174,10 @@ public final class QuadProcessor {
         }
 
         String materialKey = ctx.resolveMaterialKey(spriteKey, blockKey);
-        QuadDedupKey key = buildDedupKey(spriteKey.hashCode(), dedupTint, data.positions(), data.normal());
-        pendingQuads.add(new PendingQuad(key, state, pos, quad, dir, materialKey, spriteKey,
+        QuadGeometryKey key = QuadGeometryKey.of(
+            spriteKey.hashCode(), dedupTint, data.positions(), data.uvs()
+        );
+        pendingQuads.add(new PendingQuad(key, state, pos, quad, dir, cullDir, materialKey, spriteKey,
             data.positions(), data.uvs(), data.normal(), colorData, doubleSided));
     }
 
@@ -194,7 +190,7 @@ public final class QuadProcessor {
         }
         boolean exportDoubleSided = ExportRuntimeConfig.isExportDoubleSidedEnabled();
         boolean nonsolidCulling = ExportRuntimeConfig.isNonsolidCullingEnabled();
-        Map<QuadDedupKey, List<float[]>> normalsByKey = exportDoubleSided ? new HashMap<>() : null;
+        Map<QuadGeometryKey, List<float[]>> normalsByKey = exportDoubleSided ? new HashMap<>() : null;
 
         for (PendingQuad quad : pendingQuads) {
             if (exportDoubleSided) {
@@ -216,13 +212,15 @@ public final class QuadProcessor {
                 }
                 normals.add(normalize(quad.normal));
             }
-            if (nonsolidCleaner.shouldCullAgainstSolid(quad.state, quad.pos, quad.quad, quad.dir)) {
+            if (nonsolidCleaner.shouldCullAgainstSolid(quad.state, quad.pos, quad.quad, quad.cullDir)) {
                 if (nonsolidCulling) {
                     continue;
                 }
-                nonsolidCleaner.applyInsetAgainstSolid(quad.dir, quad.positions);
+                nonsolidCleaner.applyInsetAgainstSolid(quad.cullDir, quad.positions);
             }
-            nonsolidCleaner.applyInsetAgainstNonSolid(quad.state, quad.pos, quad.quad, quad.dir, quad.positions);
+            nonsolidCleaner.applyInsetAgainstNonSolid(
+                quad.state, quad.pos, quad.quad, quad.cullDir, quad.positions
+            );
             ctx.registerSpriteMaterial(quad.spriteKey, quad.materialKey);
             if (planeOffset != null) {
                 Direction offsetDir = quad.dir != null ? quad.dir : nonsolidCleaner.inferOutwardDirection(quad.positions, quad.pos);
@@ -279,24 +277,6 @@ public final class QuadProcessor {
         com.voxelbridge.export.texture.PbrTextureHelper.ensurePbrCached(ctx, spriteKey, sprite);
     }
 
-    private QuadDedupKey buildDedupKey(int spriteHash, int tintArgb, float[] positions, float[] normal) {
-        float cx = (positions[0] + positions[3] + positions[6] + positions[9]) * 0.25f;
-        float cy = (positions[1] + positions[4] + positions[7] + positions[10]) * 0.25f;
-        float cz = (positions[2] + positions[5] + positions[8] + positions[11]) * 0.25f;
-
-        int qx = Math.round(cx * CENTER_QUANT);
-        int qy = Math.round(cy * CENTER_QUANT);
-        int qz = Math.round(cz * CENTER_QUANT);
-
-        float[] n = normalize(normal);
-        float[] aabb2d = projectAabb2d(positions, n);
-        int minU = Math.round(aabb2d[0] * 1000f);
-        int maxU = Math.round(aabb2d[1] * 1000f);
-        int minV = Math.round(aabb2d[2] * 1000f);
-        int maxV = Math.round(aabb2d[3] * 1000f);
-        return new QuadDedupKey(spriteHash, tintArgb, qx, qy, qz, minU, maxU, minV, maxV);
-    }
-
     private static float[] normalize(float[] n) {
         float lenSq = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
         if (lenSq < 1e-8f) {
@@ -318,47 +298,6 @@ public final class QuadProcessor {
         float invB = 1f / (float) Math.sqrt(lenB);
         float dot = (ax * invA) * (bx * invB) + (ay * invA) * (by * invB) + (az * invA) * (bz * invB);
         return Math.abs(dot) >= NORMAL_PARALLEL_DOT;
-    }
-
-    private static float[] projectAabb2d(float[] positions, float[] normal) {
-        float anx = Math.abs(normal[0]);
-        float any = Math.abs(normal[1]);
-        float anz = Math.abs(normal[2]);
-        int axis;
-        if (anx >= any && anx >= anz) {
-            axis = 0;
-        } else if (any >= anz) {
-            axis = 1;
-        } else {
-            axis = 2;
-        }
-
-        float minU = Float.POSITIVE_INFINITY;
-        float maxU = Float.NEGATIVE_INFINITY;
-        float minV = Float.POSITIVE_INFINITY;
-        float maxV = Float.NEGATIVE_INFINITY;
-        for (int i = 0; i < 4; i++) {
-            float x = positions[i * 3];
-            float y = positions[i * 3 + 1];
-            float z = positions[i * 3 + 2];
-            float u;
-            float v;
-            if (axis == 0) {
-                u = y;
-                v = z;
-            } else if (axis == 1) {
-                u = x;
-                v = z;
-            } else {
-                u = x;
-                v = y;
-            }
-            if (u < minU) minU = u;
-            if (u > maxU) maxU = u;
-            if (v < minV) minV = v;
-            if (v > maxV) maxV = v;
-        }
-        return new float[]{minU, maxU, minV, maxV};
     }
 
 }

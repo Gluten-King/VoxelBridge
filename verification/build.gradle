@@ -18,6 +18,7 @@ dependencies {
     // Match the version already shipped by the mod projects so verification can
     // run from the existing Gradle cache in restricted/offline environments.
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.13.4.2'
+    testImplementation project(':shared:core')
 }
 
 application {
@@ -44,8 +45,25 @@ tasks.register('goldenReviewSelfTest', JavaExec) {
     mainClass = 'com.voxelbridge.verification.GoldenReviewCliTest'
 }
 
+tasks.register('quadGeometryKeySelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs double-sided quad collapse identity regression tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.QuadGeometryKeyTest'
+}
+
+tasks.register('quadSemanticIdentitySelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs block-type glTF grouping regression tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.QuadSemanticIdentityTest'
+}
+
 tasks.test {
-    dependsOn 'goldenSelfTest', 'goldenReviewSelfTest'
+    dependsOn 'goldenSelfTest', 'goldenReviewSelfTest', 'quadGeometryKeySelfTest',
+        'quadSemanticIdentitySelfTest'
 }
 
 def cliArgs = { String command ->

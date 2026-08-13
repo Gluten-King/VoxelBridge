@@ -317,6 +317,53 @@ function Copy-GltfBundle {
     return Join-Path $destination (Split-Path -Leaf $Gltf)
 }
 
+function Assert-GltfMaterialQuads {
+    param(
+        [Parameter(Mandatory = $true)][string]$Gltf,
+        [Parameter(Mandatory = $true)]$Expected
+    )
+
+    $document = [System.IO.File]::ReadAllText($Gltf, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $counts = @{}
+    foreach ($mesh in @($document.meshes)) {
+        foreach ($primitive in @($mesh.primitives)) {
+            if ($null -eq $primitive.PSObject.Properties['material']) {
+                continue
+            }
+            $mode = if ($null -ne $primitive.PSObject.Properties['mode']) { [int]$primitive.mode } else { 4 }
+            if ($mode -ne 4) {
+                throw "Material quad assertion requires TRIANGLES primitives; found mode $mode in $Gltf"
+            }
+            $materialIndex = [int]$primitive.material
+            $materialName = [string]$document.materials[$materialIndex].name
+            $indexCount = if ($null -ne $primitive.PSObject.Properties['indices']) {
+                [int]$document.accessors[[int]$primitive.indices].count
+            } else {
+                [int]$document.accessors[[int]$primitive.attributes.POSITION].count
+            }
+            if (($indexCount % 6) -ne 0) {
+                throw "Material $materialName has $indexCount triangle indices, which is not whole quads"
+            }
+            if (-not $counts.ContainsKey($materialName)) {
+                $counts[$materialName] = 0
+            }
+            $counts[$materialName] += [int]($indexCount / 6)
+        }
+    }
+
+    $actual = [ordered]@{}
+    foreach ($expectation in $Expected.PSObject.Properties) {
+        $materialName = $expectation.Name
+        $expectedCount = [int]$expectation.Value
+        $actualCount = if ($counts.ContainsKey($materialName)) { [int]$counts[$materialName] } else { 0 }
+        if ($actualCount -ne $expectedCount) {
+            throw "Material $materialName has $actualCount quads in $Gltf; expected $expectedCount"
+        }
+        $actual[$materialName] = $actualCount
+    }
+    return $actual
+}
+
 if (-not (Test-Path -LiteralPath $Definition)) {
     throw "Definition not found: $Definition"
 }
@@ -452,6 +499,12 @@ foreach ($case in $selectedCases) {
     }
 
     $collectedGltf = Copy-GltfBundle -Gltf $result.gltf -CaseRoot $caseRoot
+    $materialQuads = $null
+    if ($null -ne $case.PSObject.Properties['expectedMaterialQuads']) {
+        $materialQuads = Assert-GltfMaterialQuads `
+            -Gltf $collectedGltf `
+            -Expected $case.expectedMaterialQuads
+    }
     $caseRecord = [ordered]@{
         id = $case.id
         instance = $case.instance
@@ -463,6 +516,9 @@ foreach ($case in $selectedCases) {
         jarSha256 = $jarHash
         gltf = $collectedGltf
         originalGltf = $result.gltf
+    }
+    if ($null -ne $materialQuads) {
+        $caseRecord.materialQuads = $materialQuads
     }
     $caseResults += $caseRecord
     $blenderItems += [ordered]@{

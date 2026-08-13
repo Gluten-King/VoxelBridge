@@ -1,6 +1,7 @@
 package com.voxelbridge.adapter;
 
 import com.voxelbridge.export.quad.QuadDataUtil;
+import com.voxelbridge.export.quad.QuadData;
 import com.voxelbridge.export.texture.SpriteKeyResolver;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.util.debug.LogModule;
@@ -58,8 +59,30 @@ public class NeoForgeRenderAdapter implements RenderAdapter {
     @Override
     public QuadBatch getQuadBatch(Object model, BlockState state, BlockPos pos,
                                   BlockAndTintGetter level, long seed) {
-        return new QuadBatch(QuadDataUtil.wrapBakedQuads(getQuads(model, state, pos, level, seed)),
-                QuadSource.PLATFORM_DEFAULT);
+        List<QuadData> quads = new ArrayList<>();
+        try {
+            if (!(model instanceof BlockStateModel stateModel)) {
+                return new QuadBatch(quads, QuadSource.PLATFORM_DEFAULT);
+            }
+            RandomSource random = RandomSource.create(seed);
+            List<BlockModelPart> parts = new ArrayList<>();
+            if (stateModel instanceof BlockStateModelExtension extension) {
+                extension.collectParts(level, pos, state, random, parts);
+            } else {
+                stateModel.collectParts(random, parts);
+            }
+            for (BlockModelPart part : parts) {
+                for (Direction direction : Direction.values()) {
+                    quads.addAll(QuadDataUtil.wrapBakedQuads(
+                        part.getQuads(direction), direction
+                    ));
+                }
+                quads.addAll(QuadDataUtil.wrapBakedQuads(part.getQuads(null), null));
+            }
+        } catch (Throwable throwable) {
+            logCollectPartsFailure(throwable);
+        }
+        return new QuadBatch(quads, QuadSource.PLATFORM_DEFAULT);
     }
 
     @Override

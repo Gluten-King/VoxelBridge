@@ -56,6 +56,31 @@ public record QuadSemantic(
     }
 
     /**
+     * Returns the stable object-type identity used for glTF primitive grouping.
+     * Runtime BlockState and FluidState properties are deliberately excluded so
+     * visual geometry remains grouped by block/entity type rather than producing
+     * duplicate Blender materials for every state combination.
+     */
+    public QuadSemantic typeIdentity() {
+        if (blockState == null && fluidState == null) {
+            return this;
+        }
+        return new QuadSemantic(
+            objectClass,
+            materialKey,
+            blockId,
+            null,
+            entityType,
+            blockEntityId,
+            itemId,
+            fluidId,
+            null,
+            fluid,
+            irisRenderType
+        );
+    }
+
+    /**
      * Collision-free internal grouping key. Registry and state strings cannot
      * contain the ASCII unit separator used here.
      */

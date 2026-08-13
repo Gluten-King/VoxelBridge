@@ -131,6 +131,7 @@ def replacedPlatformSources = [
         'com/voxelbridge/adapter/NeoForgePlatformTextureHelper.java',
         'com/voxelbridge/adapter/NeoForgeRenderAdapter.java',
         'com/voxelbridge/client/SelectionRendererCompat.java',
+        'com/voxelbridge/client/SelectionRenderTypes.java',
         'com/voxelbridge/export/exporter/entity/EntityTextureResolverCompat.java',
         'com/voxelbridge/mixin/CompositeRenderTypeAccessor.java',
         'com/voxelbridge/mixin/CompositeStateAccessor.java',

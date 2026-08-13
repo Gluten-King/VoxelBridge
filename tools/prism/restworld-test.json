@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "world": {
     "sourceInstance": "vb-fabric-1.20.1-restworld",
-    "folder": "RestWorld_1.20",
+    "folder": "RestWorld_1.20_VBTest",
     "expectedDataVersion": 3465,
     "targets": [
       "vb-fabric-1.20.1-restworld",
@@ -92,7 +92,11 @@
       "minecraft": "1.21.11",
       "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.4.jar",
       "buildTask": ":fabric:1.21.11:mod:remapJar",
-      "ctm": true
+      "ctm": true,
+      "expectedMaterialQuads": {
+        "minecraft:iron_bars": 68,
+        "minecraft:oak_fence": 140
+      }
     },
     {
       "id": "fabric-1.21.11-continuity",
@@ -137,7 +141,11 @@
       "minecraft": "1.21.11",
       "jar": "build/neoforge/1.21.11/libs/VoxelBridge-neoforge-1.21.11-1.0.4.jar",
       "buildTask": ":neoforge:1.21.11:mod:shadowJar",
-      "ctm": false
+      "ctm": false,
+      "expectedMaterialQuads": {
+        "minecraft:iron_bars": 68,
+        "minecraft:oak_fence": 140
+      }
     }
   ]
 }

@@ -10,9 +10,15 @@ import net.minecraft.core.Direction;
  */
 public final class BakedQuadData implements QuadData {
     private final BakedQuad quad;
+    private final Direction cullDirection;
 
     public BakedQuadData(BakedQuad quad) {
+        this(quad, QuadCompat.getDirection(quad));
+    }
+
+    public BakedQuadData(BakedQuad quad, Direction cullDirection) {
         this.quad = quad;
+        this.cullDirection = cullDirection;
     }
 
     @Override
@@ -23,6 +29,11 @@ public final class BakedQuadData implements QuadData {
     @Override
     public Direction direction() {
         return QuadCompat.getDirection(quad);
+    }
+
+    @Override
+    public Direction cullDirection() {
+        return cullDirection;
     }
 
     @Override

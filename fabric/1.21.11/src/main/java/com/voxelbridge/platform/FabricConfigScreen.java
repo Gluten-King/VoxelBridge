@@ -173,7 +173,7 @@ public final class FabricConfigScreen {
                         ExportRuntimeConfig.getSelectionLineWidth(),
                         1,
                         8)
-                .setDefaultValue(2)
+                .setDefaultValue(ExportRuntimeConfig.DEFAULT_SELECTION_LINE_WIDTH)
                 .setTooltip(Component.translatable("config.voxelbridge.selectionLineWidth.tooltip"))
                 .setSaveConsumer(ExportRuntimeConfig::setSelectionLineWidth)
                 .build());

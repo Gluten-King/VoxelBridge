@@ -221,7 +221,7 @@ public final class BlockExporter {
             String spriteKey = spriteKeys[i];
             if (quad == null || spriteKey == null) continue;
 
-            Direction dir = quad.direction();
+            Direction cullDir = quad.cullDirection();
 
             // Skip if processed as overlay
             if (isOverlay[i]) {
@@ -229,21 +229,21 @@ public final class BlockExporter {
             }
 
             // Occlusion culling
-            if (dir != null) {
+            if (cullDir != null) {
                 if (!isTransparent) {
                     // Opaque blocks: cull if neighbor is solid
-                    boolean occluded = faceVisibility.isFaceOccludedCached(pos, dir, faceOcclusionCache);
+                    boolean occluded = faceVisibility.isFaceOccludedCached(pos, cullDir, faceOcclusionCache);
                     if (occluded) continue;
                 } else if (isCtmCompact) {
                     // CTM compact: cull internal faces against same block to keep outer shell
-                    int idx = dir.ordinal();
+                    int idx = cullDir.ordinal();
                     if (sameBlockOcclusionCache == null) {
                         sameBlockOcclusionCache = new byte[Direction.values().length];
                     }
                     byte cached = sameBlockOcclusionCache[idx];
                     boolean occluded;
                     if (cached == 0) {
-                        occluded = faceVisibility.isFaceOccludedBySameBlock(state, pos, dir);
+                        occluded = faceVisibility.isFaceOccludedBySameBlock(state, pos, cullDir);
                         sameBlockOcclusionCache[idx] = (byte) (occluded ? 1 : 2);
                     } else {
                         occluded = cached == 1;

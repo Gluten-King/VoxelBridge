@@ -24,6 +24,23 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Text, $encoding)
 }
 
+function Set-JsonProperties {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][psobject]$Properties
+    )
+
+    $data = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json
+    foreach ($property in $Properties.PSObject.Properties) {
+        if ($data.PSObject.Properties.Name -contains $property.Name) {
+            $data.($property.Name) = $property.Value
+        } else {
+            $data | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+        }
+    }
+    Write-Utf8NoBom -Path $Path -Text (($data | ConvertTo-Json -Depth 32) + [Environment]::NewLine)
+}
+
 function Assert-ChildPath {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -172,6 +189,10 @@ foreach ($definition in $matrix.instances) {
         $destinationParent = Split-Path -Parent $destinationPath
         New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
         Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+        if ($configRelativePath -ieq 'config\voxelbridge.json' -and
+                $matrix.PSObject.Properties.Name -contains 'voxelbridgeConfigOverrides') {
+            Set-JsonProperties -Path $destinationPath -Properties $matrix.voxelbridgeConfigOverrides
+        }
         $relativeDestination = '.minecraft\' + $configRelativePath
         $managedFiles.Add($relativeDestination) | Out-Null
         $artifacts.Add([ordered]@{
