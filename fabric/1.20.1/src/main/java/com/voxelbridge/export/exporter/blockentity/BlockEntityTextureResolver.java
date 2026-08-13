@@ -144,6 +144,16 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
             return resolveTextureInAtlas(Sheets.BED_SHEET, tex);
         }
 
+        // The render type exposes the shared atlas. Pick the concrete color
+        // sprite from state instead of guessing it from atlas UV coordinates.
+        if (blockEntity instanceof ShulkerBoxBlockEntity shulkerBox) {
+            DyeColor color = shulkerBox.getColor();
+            String suffix = color != null ? "_" + color.getName() : "";
+            ResourceLocation tex = new ResourceLocation(
+                "minecraft", "entity/shulker/shulker" + suffix);
+            return resolveTextureInAtlas(Sheets.SHULKER_SHEET, tex);
+        }
+
         // Signs - need to determine wood type
         if (blockEntity instanceof HangingSignBlockEntity hangingSign) {
             return resolveSignTexture(hangingSign.getBlockState().getBlock(), true);

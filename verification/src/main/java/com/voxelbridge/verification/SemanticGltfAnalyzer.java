@@ -118,11 +118,11 @@ public final class SemanticGltfAnalyzer {
                 }
                 AccessorData normals = optionalAccessor(accessors, attributes, "NORMAL");
                 AccessorData tangents = optionalAccessor(accessors, attributes, "TANGENT");
-                AccessorData uv0 = optionalAccessor(accessors, attributes, "TEXCOORD_0");
-                AccessorData uv1 = optionalAccessor(accessors, attributes, "TEXCOORD_1");
-                AccessorData uv2 = optionalAccessor(accessors, attributes, "TEXCOORD_2");
-                AccessorData uv3 = optionalAccessor(accessors, attributes, "TEXCOORD_3");
-                AccessorData uv4 = optionalAccessor(accessors, attributes, "TEXCOORD_4");
+                AccessorData uv0 = optionalUvAccessor(accessors, attributes, "TEXCOORD_0");
+                AccessorData uv1 = optionalUvAccessor(accessors, attributes, "TEXCOORD_1");
+                AccessorData uv2 = optionalUvAccessor(accessors, attributes, "TEXCOORD_2");
+                AccessorData uv3 = optionalUvAccessor(accessors, attributes, "TEXCOORD_3");
+                AccessorData uv4 = optionalUvAccessor(accessors, attributes, "TEXCOORD_4");
                 AccessorData colors = optionalAccessor(accessors, attributes, "COLOR_0");
                 AccessorData lightUv = standardSemanticTexCoords
                         ? uv2
@@ -162,6 +162,16 @@ public final class SemanticGltfAnalyzer {
                         standardSemanticTexCoords
                                 ? "TEXCOORD_4"
                                 : "_VOXELBRIDGE_MATERIAL_ID");
+                validateFiniteAccessor(positions, "POSITION");
+                validateFiniteAccessor(normals, "NORMAL");
+                validateFiniteAccessor(tangents, "TANGENT");
+                validateFiniteAccessor(uv0, "TEXCOORD_0");
+                validateFiniteAccessor(uv1, "TEXCOORD_1");
+                validateFiniteAccessor(uv2, "TEXCOORD_2");
+                validateFiniteAccessor(uv3, "TEXCOORD_3");
+                validateFiniteAccessor(uv4, "TEXCOORD_4");
+                validateFiniteAccessor(colors, "COLOR_0");
+                validateFiniteAccessor(midBlock, "_VOXELBRIDGE_MID_BLOCK");
                 if (voxelBridgeSceneContract) {
                     if (normals == null) {
                         throw new IOException(
@@ -342,10 +352,46 @@ public final class SemanticGltfAnalyzer {
         return attributes.has(name) ? accessors.read(attributes.path(name).asInt(-1)) : null;
     }
 
+    private static AccessorData optionalUvAccessor(
+            Accessors accessors, JsonNode attributes, String name) throws IOException {
+        AccessorData data = optionalAccessor(accessors, attributes, name);
+        if (data == null) {
+            return null;
+        }
+        double[][] values = data.values();
+        double[][] sanitized = null;
+        for (int element = 0; element < values.length; element++) {
+            for (int component = 0; component < values[element].length; component++) {
+                if (!Double.isFinite(values[element][component])) {
+                    if (sanitized == null) {
+                        sanitized = new double[values.length][];
+                        for (int copy = 0; copy < values.length; copy++) {
+                            sanitized[copy] = values[copy].clone();
+                        }
+                    }
+                    sanitized[element][component] = 0.0;
+                }
+            }
+        }
+        return sanitized != null ? new AccessorData(sanitized, data.components()) : data;
+    }
+
     private static void validateAttributeCount(AccessorData positions, AccessorData attribute, String name)
             throws IOException {
         if (attribute != null && attribute.count() != positions.count()) {
             throw new IOException(name + " count does not match POSITION count");
+        }
+    }
+
+    private static void validateFiniteAccessor(AccessorData accessor, String name)
+            throws IOException {
+        if (accessor == null) {
+            return;
+        }
+        for (double[] element : accessor.values()) {
+            for (double value : element) {
+                requireFinite(value, name);
+            }
         }
     }
 

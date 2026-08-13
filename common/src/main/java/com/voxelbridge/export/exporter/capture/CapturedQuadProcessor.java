@@ -13,6 +13,8 @@ import com.voxelbridge.platform.render.capture.RenderCaptureUtil;
 import net.minecraft.client.renderer.RenderType;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class CapturedQuadProcessor {
     /** Canonical sprite key for the always-transparent material slot. */
@@ -25,6 +27,8 @@ public final class CapturedQuadProcessor {
         0f, 1f, 0f,
         0f, 1f, 0f
     };
+    private static final Set<String> LOGGED_MISSING_UV = ConcurrentHashMap.newKeySet();
+    private static final Set<String> LOGGED_RENDER_ONLY_MASK = ConcurrentHashMap.newKeySet();
 
     private CapturedQuadProcessor() {}
 
@@ -106,7 +110,27 @@ public final class CapturedQuadProcessor {
         if (verts == null || verts.size() < 3) {
             return;
         }
+        if (isRenderOnlyMask(renderType)) {
+            String renderTypeName = String.valueOf(renderType);
+            if (LOGGED_RENDER_ONLY_MASK.add(renderTypeName)) {
+                com.voxelbridge.util.debug.VoxelBridgeLogger.debug(
+                    com.voxelbridge.util.debug.LogModule.ENTITY,
+                    "[CapturedQuadProcessor] Skipping render-only mask: " + renderTypeName
+                );
+            }
+            return;
+        }
         RenderCaptureUtil.UvStats stats = uvStats != null ? uvStats : RenderCaptureUtil.computeUvStats(verts);
+        if (!RenderCaptureUtil.hasCompleteUvs(stats)) {
+            String renderTypeName = String.valueOf(renderType);
+            if (LOGGED_MISSING_UV.add(renderTypeName)) {
+                com.voxelbridge.util.debug.VoxelBridgeLogger.debug(
+                    com.voxelbridge.util.debug.LogModule.UV_REMAP,
+                    "[CapturedQuadProcessor] Keeping quad without complete UVs; using (0,0) fallback: "
+                        + renderTypeName
+                );
+            }
+        }
 
         TextureResult result = textureHandler.resolve(ctx, source, renderType, stats, positions);
         if (result == null || result.skip() || result.spriteKey() == null) {
@@ -148,6 +172,11 @@ public final class CapturedQuadProcessor {
             renderTypeResolver.isDoubleSided(renderType),
             false,
             positions, uv0, colorResult.uv1(), capturedLightUvs(verts), null, faceNormal, colors);
+    }
+
+    private static boolean isRenderOnlyMask(RenderType renderType) {
+        String name = String.valueOf(renderType).toLowerCase(java.util.Locale.ROOT);
+        return name.contains("water_mask") || name.contains("watermask");
     }
 
     private static QuadSemantic resolveQuadSemantic(

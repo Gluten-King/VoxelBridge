@@ -184,6 +184,18 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
             return resolveTextureInAtlas(Sheets.BED_SHEET, tex);
         }
 
+        // Shulker render types expose the shared shulker atlas, not the concrete
+        // color sprite. Resolving the sprite from captured UVs is ambiguous and
+        // changes when Mojang repacks the atlas, so select it from block-entity
+        // state just like the vanilla renderer does.
+        if (blockEntity instanceof ShulkerBoxBlockEntity shulkerBox) {
+            DyeColor color = shulkerBox.getColor();
+            String suffix = color != null ? "_" + color.getName() : "";
+            ResourceLocation tex = ResourceLocation.fromNamespaceAndPath(
+                "minecraft", "entity/shulker/shulker" + suffix);
+            return resolveTextureInAtlas(Sheets.SHULKER_SHEET, tex);
+        }
+
         // Signs - need to determine wood type
         if (blockEntity instanceof HangingSignBlockEntity hangingSign) {
             return resolveSignTexture(hangingSign.getBlockState().getBlock(), true);

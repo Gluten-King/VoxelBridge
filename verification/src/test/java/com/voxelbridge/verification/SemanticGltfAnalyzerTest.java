@@ -22,6 +22,7 @@ public final class SemanticGltfAnalyzerTest {
         tests.triangleArrivalOrderDoesNotChangeSnapshot();
         tests.windingChangeChangesGeometryHash();
         tests.invalidIndexFailsVerification();
+        tests.nonFiniteUvIsTreatedAsMissingCoordinates();
         tests.semanticAssertionsReportTargetedCounts();
         tests.semanticAssertionFailureNamesTheFeature();
         tests.worldOriginFaceAssertionsDoNotApplyCenterOffset();
@@ -73,6 +74,26 @@ public final class SemanticGltfAnalyzerTest {
         } catch (IOException expected) {
             // Expected strict validation failure.
         }
+    }
+
+    void nonFiniteUvIsTreatedAsMissingCoordinates() throws Exception {
+        Path invalid = writeAttributeFixture(
+                tempDir.resolve("non-finite-uv"),
+                "entity:minecraft:boat",
+                new float[]{
+                        Float.NaN, 0.0f,
+                        1.0f, 0.0f,
+                        1.0f, 1.0f,
+                        0.0f, 1.0f
+                },
+                new float[]{
+                        1.0f, 1.0f, 1.0f, 1.0f,
+                        1.0f, 1.0f, 1.0f, 1.0f,
+                        1.0f, 1.0f, 1.0f, 1.0f,
+                        1.0f, 1.0f, 1.0f, 1.0f
+                });
+
+        SemanticGltfAnalyzer.analyze(invalid, "missing-uv", "test", null, 1.0e-5);
     }
 
     void semanticAssertionsReportTargetedCounts() throws Exception {
