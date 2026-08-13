@@ -9,7 +9,7 @@ license = "MIT"
 
 [[mods]]
 modId = "voxelbridge"               
-version = "1.0.4"
+version = "1.0.5"
 displayName = "VoxelBridge"        
 authors = "Gluten King"    
 logoFile = "assets/voxelbridge/icon.png"

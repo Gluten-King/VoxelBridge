@@ -5,16 +5,26 @@ import com.voxelbridge.core.util.color.ColorMode;
 import com.voxelbridge.export.CoordinateMode;
 import com.voxelbridge.export.ExportControl;
 import com.voxelbridge.thread.ExportThread;
+import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.zip.ZipFile;
 
 /**
  * Opt-in client automation used by golden tests. It is inert unless
@@ -35,6 +45,9 @@ public final class GoldenTestController {
     private static final ArrayDeque<String> commands = new ArrayDeque<>();
     private static int settleTicksRemaining;
     private static ExportThread exportThread;
+    private static boolean productionJarVerified;
+    private static String productionJarSha256 = "";
+    private static String productionCodeSource = "";
 
     private GoldenTestController() {}
 
@@ -66,6 +79,8 @@ public final class GoldenTestController {
         if (minecraft.level == null || minecraft.player == null || minecraft.player.connection == null) {
             return;
         }
+
+        verifyProductionJar();
 
         Path scenarioFile = requiredPath("voxelbridge.golden.scenarioFile");
         List<String> lines = Files.readAllLines(scenarioFile, StandardCharsets.UTF_8);
@@ -111,6 +126,10 @@ public final class GoldenTestController {
         if (exportThread == null) {
             throw new IllegalStateException("Export thread was not created");
         }
+        VoxelBridgeLogger.probeEvent("export-start", Map.of(
+                "pos1", pos1.getX() + "," + pos1.getY() + "," + pos1.getZ(),
+                "pos2", pos2.getX() + "," + pos2.getY() + "," + pos2.getZ(),
+                "scenario", System.getProperty("voxelbridge.golden.scenarioFile", "")));
         state = State.EXPORTING;
     }
 
@@ -126,6 +145,8 @@ public final class GoldenTestController {
         } else if (exportThread.getResultFile() == null) {
             finish(minecraft, null, "Export completed without a result file");
         } else {
+            VoxelBridgeLogger.probeEvent("export-complete", Map.of(
+                    "gltf", exportThread.getResultFile().toAbsolutePath().normalize().toString()));
             finish(minecraft, exportThread.getResultFile(), null);
         }
     }
@@ -195,10 +216,15 @@ public final class GoldenTestController {
                 Files.createDirectories(parent);
             }
             String status = error == null ? "passed" : "failed";
+            long durationMillis = Duration.ofNanos(System.nanoTime() - START_NANOS).toMillis();
             String json = "{\n"
                     + "  \"status\": \"" + status + "\",\n"
                     + "  \"gltf\": " + jsonString(gltf == null ? "" : gltf.toAbsolutePath().normalize().toString()) + ",\n"
-                    + "  \"error\": " + jsonString(error == null ? "" : error) + "\n"
+                    + "  \"error\": " + jsonString(error == null ? "" : error) + ",\n"
+                    + "  \"productionJarVerified\": " + productionJarVerified + ",\n"
+                    + "  \"jarSha256\": " + jsonString(productionJarSha256) + ",\n"
+                    + "  \"codeSource\": " + jsonString(productionCodeSource) + ",\n"
+                    + "  \"durationMillis\": " + durationMillis + "\n"
                     + "}\n";
             Files.writeString(resultFile, json, StandardCharsets.UTF_8);
         } catch (Throwable reportFailure) {
@@ -216,6 +242,118 @@ public final class GoldenTestController {
             throw new IllegalStateException("Missing system property -D" + property + "=<path>");
         }
         return Path.of(value).toAbsolutePath().normalize();
+    }
+
+    private static void verifyProductionJar() throws IOException {
+        if (productionJarVerified
+                || !Boolean.getBoolean("voxelbridge.golden.requireProductionJar")) {
+            return;
+        }
+        Path expected = requiredPath("voxelbridge.golden.expectedJar");
+        if (!Files.isRegularFile(expected)
+                || !expected.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar")) {
+            throw new IllegalStateException("Expected production JAR does not exist: " + expected);
+        }
+
+        Path codeSource = null;
+        try {
+            if (GoldenTestController.class.getProtectionDomain().getCodeSource() != null) {
+                codeSource = Path.of(GoldenTestController.class.getProtectionDomain()
+                                .getCodeSource().getLocation().toURI())
+                        .toAbsolutePath().normalize();
+            }
+        } catch (Exception ignored) {
+            // NeoForge's union file system may expose a synthetic root here.
+        }
+
+        String resourceName = "/" + GoldenTestController.class.getName().replace('.', '/') + ".class";
+        URL classResource = GoldenTestController.class.getResource(resourceName);
+        Path resourceJar = resolveJarFromResource(classResource);
+        boolean exactJar = sameFile(codeSource, expected) || sameFile(resourceJar, expected);
+        boolean exactControllerBytes = false;
+        if (!exactJar && classResource != null) {
+            try (InputStream loadedClass = classResource.openStream();
+                 ZipFile expectedArchive = new ZipFile(expected.toFile())) {
+                var expectedEntry = expectedArchive.getEntry(resourceName.substring(1));
+                if (expectedEntry != null) {
+                    try (InputStream expectedClass = expectedArchive.getInputStream(expectedEntry)) {
+                        exactControllerBytes = sha256(loadedClass).equals(sha256(expectedClass));
+                    }
+                }
+            }
+        }
+
+        productionCodeSource = resourceJar != null
+                ? resourceJar.toString()
+                : (classResource != null ? classResource.toExternalForm() : String.valueOf(codeSource));
+        if (!exactJar && !exactControllerBytes) {
+            throw new IllegalStateException(
+                    "Golden test loaded the wrong production code. expected=" + expected
+                            + ", codeSource=" + codeSource + ", classResource=" + classResource);
+        }
+        productionJarSha256 = sha256(expected);
+        productionJarVerified = true;
+    }
+
+    private static Path resolveJarFromResource(URL resource) {
+        if (resource == null) {
+            return null;
+        }
+        try {
+            String external = URLDecoder.decode(resource.toExternalForm(), StandardCharsets.UTF_8);
+            int jarEnd = external.toLowerCase(Locale.ROOT).indexOf(".jar");
+            if (jarEnd < 0) {
+                return null;
+            }
+            String candidate = external.substring(0, jarEnd + 4);
+            while (candidate.startsWith("jar:") || candidate.startsWith("union:")) {
+                candidate = candidate.substring(candidate.indexOf(':') + 1);
+            }
+            if (candidate.startsWith("file:")) {
+                candidate = candidate.substring("file:".length());
+            }
+            if (candidate.matches("^/[A-Za-z]:/.*")) {
+                candidate = candidate.substring(1);
+            }
+            Path path = Path.of(candidate).toAbsolutePath().normalize();
+            return Files.isRegularFile(path) ? path : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean sameFile(Path first, Path second) {
+        if (first == null || second == null
+                || !Files.isRegularFile(first) || !Files.isRegularFile(second)) {
+            return false;
+        }
+        try {
+            return Files.isSameFile(first, second);
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    private static String sha256(Path path) throws IOException {
+        try (InputStream input = Files.newInputStream(path)) {
+            return sha256(input);
+        }
+    }
+
+    private static String sha256(InputStream input) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
     }
 
     private static BlockPos parseBlockPos(String value) {

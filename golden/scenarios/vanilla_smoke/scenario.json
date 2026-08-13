@@ -1,6 +1,10 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "vanilla_smoke",
+  "targets": [
+    "fabric-1.20.1", "fabric-1.21.1", "fabric-1.21.4", "fabric-1.21.8", "fabric-1.21.11",
+    "neoforge-1.21.1", "neoforge-1.21.4", "neoforge-1.21.8", "neoforge-1.21.11"
+  ],
   "settleTicks": 40,
   "selection": {
     "min": [0, 60, 0],
@@ -8,8 +12,20 @@
   },
   "export": {
     "threadCount": 1,
-    "atlasMode": "individual"
+    "atlasMode": "individual",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
   },
+  "variants": [
+    {"id": "default"}
+  ],
+  "requiredProbes": ["export-start", "export-complete"],
+  "forbiddenProbes": ["resource-fallback-failed"],
+  "cameras": [
+    {"id": "overview", "azimuth": 45, "elevation": 32, "margin": 1.2}
+  ],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
   "features": [
     "opaque_block",
     "non_cube_block",

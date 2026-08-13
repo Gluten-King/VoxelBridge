@@ -1,0 +1,22 @@
+{
+  "schemaVersion" : 1,
+  "worlds" : [ {
+    "archive" : "1.21.11.zip",
+    "capturedAt" : "2026-08-11T17:14:29.244079400Z",
+    "dataVersion" : 4671,
+    "generator" : "minecraft:flat",
+    "minecraft" : "1.21.11",
+    "platform" : "shared",
+    "seed" : -6771815865227864629,
+    "sha256" : "937ecd1731b109f69044636765ad7f8866ec4024ba073943f5f0c1594c34c7a4"
+  }, {
+    "archive" : "1.21.8.zip",
+    "capturedAt" : "2026-08-11T17:14:22.174957200Z",
+    "dataVersion" : 4440,
+    "generator" : "minecraft:flat",
+    "minecraft" : "1.21.8",
+    "platform" : "shared",
+    "seed" : -6771815865227864629,
+    "sha256" : "c13d24dd57c6e9e5f8615db99e35669860fccd57c1d34b9b10f7f0aae20d11a1"
+  } ]
+}

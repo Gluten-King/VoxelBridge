@@ -167,6 +167,16 @@ public final class FabricConfigScreen {
                 .setTooltip(Component.translatable("config.voxelbridge.nonsolidCulling.tooltip"))
                 .setSaveConsumer(ExportRuntimeConfig::setNonsolidCullingEnabled)
                 .build());
+
+        general.addEntry(entries.startIntSlider(
+                        Component.translatable("config.voxelbridge.selectionLineWidth"),
+                        ExportRuntimeConfig.getSelectionLineWidth(),
+                        1,
+                        8)
+                .setDefaultValue(ExportRuntimeConfig.DEFAULT_SELECTION_LINE_WIDTH)
+                .setTooltip(Component.translatable("config.voxelbridge.selectionLineWidth.tooltip"))
+                .setSaveConsumer(ExportRuntimeConfig::setSelectionLineWidth)
+                .build());
     }
 
     private static void buildAtlasCategory(ConfigBuilder builder, ConfigEntryBuilder entries) {

@@ -22,7 +22,8 @@ public final class RenderCaptureUtil {
     public record UvStats(float[] rawU, float[] rawV,
                           float minU, float maxU,
                           float minV, float maxV,
-                          float[] wrappedU, float[] wrappedV) {}
+                          float[] wrappedU, float[] wrappedV,
+                          boolean complete) {}
 
     public record ColorModeResult(float[] uv1, TintMode tintMode) {}
 
@@ -40,9 +41,13 @@ public final class RenderCaptureUtil {
         float[] rawV = new float[count];
         float minU = Float.POSITIVE_INFINITY, maxU = Float.NEGATIVE_INFINITY;
         float minV = Float.POSITIVE_INFINITY, maxV = Float.NEGATIVE_INFINITY;
+        boolean complete = count > 0;
         for (int i = 0; i < count; i++) {
-            rawU[i] = verts.get(i).u;
-            rawV[i] = verts.get(i).v;
+            RenderCapture.Vertex vertex = verts.get(i);
+            boolean finite = vertex.hasUv && Float.isFinite(vertex.u) && Float.isFinite(vertex.v);
+            complete &= finite;
+            rawU[i] = finite ? vertex.u : 0f;
+            rawV[i] = finite ? vertex.v : 0f;
             minU = Math.min(minU, rawU[i]);
             maxU = Math.max(maxU, rawU[i]);
             minV = Math.min(minV, rawV[i]);
@@ -54,7 +59,11 @@ public final class RenderCaptureUtil {
             wrappedU[i] = wrap01(rawU[i]);
             wrappedV[i] = wrap01(rawV[i]);
         }
-        return new UvStats(rawU, rawV, minU, maxU, minV, maxV, wrappedU, wrappedV);
+        return new UvStats(rawU, rawV, minU, maxU, minV, maxV, wrappedU, wrappedV, complete);
+    }
+
+    public static boolean hasCompleteUvs(UvStats uvStats) {
+        return uvStats != null && uvStats.complete();
     }
 
     public static UvStats normalizeUvStatsPixels(UvStats uvStats, int width, int height) {
@@ -82,7 +91,8 @@ public final class RenderCaptureUtil {
             wrappedU[i] = wrap01(rawU[i]);
             wrappedV[i] = wrap01(rawV[i]);
         }
-        return new UvStats(rawU, rawV, minU, maxU, minV, maxV, wrappedU, wrappedV);
+        return new UvStats(rawU, rawV, minU, maxU, minV, maxV, wrappedU, wrappedV,
+            uvStats.complete());
     }
 
     public static ResolvedTexture resolveAtlasSprite(ResolvedTexture textureRes,
@@ -93,6 +103,9 @@ public final class RenderCaptureUtil {
             return textureRes;
         }
         if (!textureRes.isAtlasTexture() || textureRes.sprite() != null) {
+            return textureRes;
+        }
+        if (!uvStats.complete()) {
             return textureRes;
         }
         float centerU = average(uvStats.wrappedU());
@@ -119,8 +132,8 @@ public final class RenderCaptureUtil {
         float dv = v1 - v0;
         for (int i = 0; i < count; i++) {
             RenderCapture.Vertex v = verts.get(i);
-            float su = (du == 0f) ? 0f : (v.u - u0) / du;
-            float sv = (dv == 0f) ? 0f : (v.v - v0) / dv;
+            float su = (du == 0f) ? 0f : (finiteOrZero(v.u) - u0) / du;
+            float sv = (dv == 0f) ? 0f : (finiteOrZero(v.v) - v0) / dv;
             su = Math.max(0f, Math.min(1f, su));
             sv = Math.max(0f, Math.min(1f, sv));
             uv0[i * 2] = su;
@@ -132,8 +145,8 @@ public final class RenderCaptureUtil {
         int count = Math.min(4, verts.size());
         for (int i = 0; i < count; i++) {
             RenderCapture.Vertex v = verts.get(i);
-            float su = Math.max(0f, Math.min(1f, v.u));
-            float sv = Math.max(0f, Math.min(1f, v.v));
+            float su = Math.max(0f, Math.min(1f, finiteOrZero(v.u)));
+            float sv = Math.max(0f, Math.min(1f, finiteOrZero(v.v)));
             uv0[i * 2] = su;
             uv0[i * 2 + 1] = sv;
         }
@@ -158,8 +171,8 @@ public final class RenderCaptureUtil {
         if (needsNormalization && rangeU > 1e-6f && rangeV > 1e-6f) {
             for (int i = 0; i < count; i++) {
                 RenderCapture.Vertex v = verts.get(i);
-                float su = (v.u - minU) / rangeU;
-                float sv = (v.v - minV) / rangeV;
+                float su = (finiteOrZero(v.u) - minU) / rangeU;
+                float sv = (finiteOrZero(v.v) - minV) / rangeV;
                 uv0[i * 2] = Math.max(0f, Math.min(1f, su));
                 uv0[i * 2 + 1] = Math.max(0f, Math.min(1f, sv));
             }
@@ -176,8 +189,8 @@ public final class RenderCaptureUtil {
 
         for (int i = 0; i < count; i++) {
             RenderCapture.Vertex v = verts.get(i);
-            float su = Math.max(0f, Math.min(1f, v.u));
-            float sv = Math.max(0f, Math.min(1f, v.v));
+            float su = Math.max(0f, Math.min(1f, finiteOrZero(v.u)));
+            float sv = Math.max(0f, Math.min(1f, finiteOrZero(v.v)));
             uv0[i * 2] = su;
             uv0[i * 2 + 1] = sv;
         }
@@ -190,8 +203,8 @@ public final class RenderCaptureUtil {
         float invH = height <= 0 ? 1f : 1f / height;
         for (int i = 0; i < count; i++) {
             RenderCapture.Vertex v = verts.get(i);
-            float su = v.u * invW;
-            float sv = v.v * invH;
+            float su = finiteOrZero(v.u) * invW;
+            float sv = finiteOrZero(v.v) * invH;
             su = Math.max(0f, Math.min(1f, su));
             sv = Math.max(0f, Math.min(1f, sv));
             uv0[i * 2] = su;
@@ -244,9 +257,14 @@ public final class RenderCaptureUtil {
     }
 
     public static float wrap01(float v) {
+        if (!Float.isFinite(v)) return 0f;
         float wrapped = v % 1f;
         if (wrapped < 0f) wrapped += 1f;
         return wrapped;
+    }
+
+    private static float finiteOrZero(float value) {
+        return Float.isFinite(value) ? value : 0f;
     }
 
     /**

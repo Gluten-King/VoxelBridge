@@ -18,6 +18,7 @@ dependencies {
     // Match the version already shipped by the mod projects so verification can
     // run from the existing Gradle cache in restricted/offline environments.
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.13.4.2'
+    testImplementation project(':shared:core')
 }
 
 application {
@@ -36,8 +37,24 @@ tasks.register('goldenSelfTest', JavaExec) {
     mainClass = 'com.voxelbridge.verification.SemanticGltfAnalyzerTest'
 }
 
+tasks.register('goldenReviewSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs hash-bound golden review workflow tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.GoldenReviewCliTest'
+}
+
+tasks.register('quadGeometryKeySelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs double-sided quad collapse identity regression tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.QuadGeometryKeyTest'
+}
+
 tasks.test {
-    dependsOn 'goldenSelfTest'
+    dependsOn 'goldenSelfTest', 'goldenReviewSelfTest', 'quadGeometryKeySelfTest'
 }
 
 def cliArgs = { String command ->
@@ -53,7 +70,7 @@ def cliArgs = { String command ->
             throw new GradleException('Missing -Psnapshot=<output-snapshot>')
         }
         result += ['--snapshot', rootProject.file(snapshot).absolutePath]
-    } else {
+    } else if (command == 'verify') {
         def expected = providers.gradleProperty('expected').orNull
         if (!expected) {
             throw new GradleException('Missing -Pexpected=<expected-snapshot>')
@@ -99,5 +116,15 @@ tasks.register('verifyGoldenSnapshot', JavaExec) {
     mainClass = application.mainClass
     doFirst {
         args = cliArgs('verify')
+    }
+}
+
+tasks.register('inspectGltfSnapshot', JavaExec) {
+    group = 'verification'
+    description = 'Prints a semantic glTF report and evaluates optional scenario assertions.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    doFirst {
+        args = cliArgs('inspect')
     }
 }

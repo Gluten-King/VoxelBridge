@@ -8,6 +8,8 @@ import com.voxelbridge.export.CoordinateMode;
  */
 public final class ExportRuntimeConfig {
 
+    public static final int DEFAULT_SELECTION_LINE_WIDTH = 3;
+
     private ExportRuntimeConfig() {}
 
     public enum AtlasMode {
@@ -78,6 +80,8 @@ public final class ExportRuntimeConfig {
     private static boolean exportDoubleSidedEnabled = true;
     // Cull nonsolid faces fully covered by solid neighbors.
     private static boolean nonsolidCullingEnabled = true;
+    // Width of the in-world selection and export-progress outlines, in pixels.
+    private static int selectionLineWidth = DEFAULT_SELECTION_LINE_WIDTH;
     private static Runnable changeListener;
 
     private static void notifyChanged() {
@@ -245,6 +249,18 @@ public final class ExportRuntimeConfig {
         }
     }
 
+    public static int getSelectionLineWidth() {
+        return selectionLineWidth;
+    }
+
+    public static void setSelectionLineWidth(int width) {
+        int next = Math.max(1, Math.min(8, width));
+        if (selectionLineWidth != next) {
+            selectionLineWidth = next;
+            notifyChanged();
+        }
+    }
+
     public static void resetDefaults() {
         atlasMode = AtlasMode.ATLAS;
         atlasSize = AtlasSize.SIZE_8192;
@@ -259,6 +275,7 @@ public final class ExportRuntimeConfig {
         loggingEnabled = false;
         exportDoubleSidedEnabled = true;
         nonsolidCullingEnabled = true;
+        selectionLineWidth = DEFAULT_SELECTION_LINE_WIDTH;
         notifyChanged();
     }
 

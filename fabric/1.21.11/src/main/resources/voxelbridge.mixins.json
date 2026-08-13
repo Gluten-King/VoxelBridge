@@ -4,7 +4,10 @@
     "compatibilityLevel": "JAVA_21",
     "client": [
         "TextureAtlasAccessor",
-        "SpriteContentsAccessor"
+        "SpriteContentsAccessor",
+        "RenderTypeAccessor",
+        "RenderSetupAccessor",
+        "TextureBindingAccessor"
     ],
     "injectors": {
         "defaultRequire": 1

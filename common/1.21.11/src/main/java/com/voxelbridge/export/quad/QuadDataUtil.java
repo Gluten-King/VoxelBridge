@@ -1,6 +1,7 @@
 package com.voxelbridge.export.quad;
 
 import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.core.Direction;
 
 import java.util.AbstractList;
 import java.util.Collections;
@@ -13,26 +14,42 @@ public final class QuadDataUtil {
     private QuadDataUtil() {}
 
     public static List<QuadData> wrapBakedQuads(List<BakedQuad> quads) {
+        return wrapBakedQuads(quads, null, false);
+    }
+
+    public static List<QuadData> wrapBakedQuads(List<BakedQuad> quads, Direction cullDirection) {
+        return wrapBakedQuads(quads, cullDirection, true);
+    }
+
+    private static List<QuadData> wrapBakedQuads(
+            List<BakedQuad> quads, Direction cullDirection, boolean explicitCullDirection) {
         if (quads == null || quads.isEmpty()) {
             return Collections.emptyList();
         }
-        return new BakedQuadDataList(quads);
+        return new BakedQuadDataList(quads, cullDirection, explicitCullDirection);
     }
 
     private static final class BakedQuadDataList extends AbstractList<QuadData> {
         private final List<BakedQuad> quads;
         private final QuadData[] cache;
+        private final Direction cullDirection;
+        private final boolean explicitCullDirection;
 
-        private BakedQuadDataList(List<BakedQuad> quads) {
+        private BakedQuadDataList(
+                List<BakedQuad> quads, Direction cullDirection, boolean explicitCullDirection) {
             this.quads = quads;
             this.cache = new QuadData[quads.size()];
+            this.cullDirection = cullDirection;
+            this.explicitCullDirection = explicitCullDirection;
         }
 
         @Override
         public QuadData get(int index) {
             QuadData data = cache[index];
             if (data == null) {
-                data = new BakedQuadData(quads.get(index));
+                data = explicitCullDirection
+                    ? new BakedQuadData(quads.get(index), cullDirection)
+                    : new BakedQuadData(quads.get(index));
                 cache[index] = data;
             }
             return data;

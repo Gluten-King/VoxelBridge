@@ -95,6 +95,7 @@ public final class ExportConfigStore {
         data.loggingEnabled = ExportRuntimeConfig.isLoggingEnabled();
         data.exportDoubleSidedEnabled = ExportRuntimeConfig.isExportDoubleSidedEnabled();
         data.nonsolidCullingEnabled = ExportRuntimeConfig.isNonsolidCullingEnabled();
+        data.selectionLineWidth = ExportRuntimeConfig.getSelectionLineWidth();
         return data;
     }
 
@@ -139,6 +140,9 @@ public final class ExportConfigStore {
         } else if (data.cullNonsolidAgainstSolidEnabled != null) {
             ExportRuntimeConfig.setNonsolidCullingEnabled(data.cullNonsolidAgainstSolidEnabled);
         }
+        if (data.selectionLineWidth != null) {
+            ExportRuntimeConfig.setSelectionLineWidth(data.selectionLineWidth);
+        }
     }
 
     private static Path getConfigPath() {
@@ -163,6 +167,7 @@ public final class ExportConfigStore {
         boolean loggingEnabled;
         Boolean exportDoubleSidedEnabled;
         Boolean nonsolidCullingEnabled;
+        Integer selectionLineWidth;
         // Backward compatibility for older config key.
         Boolean cullNonsolidAgainstSolidEnabled;
     }

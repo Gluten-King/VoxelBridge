@@ -1,6 +1,10 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "render_features",
+  "targets": [
+    "fabric-1.20.1", "fabric-1.21.1", "fabric-1.21.4", "fabric-1.21.8", "fabric-1.21.11",
+    "neoforge-1.21.1", "neoforge-1.21.4", "neoforge-1.21.8"
+  ],
   "settleTicks": 40,
   "selection": {
     "min": [0, 60, 0],
@@ -13,6 +17,19 @@
     "exportDoubleSided": true,
     "nonsolidCulling": true
   },
+  "variants": [
+    {"id": "default"},
+    {"id": "atlas", "export": {"atlasMode": "atlas", "threadCount": 16}},
+    {"id": "world_origin", "export": {"coordinateMode": "world_origin"}}
+  ],
+  "requiredProbes": ["export-start", "export-complete"],
+  "forbiddenProbes": ["resource-fallback-failed"],
+  "cameras": [
+    {"id": "overview", "azimuth": 45, "elevation": 35, "margin": 1.15},
+    {"id": "block-entities", "target": [2.5, 64.5, 1.5], "margin": 1.4},
+    {"id": "culling", "target": [8, 64.5, 7.5], "margin": 1.2}
+  ],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
   "features": [
     "entity",
     "block_entity",

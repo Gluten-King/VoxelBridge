@@ -102,7 +102,9 @@ public final class FabricRenderApiHelper {
         }
 
         TextureAtlasSprite sprite = spriteFinder.find(quad, 0);
-        return new CapturedFabricQuad(sprite, direction, vertices, quad.tintIndex());
+        return new CapturedFabricQuad(
+            sprite, direction, quad.cullFace(), vertices, quad.tintIndex()
+        );
     }
 
     private static BakedQuad toBakedQuad(QuadView quad, SpriteFinder spriteFinder) {
@@ -143,6 +145,7 @@ public final class FabricRenderApiHelper {
     private record CapturedFabricQuad(
         TextureAtlasSprite sprite,
         Direction direction,
+        Direction cullDirection,
         int[] vertices,
         int tintIndex
     ) implements QuadData {}

@@ -22,6 +22,7 @@ public final class RenderCapture implements MultiBufferSource {
     public static final class Vertex {
         public float x, y, z;
         public float u, v;
+        public boolean hasUv;
         public int color = 0xFFFFFFFF;
 
         public Vertex(float x, float y, float z) {
@@ -86,8 +87,9 @@ public final class RenderCapture implements MultiBufferSource {
         public VertexConsumer setUv(float u, float v) {
             Vertex last = vertices.peekLast();
             if (last != null) {
-                last.u = u;
-                last.v = v;
+                last.hasUv = Float.isFinite(u) && Float.isFinite(v);
+                last.u = last.hasUv ? u : 0f;
+                last.v = last.hasUv ? v : 0f;
             }
             return this;
         }

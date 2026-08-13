@@ -4,6 +4,12 @@ plugins {
 }
 
 import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+import net.fabricmc.loom.task.prod.ClientProductionRunTask
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.security.MessageDigest
 
 tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
@@ -19,7 +25,8 @@ def stableCompileTasks = [
     ':fabric:1.21.11:mod:compileJava',
     ':neoforge:1.21.1:mod:compileJava',
     ':neoforge:1.21.4:mod:compileJava',
-    ':neoforge:1.21.8:mod:compileJava'
+    ':neoforge:1.21.8:mod:compileJava',
+    ':neoforge:1.21.11:mod:compileJava'
 ]
 
 def goldenTargets = [
@@ -30,7 +37,8 @@ def goldenTargets = [
     'fabric-1.21.11' : [projectPath: ':fabric:1.21.11:mod',  platform: 'fabric',   minecraft: '1.21.11'],
     'neoforge-1.21.1': [projectPath: ':neoforge:1.21.1:mod', platform: 'neoforge', minecraft: '1.21.1'],
     'neoforge-1.21.4': [projectPath: ':neoforge:1.21.4:mod', platform: 'neoforge', minecraft: '1.21.4'],
-    'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8']
+    'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8'],
+    'neoforge-1.21.11': [projectPath: ':neoforge:1.21.11:mod', platform: 'neoforge', minecraft: '1.21.11']
 ]
 
 def goldenTargetName = providers.gradleProperty('goldenTarget').orNull
@@ -38,21 +46,154 @@ def goldenTarget = goldenTargetName != null ? goldenTargets[goldenTargetName] : 
 def goldenScenario = providers.gradleProperty('goldenScenario').orElse('vanilla_smoke').get()
 def goldenWorldName = providers.gradleProperty('goldenWorld').orElse('VoxelBridgeGolden').get()
 def goldenScenarioDir = file("golden/scenarios/${goldenScenario}")
-def goldenScenarioFile = file("${goldenScenarioDir}/scene.mcfunction")
+def goldenBaseScenarioFile = file("${goldenScenarioDir}/scene.mcfunction")
+def goldenVersionScenarioFile = goldenTarget == null
+        ? file('golden/overrides/__unselected__/scene.mcfunction')
+        : file("golden/overrides/${goldenTarget.minecraft}/${goldenScenario}/scene.mcfunction")
+def goldenScenarioFile = goldenVersionScenarioFile.isFile()
+        ? goldenVersionScenarioFile
+        : goldenBaseScenarioFile
 def goldenManifestFile = file("${goldenScenarioDir}/scenario.json")
+def rawGoldenManifest = goldenManifestFile.isFile()
+        ? new JsonSlurper().parse(goldenManifestFile) as Map
+        : [:]
+def goldenVariants = rawGoldenManifest.variants instanceof List
+        ? rawGoldenManifest.variants
+        : [[id: 'default']]
+def goldenVariantName = providers.gradleProperty('goldenVariant').orNull
+        ?: (goldenVariants.isEmpty() ? 'default' : goldenVariants[0].id.toString())
+def goldenVariant = goldenVariants.find { it.id?.toString() == goldenVariantName }
+def goldenRunId = providers.gradleProperty('goldenRunId').orElse(
+        DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")
+                .withZone(ZoneOffset.UTC)
+                .format(Instant.now())).get()
+def goldenRepeat = providers.gradleProperty('goldenRepeat').orElse('1').get()
 def goldenRunRoot = goldenTargetName == null
         ? layout.buildDirectory.dir('golden-runs/unselected').get().asFile
-        : layout.buildDirectory.dir("golden-runs/${goldenTargetName}/${goldenScenario}").get().asFile
+        : layout.buildDirectory.dir(
+                "golden-runs/${goldenRunId}/${goldenTargetName}/${goldenScenario}/${goldenVariantName}/repeat-${goldenRepeat}")
+                .get().asFile
 def goldenResultFile = new File(goldenRunRoot, 'result.json')
 def goldenExportDir = new File(goldenRunRoot, 'export')
+def goldenEffectiveManifestFile = new File(goldenRunRoot, 'effective-scenario.json')
+def goldenGameDir = goldenTarget == null
+        ? file('run/golden/unselected')
+        : file("run/golden/${goldenTarget.platform}/${goldenTarget.minecraft}")
+def resolveGoldenWorldZip = {
+    if (goldenTarget == null) {
+        return file('golden/worlds/__unselected__.zip')
+    }
+    def configuredZip = providers.gradleProperty('goldenWorldZip').orNull
+    def platformWorldZip = rootProject.file("golden/worlds/${goldenTargetName}.zip")
+    def sharedWorldZip = rootProject.file("golden/worlds/${goldenTarget.minecraft}.zip")
+    configuredZip != null
+            ? rootProject.file(configuredZip)
+            : (platformWorldZip.isFile() ? platformWorldZip : sharedWorldZip)
+}
+def goldenWorldZip = resolveGoldenWorldZip()
+def goldenModLockFile = file('golden/mods.lock.json')
+def goldenModLock = goldenModLockFile.isFile()
+        ? new JsonSlurper().parse(goldenModLockFile) as Map
+        : [packs: [:]]
+def goldenModPackName = providers.gradleProperty('goldenModPack').orElse('vanilla').get()
+def goldenModPack = goldenModPackName == 'vanilla'
+        ? [target: goldenTargetName, artifacts: []]
+        : (goldenModLock.packs ?: [:])[goldenModPackName]
+def resolvedGoldenModArtifacts = {
+    if (goldenModPack == null) {
+        throw new GradleException("Unknown -PgoldenModPack=${goldenModPackName}. Valid values: vanilla, "
+                + ((goldenModLock.packs ?: [:]).keySet().join(', ')))
+    }
+    if (goldenTargetName != null && goldenModPack.target != null
+            && goldenModPack.target.toString() != goldenTargetName) {
+        throw new GradleException("Mod pack ${goldenModPackName} targets ${goldenModPack.target}, not ${goldenTargetName}")
+    }
+    return (goldenModPack.artifacts ?: []).collect { artifact ->
+        def propertyName = artifact.pathProperty?.toString()
+        def configured = propertyName == null ? null : providers.gradleProperty(propertyName).orNull
+        if (configured == null || configured.isBlank()) {
+            throw new GradleException(
+                    "Mod pack ${goldenModPackName} requires -P${propertyName}=<downloaded-jar>. "
+                            + "Expected ${artifact.fileName} (${artifact.version}).")
+        }
+        [metadata: artifact, file: rootProject.file(configured)]
+    }
+}
 def goldenLockChannel = null
 def goldenFileLock = null
+def effectiveGoldenManifest = {
+    def effective = rawGoldenManifest.isEmpty()
+            ? [:]
+            : new JsonSlurper().parseText(JsonOutput.toJson(rawGoldenManifest)) as Map
+    effective.remove('variants')
+    if (goldenVariant != null) {
+        goldenVariant.each { key, value ->
+            if (key == 'id') {
+                return
+            }
+            if (value instanceof Map && effective[key] instanceof Map) {
+                effective[key] = new LinkedHashMap(effective[key] as Map) + (value as Map)
+            } else {
+                effective[key] = value
+            }
+        }
+    }
+    effective.schemaVersion = 2
+    effective.variant = goldenVariantName
+    return effective
+}
+
+// Production golden clients must load the distributable JAR, never the main
+// source set. The in-game controller independently verifies its CodeSource.
+subprojects { subproj ->
+    subproj.plugins.withId('fabric-loom') {
+        if (subproj.path.startsWith(':fabric:')) {
+            def minecraft = subproj.path.split(':')[2]
+            subproj.tasks.register('runGoldenProductionClient', ClientProductionRunTask) {
+                group = "voxelbridge/fabric/mod/${minecraft}/verification"
+                description = 'Runs the production-remapped VoxelBridge JAR for golden verification.'
+                runDir.set(rootProject.layout.projectDirectory.dir("run/golden/fabric/${minecraft}"))
+            }
+        }
+    }
+
+    subproj.plugins.withId('net.neoforged.moddev') {
+        if (subproj.path.startsWith(':neoforge:')) {
+            def minecraft = subproj.path.split(':')[2]
+            def productionGameDir = rootProject.file("run/golden/neoforge/${minecraft}")
+            def installTask = subproj.tasks.register('installGoldenProductionMod', Sync) {
+                group = "voxelbridge/neoforge/mod/${minecraft}/verification"
+                description = 'Installs only the shaded production JAR into the isolated golden client.'
+                dependsOn subproj.tasks.named('shadowJar')
+                from(subproj.tasks.named('shadowJar'))
+                into(new File(productionGameDir, 'mods'))
+                doFirst {
+                    def modsDir = new File(productionGameDir, 'mods')
+                    if (modsDir.isDirectory()) {
+                        subproj.delete(subproj.fileTree(modsDir) {
+                            include 'VoxelBridge-neoforge-*.jar'
+                        })
+                    }
+                }
+            }
+            def neoForgeExtension = subproj.extensions.getByName('neoForge')
+            neoForgeExtension.runs.create('goldenProductionClient') {
+                client()
+                loadedMods.set([])
+                disableIdeRun()
+                gameDirectory.set(rootProject.layout.projectDirectory.dir(
+                        "run/golden/neoforge/${minecraft}"))
+                taskBefore(installTask)
+            }
+        }
+    }
+}
 
 gradle.taskGraph.whenReady { taskGraph ->
     def needsGoldenLock = goldenTarget != null && taskGraph.allTasks.any { task ->
         task.path == ':prepareGoldenWorld'
                 || task.path == ':captureGoldenWorld'
-                || task.path == "${goldenTarget.projectPath}:runClient"
+                || task.path == "${goldenTarget.projectPath}:runGoldenProductionClient"
     }
     if (!needsGoldenLock) {
         return
@@ -109,36 +250,156 @@ tasks.register('generateGolden') {
     dependsOn ':verification:generateGoldenSnapshot'
 }
 
-tasks.register('prepareGoldenWorld') {
+tasks.register('probeGltf') {
     group = 'verification'
-    description = 'Copies a pristine versioned world into the selected loader run directory.'
+    description = 'Quickly inspects a glTF and evaluates optional golden scenario assertions.'
+    dependsOn ':verification:inspectGltfSnapshot'
+}
+
+tasks.register('validateGoldenDefinitions') {
+    group = 'verification'
+    description = 'Validates golden scenario v2 manifests and reports missing versioned worlds.'
+    doLast {
+        def scenarioDirs = file('golden/scenarios').listFiles()?.findAll { it.isDirectory() } ?: []
+        scenarioDirs.sort { it.name }.each { scenarioDir ->
+            def manifestFile = new File(scenarioDir, 'scenario.json')
+            def commandFile = new File(scenarioDir, 'scene.mcfunction')
+            if (!manifestFile.exists() && !commandFile.exists()) {
+                logger.warn("Ignoring empty golden scenario directory: ${scenarioDir}")
+                return
+            }
+            if (!manifestFile.isFile() || !commandFile.isFile()) {
+                throw new GradleException("Golden scenario requires scenario.json and scene.mcfunction: ${scenarioDir}")
+            }
+            def manifest = new JsonSlurper().parse(manifestFile)
+            if ((manifest.schemaVersion as int) != 2) {
+                throw new GradleException("Golden scenario must use schemaVersion 2: ${manifestFile}")
+            }
+            if (manifest.id?.toString() != scenarioDir.name) {
+                throw new GradleException("Golden scenario id must match its directory: ${manifestFile}")
+            }
+            if (!(manifest.selection?.min instanceof List)
+                    || manifest.selection.min.size() != 3
+                    || !(manifest.selection?.max instanceof List)
+                    || manifest.selection.max.size() != 3) {
+                throw new GradleException("Golden scenario requires three-component selection min/max: ${manifestFile}")
+            }
+            def ids = new LinkedHashSet<String>()
+            (manifest.variants ?: [[id: 'default']]).each { variant ->
+                def id = variant.id?.toString()
+                if (id == null || id.isBlank() || !ids.add(id)) {
+                    throw new GradleException("Golden scenario variant ids must be non-empty and unique: ${manifestFile}")
+                }
+            }
+        }
+
+        def missingWorlds = goldenTargets.values().collect { it.minecraft }.unique().sort().findAll {
+            !file("golden/worlds/${it}.zip").isFile()
+        }
+        if (!missingWorlds.isEmpty()) {
+            logger.warn("Golden worlds still require one-time manual capture for: ${missingWorlds.join(', ')}")
+        }
+    }
+}
+
+tasks.register('prepareGoldenScenario') {
+    group = 'verification'
+    description = 'Materializes the selected scenario variant for the client and verifier.'
+    dependsOn 'validateGoldenDefinitions'
     doLast {
         if (goldenTarget == null) {
             throw new GradleException("Missing or invalid -PgoldenTarget. Valid values: ${goldenTargets.keySet().join(', ')}")
         }
-        def configuredZip = providers.gradleProperty('goldenWorldZip').orNull
-        def platformWorldZip = rootProject.file("golden/worlds/${goldenTargetName}.zip")
-        def sharedWorldZip = rootProject.file("golden/worlds/${goldenTarget.minecraft}.zip")
-        def worldZip = configuredZip != null
-                ? rootProject.file(configuredZip)
-                : (platformWorldZip.isFile() ? platformWorldZip : sharedWorldZip)
-        if (!worldZip.isFile()) {
-            throw new GradleException("Missing pristine golden world: ${worldZip}. The zip root must contain level.dat.")
+        if (goldenVariant == null) {
+            throw new GradleException("Unknown -PgoldenVariant=${goldenVariantName} for scenario ${goldenScenario}. "
+                    + "Valid values: ${goldenVariants.collect { it.id }.join(', ')}")
+        }
+        def allowedTargets = rawGoldenManifest.targets ?: []
+        if (!allowedTargets.isEmpty() && !allowedTargets.contains(goldenTargetName)) {
+            throw new GradleException("Scenario ${goldenScenario} does not support ${goldenTargetName}")
+        }
+        goldenRunRoot.mkdirs()
+        goldenEffectiveManifestFile.text = JsonOutput.prettyPrint(
+                JsonOutput.toJson(effectiveGoldenManifest())) + System.lineSeparator()
+    }
+}
+
+tasks.register('prepareGoldenMods') {
+    group = 'verification'
+    description = 'Verifies locked external Mod JARs and installs them into the isolated production client.'
+    doLast {
+        goldenRunRoot.mkdirs()
+        def modsDir = new File(goldenGameDir, 'mods')
+        delete(modsDir)
+        modsDir.mkdirs()
+        resolvedGoldenModArtifacts().each { resolved ->
+            def source = resolved.file as File
+            def metadata = resolved.metadata as Map
+            if (!source.isFile()) {
+                throw new GradleException("Locked Mod JAR does not exist: ${source}")
+            }
+            def digest = MessageDigest.getInstance('SHA-256')
+            source.withInputStream { input ->
+                byte[] buffer = new byte[64 * 1024]
+                int count
+                while ((count = input.read(buffer)) >= 0) {
+                    if (count > 0) {
+                        digest.update(buffer, 0, count)
+                    }
+                }
+            }
+            def actualHash = digest.digest().encodeHex().toString()
+            if (!actualHash.equalsIgnoreCase(metadata.sha256.toString())) {
+                throw new GradleException("SHA-256 mismatch for ${source.name}: expected ${metadata.sha256}, got ${actualHash}")
+            }
+            copy {
+                from source
+                into modsDir
+                rename { metadata.fileName.toString() }
+            }
+        }
+        def resolvedManifest = [
+                schemaVersion: 1,
+                pack: goldenModPackName,
+                target: goldenTargetName,
+                artifacts: resolvedGoldenModArtifacts().collect { resolved ->
+                    [
+                            id: resolved.metadata.id,
+                            version: resolved.metadata.version,
+                            fileName: resolved.metadata.fileName,
+                            sha256: resolved.metadata.sha256
+                    ]
+                }
+        ]
+        new File(goldenRunRoot, 'mods.resolved.json').text = JsonOutput.prettyPrint(
+                JsonOutput.toJson(resolvedManifest)) + System.lineSeparator()
+    }
+}
+
+tasks.register('prepareGoldenWorld') {
+    group = 'verification'
+    description = 'Copies a pristine versioned world into the selected loader run directory.'
+    dependsOn 'prepareGoldenScenario', 'prepareGoldenMods', 'validateGoldenWorlds'
+    doLast {
+        if (goldenTarget == null) {
+            throw new GradleException("Missing or invalid -PgoldenTarget. Valid values: ${goldenTargets.keySet().join(', ')}")
+        }
+        if (!goldenWorldZip.isFile()) {
+            throw new GradleException("Missing pristine golden world: ${goldenWorldZip}. The zip root must contain level.dat.")
         }
 
-        def saveDir = rootProject.file(
-                "run/${goldenTarget.platform}/${goldenTarget.minecraft}/saves/${goldenWorldName}")
+        def saveDir = new File(goldenGameDir, "saves/${goldenWorldName}")
         delete(saveDir)
         copy {
-            from zipTree(worldZip)
+            from zipTree(goldenWorldZip)
             into saveDir
         }
         if (!new File(saveDir, 'level.dat').isFile()) {
-            throw new GradleException("Golden world zip must contain level.dat at its root: ${worldZip}")
+            throw new GradleException("Golden world zip must contain level.dat at its root: ${goldenWorldZip}")
         }
 
-        delete(goldenRunRoot)
-        goldenRunRoot.mkdirs()
+        delete(goldenExportDir)
+        delete(goldenResultFile)
     }
 }
 
@@ -169,11 +430,50 @@ tasks.register('captureGoldenWorld', Zip) {
     }
 }
 
+tasks.register('recordGoldenWorldMetadata') {
+    group = 'verification'
+    description = 'Records DataVersion, seed, generator and SHA-256 after an explicit world capture.'
+    dependsOn ':verification:classes'
+    mustRunAfter 'captureGoldenWorld'
+    doLast {
+        if (goldenTarget == null) {
+            throw new GradleException('recordGoldenWorldMetadata requires -PgoldenTarget.')
+        }
+        def archiveName = providers.gradleProperty('goldenWorldArchive')
+                .orElse("${goldenTarget.minecraft}.zip").get()
+        javaexec {
+            classpath = project(':verification').sourceSets.main.runtimeClasspath
+            mainClass = 'com.voxelbridge.verification.GoldenWorldCli'
+            args 'record',
+                    '--zip', rootProject.file("golden/worlds/${archiveName}").absolutePath,
+                    '--manifest', rootProject.file('golden/worlds/manifest.json').absolutePath,
+                    '--minecraft', goldenTarget.minecraft,
+                    '--platform', archiveName == "${goldenTarget.minecraft}.zip"
+                            ? 'shared' : goldenTarget.platform
+        }
+    }
+}
+
+tasks.named('captureGoldenWorld').configure {
+    finalizedBy 'recordGoldenWorldMetadata'
+}
+
+tasks.register('validateGoldenWorlds', JavaExec) {
+    group = 'verification'
+    description = 'Validates committed world archive hashes and NBT DataVersion values.'
+    dependsOn ':verification:classes'
+    classpath = project(':verification').sourceSets.main.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.GoldenWorldCli'
+    args 'validate',
+            '--worlds', rootProject.file('golden/worlds').absolutePath,
+            '--manifest', rootProject.file('golden/worlds/manifest.json').absolutePath
+}
+
 tasks.register('runGoldenClient') {
     group = 'verification'
-    description = 'Starts the selected client, creates the scene, exports it, and exits.'
+    description = 'Starts an isolated production-JAR client, creates the scene, exports it, and exits.'
     if (goldenTarget != null) {
-        dependsOn "${goldenTarget.projectPath}:runClient"
+        dependsOn "${goldenTarget.projectPath}:runGoldenProductionClient"
     }
     doFirst {
         if (goldenTarget == null) {
@@ -189,6 +489,9 @@ tasks.register('runGoldenClient') {
             throw new GradleException("Golden client failed: ${result.error}")
         }
         logger.lifecycle("Golden client export: ${result.gltf}")
+        if (!result.productionJarVerified) {
+            throw new GradleException("Golden client did not verify that VoxelBridge loaded from its production JAR.")
+        }
     }
 }
 
@@ -206,27 +509,79 @@ tasks.register('snapshotGoldenClient') {
             args 'generate',
                     '--gltf', result.gltf.toString(),
                     '--snapshot', actual.absolutePath,
-                    '--scenario', goldenScenario,
+                    '--scenario', "${goldenScenario}:${goldenVariantName}",
                     '--minecraft', goldenTarget.minecraft,
                     '--scenario-file', goldenScenarioFile.absolutePath,
-                    '--scenario-manifest', goldenManifestFile.absolutePath
+                    '--scenario-manifest', goldenEffectiveManifestFile.absolutePath
         }
         logger.lifecycle("Golden snapshot for review: ${actual}")
+    }
+}
+
+tasks.register('recordGoldenRun') {
+    group = 'verification'
+    description = 'Writes the hash-bound run manifest and pending/inherited review state.'
+    dependsOn 'snapshotGoldenClient', ':verification:classes'
+    doLast {
+        def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+        def jarTask = project(goldenTarget.projectPath).tasks.named(jarTaskName).get()
+        def productionJar = jarTask.archiveFile.get().asFile
+        def gitOutput = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'rev-parse', 'HEAD'
+            standardOutput = gitOutput
+            errorOutput = new ByteArrayOutputStream()
+            ignoreExitValue = true
+        }
+        def result = new JsonSlurper().parse(goldenResultFile)
+        javaexec {
+            classpath = project(':verification').sourceSets.main.runtimeClasspath
+            mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
+            args 'record',
+                    '--repo', rootProject.projectDir.absolutePath,
+                    '--run-dir', goldenRunRoot.absolutePath,
+                    '--run-id', goldenRunId,
+                    '--target', goldenTargetName,
+                    '--platform', goldenTarget.platform,
+                    '--minecraft', goldenTarget.minecraft,
+                    '--scenario', goldenScenario,
+                    '--variant', goldenVariantName,
+                    '--repeat', goldenRepeat,
+                    '--result', goldenResultFile.absolutePath,
+                    '--actual', new File(goldenRunRoot, 'actual.snapshot.json').absolutePath,
+                    '--jar', productionJar.absolutePath,
+                    '--world', goldenWorldZip.absolutePath,
+                    '--mod-pack', new File(goldenRunRoot, 'mods.resolved.json').absolutePath,
+                    '--scenario-manifest', goldenEffectiveManifestFile.absolutePath,
+                    '--scenario-file', goldenScenarioFile.absolutePath,
+                    '--gltf', result.gltf.toString(),
+                    '--blender-config', rootProject.file('golden/blender/render_review.py').absolutePath,
+                    '--git-commit', gitOutput.toString('UTF-8').trim(),
+                    '--mods', goldenModPackName,
+                    '--tool-version', project.version.toString()
+        }
     }
 }
 
 tasks.register('verifyGoldenClient') {
     group = 'verification'
     description = 'Runs the complete client export and semantic golden comparison.'
-    dependsOn 'snapshotGoldenClient'
+    dependsOn 'recordGoldenRun'
     doLast {
         def expectedProperty = providers.gradleProperty('goldenExpected').orNull
+        def canonicalExpected = rootProject.file(
+                "golden/baselines/${goldenTargetName}/${goldenScenario}/${goldenVariantName}/semantic.snapshot.json")
+        def legacyName = goldenVariantName == 'default'
+                ? "${goldenScenario}.snapshot.json"
+                : "${goldenScenario}.${goldenVariantName}.snapshot.json"
+        def legacyExpected = rootProject.file("golden/expected/${goldenTarget.minecraft}/${legacyName}")
         def expected = expectedProperty != null
                 ? rootProject.file(expectedProperty)
-                : rootProject.file("golden/expected/${goldenTarget.minecraft}/${goldenScenario}.snapshot.json")
+                : (canonicalExpected.isFile() ? canonicalExpected : legacyExpected)
         def actual = new File(goldenRunRoot, 'actual.snapshot.json')
         if (!expected.isFile()) {
-            throw new GradleException("Missing expected golden snapshot: ${expected}")
+            logger.lifecycle("No approved semantic baseline yet; review is pending: ${expected}")
+            return
         }
         def expectedJson = new JsonSlurper().parse(expected)
         def actualJson = new JsonSlurper().parse(actual)
@@ -235,6 +590,332 @@ tasks.register('verifyGoldenClient') {
         }
         logger.lifecycle("Golden snapshot verified: ${expected}")
     }
+}
+
+def goldenReportDir = layout.buildDirectory.dir('reports/golden/latest').get().asFile
+def selectedReviewRunId = providers.gradleProperty('reviewRunId').orNull
+        ?: (goldenTarget != null ? goldenRunId : 'latest')
+
+tasks.register('reportGoldenRuns') {
+    group = 'verification'
+    description = 'Builds a read-only HTML summary and Blender input manifest for all local golden runs.'
+    dependsOn ':verification:classes'
+    doLast {
+        javaexec {
+            classpath = project(':verification').sourceSets.main.runtimeClasspath
+            mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
+            args 'report',
+                    '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
+                    '--output', goldenReportDir.absolutePath,
+                    '--run-id', selectedReviewRunId
+        }
+    }
+}
+
+tasks.register('renderGoldenReview') {
+    group = 'verification'
+    description = 'Renders current/reference/diff evidence and a combined review.blend using configured Blender.'
+    dependsOn 'reportGoldenRuns'
+    doLast {
+        def blender = providers.gradleProperty('blenderExecutable').orNull
+                ?: System.getenv('VOXELBRIDGE_BLENDER')
+        if (blender == null || blender.isBlank()) {
+            logger.lifecycle('Blender rendering skipped: configure VOXELBRIDGE_BLENDER or -PblenderExecutable.')
+            return
+        }
+        def blenderFile = file(blender)
+        if (!blenderFile.isFile()) {
+            throw new GradleException("Configured Blender executable does not exist: ${blenderFile}")
+        }
+        exec {
+            commandLine blenderFile.absolutePath,
+                    '--background',
+                    '--python', rootProject.file('golden/blender/render_review.py').absolutePath,
+                    '--',
+                    '--manifest', new File(goldenReportDir, 'blender-manifest.json').absolutePath,
+                    '--output', goldenReportDir.absolutePath
+        }
+    }
+}
+
+tasks.register('reviewLatest') {
+    group = 'verification'
+    description = 'Opens the latest read-only report and, when present, the combined Blender review file.'
+    dependsOn 'reportGoldenRuns'
+    doLast {
+        def report = new File(goldenReportDir, 'index.html')
+        if (java.awt.Desktop.isDesktopSupported()) {
+            java.awt.Desktop.desktop.browse(report.toURI())
+            def blend = new File(goldenReportDir, 'review.blend')
+            if (blend.isFile()) {
+                java.awt.Desktop.desktop.open(blend)
+            }
+        } else {
+            logger.lifecycle("Golden review report: ${report}")
+        }
+    }
+}
+
+def registerReviewDecision = { String taskName, String command ->
+    tasks.register(taskName) {
+        group = 'verification'
+        description = "Records a hash-bound '${command}' decision for selected golden test cases."
+        dependsOn ':verification:classes'
+        doLast {
+            def selector = providers.gradleProperty('reviewCases').orElse('all-passed').get()
+            def reason = providers.gradleProperty('reviewReason').orNull
+            if (reason == null || reason.isBlank()) {
+                throw new GradleException('Missing -PreviewReason=<why this decision is valid>.')
+            }
+            def cliArgs = [
+                    command,
+                    '--repo', rootProject.projectDir.absolutePath,
+                    '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
+                    '--run-id', selectedReviewRunId,
+                    '--selector', selector,
+                    '--reason', reason,
+                    '--confirm', providers.gradleProperty('confirmGolden').orElse('false').get()
+            ]
+            def reviewer = providers.gradleProperty('reviewer').orNull
+            if (reviewer != null) {
+                cliArgs += ['--reviewer', reviewer]
+            }
+            if (command == 'reject') {
+                cliArgs += ['--category', providers.gradleProperty('reviewCategory').orElse('other').get()]
+            }
+            if (command == 'waive') {
+                def issue = providers.gradleProperty('reviewIssue').orNull
+                def expires = providers.gradleProperty('reviewExpires').orNull
+                if (issue == null || expires == null) {
+                    throw new GradleException('waiveGolden requires -PreviewIssue and -PreviewExpires.')
+                }
+                cliArgs += ['--issue', issue, '--expires', expires]
+            }
+            javaexec {
+                classpath = project(':verification').sourceSets.main.runtimeClasspath
+                mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
+                args cliArgs
+            }
+        }
+        finalizedBy 'reportGoldenRuns'
+    }
+}
+
+registerReviewDecision('approveGolden', 'approve')
+registerReviewDecision('rejectGolden', 'reject')
+registerReviewDecision('waiveGolden', 'waive')
+
+tasks.register('verifyGoldenReleaseReview') {
+    group = 'verification'
+    description = 'Fails unless every recorded test case has a valid approval; core waivers are rejected.'
+    dependsOn ':verification:classes'
+    doLast {
+        javaexec {
+            classpath = project(':verification').sourceSets.main.runtimeClasspath
+            mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
+            args 'verify-release',
+                    '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
+                    '--run-id', goldenRunId,
+                    '--allow-waivers', 'false'
+        }
+    }
+}
+
+tasks.register('prodGolden') {
+    group = 'verification'
+    description = 'Runs the selected production-JAR scenario and semantic hard gate.'
+    dependsOn 'verifyGoldenClient'
+    finalizedBy 'reportGoldenRuns'
+}
+
+tasks.register('prodGoldenQuick') {
+    group = 'verification'
+    description = 'Runs the selected target smoke test (use -PgoldenScenario=vanilla_smoke).'
+    dependsOn 'prodGolden'
+    doFirst {
+        if (goldenScenario != 'vanilla_smoke') {
+            throw new GradleException('prodGoldenQuick requires -PgoldenScenario=vanilla_smoke.')
+        }
+    }
+}
+
+def matrixScenarioFilter = providers.gradleProperty('goldenMatrixScenarios')
+        .orElse('vanilla_smoke,render_features,banner_atlas,culling_oracle,texture_orientation,block_entity_gallery,entity_gallery,tint_fluid').get()
+        .split(',').collect { it.trim() }.findAll { !it.isBlank() } as Set
+def matrixTargetFilter = providers.gradleProperty('goldenMatrixTargets')
+        .orElse(goldenTargets.keySet().join(',')).get()
+        .split(',').collect { it.trim() }.findAll { !it.isBlank() } as Set
+def matrixRuns = []
+def matrixCases = []
+def previousMatrixRun = null
+file('golden/scenarios').listFiles()?.findAll { it.isDirectory() }?.sort { it.name }?.each { scenarioDir ->
+    def manifestFile = new File(scenarioDir, 'scenario.json')
+    if (!manifestFile.isFile() || !matrixScenarioFilter.contains(scenarioDir.name)) {
+        return
+    }
+    def manifest = new JsonSlurper().parse(manifestFile)
+    def supportedTargets = (manifest.targets ?: goldenTargets.keySet()) as Set
+    def variants = manifest.variants ?: [[id: 'default']]
+    goldenTargets.keySet().findAll { matrixTargetFilter.contains(it) && supportedTargets.contains(it) }.each { target ->
+        variants.each { variant ->
+            def taskSuffix = "${target}_${scenarioDir.name}_${variant.id}".replaceAll('[^A-Za-z0-9_]', '_')
+            def predecessor = previousMatrixRun
+            def matrixTask = tasks.register("prodGoldenCase_${taskSuffix}", GradleBuild) {
+                group = 'verification/matrix'
+                description = "Runs ${target}/${scenarioDir.name}/${variant.id} in an isolated nested build."
+                dir = rootProject.projectDir
+                tasks = ['prodGolden']
+                def childProperties = new LinkedHashMap<String, String>()
+                gradle.startParameter.projectProperties.each { key, value ->
+                    childProperties[key.toString()] = value.toString()
+                }
+                childProperties.putAll([
+                        goldenTarget: target,
+                        goldenScenario: scenarioDir.name,
+                        goldenVariant: variant.id.toString(),
+                        goldenRunId: goldenRunId,
+                        goldenModPack: 'vanilla'
+                ])
+                startParameter.projectProperties = childProperties
+                if (predecessor != null) {
+                    mustRunAfter predecessor
+                }
+            }
+            matrixRuns << matrixTask
+            matrixCases << [target: target, scenario: scenarioDir.name, variant: variant.id.toString()]
+            previousMatrixRun = matrixTask
+        }
+    }
+}
+
+tasks.register('prodGoldenMatrix') {
+    group = 'verification'
+    description = 'Runs every selected target/scenario/variant sequentially with production JARs.'
+    dependsOn matrixRuns
+}
+
+tasks.register('prodGoldenMatrixReview') {
+    group = 'verification'
+    description = 'Runs the production matrix and prepares HTML plus Blender visual review evidence.'
+    dependsOn 'prodGoldenMatrix'
+    finalizedBy 'renderGoldenReview'
+}
+
+def repeatRuns = []
+def previousRepeatRun = null
+matrixCases.findAll { definition ->
+    (definition.scenario == 'vanilla_smoke' && definition.variant == 'default')
+            || (definition.scenario == 'render_features' && definition.variant == 'default')
+            || (definition.target == 'fabric-1.21.11'
+                    && definition.scenario == 'banner_atlas'
+                    && definition.variant == 'atlas_on')
+}.each { definition ->
+    (2..3).each { repeat ->
+        def suffix = "${definition.target}_${definition.scenario}_${definition.variant}_${repeat}"
+                .replaceAll('[^A-Za-z0-9_]', '_')
+        def predecessor = previousRepeatRun
+        def repeatTask = tasks.register("prodGoldenRepeat_${suffix}", GradleBuild) {
+            group = 'verification/determinism'
+            description = "Repeat ${repeat} for ${definition.target}/${definition.scenario}/${definition.variant}."
+            dir = rootProject.projectDir
+            tasks = ['prodGolden']
+            def childProperties = new LinkedHashMap<String, String>()
+            gradle.startParameter.projectProperties.each { key, value ->
+                childProperties[key.toString()] = value.toString()
+            }
+            childProperties.putAll([
+                    goldenTarget: definition.target,
+                    goldenScenario: definition.scenario,
+                    goldenVariant: definition.variant,
+                    goldenRepeat: repeat.toString(),
+                    goldenRunId: goldenRunId,
+                    goldenModPack: 'vanilla'
+            ])
+            startParameter.projectProperties = childProperties
+            mustRunAfter rootProject.tasks.named('prodGoldenMatrix')
+            if (predecessor != null) {
+                mustRunAfter predecessor
+            }
+        }
+        repeatRuns << repeatTask
+        previousRepeatRun = repeatTask
+    }
+}
+
+tasks.register('verifyGoldenDeterminism') {
+    group = 'verification'
+    description = 'Checks that critical scenarios have identical semantic hashes across three runs.'
+    dependsOn ':verification:classes'
+    doLast {
+        javaexec {
+            classpath = project(':verification').sourceSets.main.runtimeClasspath
+            mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
+            args 'verify-determinism',
+                    '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
+                    '--run-id', goldenRunId,
+                    '--repeats', '3'
+        }
+    }
+}
+
+tasks.register('prodGoldenDeterminism') {
+    group = 'verification'
+    description = 'Runs repeat 2 and 3 for critical matrix cases and compares all three outputs.'
+    dependsOn 'prodGoldenMatrix'
+    dependsOn repeatRuns
+    finalizedBy 'verifyGoldenDeterminism'
+}
+
+def modMatrixDefinitions = [
+        [target: 'fabric-1.21.11', scenario: 'render_features', variant: 'atlas',
+         pack: 'fabric-1.21.11-continuity'],
+        [target: 'fabric-1.21.11', scenario: 'render_features', variant: 'atlas',
+         pack: 'fabric-1.21.11-render-stack'],
+        [target: 'neoforge-1.21.1', scenario: 'vanilla_smoke', variant: 'default',
+         pack: 'neoforge-1.21.1-yuushya']
+]
+def modMatrixRuns = []
+def previousModRun = null
+modMatrixDefinitions.each { definition ->
+    def taskSuffix = definition.pack.replaceAll('[^A-Za-z0-9_]', '_')
+    def predecessor = previousModRun
+    def modTask = tasks.register("prodGoldenModCase_${taskSuffix}", GradleBuild) {
+        group = 'verification/mod-matrix'
+        description = "Runs locked representative Mod pack ${definition.pack}."
+        dir = rootProject.projectDir
+        tasks = ['prodGolden']
+        def childProperties = new LinkedHashMap<String, String>()
+        gradle.startParameter.projectProperties.each { key, value ->
+            childProperties[key.toString()] = value.toString()
+        }
+        childProperties.putAll([
+                goldenTarget: definition.target,
+                goldenScenario: definition.scenario,
+                goldenVariant: definition.variant,
+                goldenRunId: goldenRunId,
+                goldenModPack: definition.pack
+        ])
+        startParameter.projectProperties = childProperties
+        mustRunAfter rootProject.tasks.named('prodGoldenDeterminism')
+        if (predecessor != null) {
+            mustRunAfter predecessor
+        }
+    }
+    modMatrixRuns << modTask
+    previousModRun = modTask
+}
+
+tasks.register('prodGoldenModMatrix') {
+    group = 'verification'
+    description = 'Runs Continuity, Sodium/Iris/Continuity, and Yuushya representative compatibility packs.'
+    dependsOn modMatrixRuns
+}
+
+tasks.register('prodGoldenRelease') {
+    group = 'verification'
+    description = 'Runs vanilla and representative Mod production matrices, renders review evidence, and enforces approvals.'
+    dependsOn 'prodGoldenDeterminism', 'prodGoldenModMatrix'
+    finalizedBy 'renderGoldenReview', 'verifyGoldenReleaseReview'
 }
 
 tasks.named('check').configure {
@@ -254,10 +935,13 @@ gradle.projectsEvaluated {
         if (!goldenScenarioFile.isFile() || !goldenManifestFile.isFile()) {
             throw new GradleException("Missing golden scenario files under ${goldenScenarioDir}")
         }
-        def manifest = new JsonSlurper().parse(goldenManifestFile)
+        if (goldenVariant == null) {
+            throw new GradleException("Unknown -PgoldenVariant=${goldenVariantName} for ${goldenScenario}")
+        }
+        def manifest = effectiveGoldenManifest()
         def pos1 = manifest.selection.min.join(',')
         def pos2 = manifest.selection.max.join(',')
-        def settleTicks = manifest.settleTicks as int
+        def settleTicks = (manifest.settleTicks ?: 40) as int
         def exportConfig = manifest.export ?: [:]
         def exportThreadCount = exportConfig.threadCount ?: 1
         def atlasMode = exportConfig.atlasMode ?: 'individual'
@@ -268,26 +952,56 @@ gradle.projectsEvaluated {
         def nonsolidCulling = exportConfig.containsKey('nonsolidCulling')
                 ? exportConfig.nonsolidCulling
                 : true
-        def runTask = project(goldenTarget.projectPath).tasks.named('runClient')
+        def targetProject = project(goldenTarget.projectPath)
+        def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+        def productionJar = targetProject.tasks.named(jarTaskName).get().archiveFile.get().asFile
+        def goldenJvmArgs = [
+                "-Dvoxelbridge.golden.enabled=true",
+                "-Dvoxelbridge.golden.requireProductionJar=true",
+                "-Dvoxelbridge.golden.expectedJar=${productionJar.absolutePath}",
+                "-Dvoxelbridge.golden.scenarioFile=${goldenScenarioFile.absolutePath}",
+                "-Dvoxelbridge.golden.resultFile=${goldenResultFile.absolutePath}",
+                "-Dvoxelbridge.golden.exportDir=${goldenExportDir.absolutePath}",
+                "-Dvoxelbridge.golden.pos1=${pos1}",
+                "-Dvoxelbridge.golden.pos2=${pos2}",
+                "-Dvoxelbridge.golden.settleTicks=${settleTicks}",
+                "-Dvoxelbridge.golden.minecraftVersion=${goldenTarget.minecraft}",
+                "-Dvoxelbridge.golden.exportThreadCount=${exportThreadCount}",
+                "-Dvoxelbridge.golden.atlasMode=${atlasMode}",
+                "-Dvoxelbridge.golden.coordinateMode=${coordinateMode}",
+                "-Dvoxelbridge.golden.exportDoubleSided=${exportDoubleSided}",
+                "-Dvoxelbridge.golden.nonsolidCulling=${nonsolidCulling}",
+                "-Dvoxelbridge.golden.logging=true",
+                "-Dvoxelbridge.probe.enabled=true",
+                "-Dvoxelbridge.golden.timeoutSeconds=${manifest.performanceBudget?.timeoutSeconds ?: 300}",
+                "-Dvoxelbridge.golden.autoStop=true"
+        ]
+        if (goldenScenario == 'banner_atlas') {
+            // Force the structured production-mapped texture path for the
+            // historical banner atlas regression.
+            goldenJvmArgs += [
+                    '-Dvoxelbridge.renderType.requireStructuredTexture=true',
+                    '-Dvoxelbridge.banner.forceAtlasUvFallback=true'
+            ]
+        }
+        if (goldenTarget.platform == 'neoforge') {
+            targetProject.tasks.named('installGoldenProductionMod').configure {
+                mustRunAfter rootProject.tasks.named('prepareGoldenMods')
+            }
+        }
+        def runTask = targetProject.tasks.named('runGoldenProductionClient')
         runTask.configure {
             dependsOn rootProject.tasks.named('prepareGoldenWorld')
-            jvmArgs \
-                    "-Dvoxelbridge.golden.enabled=true", \
-                    "-Dvoxelbridge.golden.scenarioFile=${goldenScenarioFile.absolutePath}", \
-                    "-Dvoxelbridge.golden.resultFile=${goldenResultFile.absolutePath}", \
-                    "-Dvoxelbridge.golden.exportDir=${goldenExportDir.absolutePath}", \
-                    "-Dvoxelbridge.golden.pos1=${pos1}", \
-                    "-Dvoxelbridge.golden.pos2=${pos2}", \
-                    "-Dvoxelbridge.golden.settleTicks=${settleTicks}", \
-                    "-Dvoxelbridge.golden.minecraftVersion=${goldenTarget.minecraft}", \
-                    "-Dvoxelbridge.golden.exportThreadCount=${exportThreadCount}", \
-                    "-Dvoxelbridge.golden.atlasMode=${atlasMode}", \
-                    "-Dvoxelbridge.golden.coordinateMode=${coordinateMode}", \
-                    "-Dvoxelbridge.golden.exportDoubleSided=${exportDoubleSided}", \
-                    "-Dvoxelbridge.golden.nonsolidCulling=${nonsolidCulling}", \
-                    "-Dvoxelbridge.golden.timeoutSeconds=300", \
-                    "-Dvoxelbridge.golden.autoStop=true"
-            args '--quickPlaySingleplayer', goldenWorldName
+            if (goldenTarget.platform == 'fabric') {
+                if (goldenModPackName != 'vanilla') {
+                    mods.from(resolvedGoldenModArtifacts().collect { it.file })
+                }
+                jvmArgs.addAll(goldenJvmArgs)
+                programArgs.addAll('--quickPlaySingleplayer', goldenWorldName)
+            } else {
+                jvmArgs(goldenJvmArgs)
+                args '--quickPlaySingleplayer', goldenWorldName
+            }
         }
     }
 }

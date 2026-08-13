@@ -34,6 +34,22 @@ Material assertions may also use the equivalent `ColorVertices`,
 `maxFullRangeUvPrimitives: 0` catches raw 0..1 UVs that were not remapped into
 atlas placement space.
 
+For a fast offline diagnosis of an existing export, run the semantic probe
+without starting Minecraft:
+
+```powershell
+.\gradlew.bat probeGltf `
+  "-Pgltf=path/to/scene.gltf" `
+  "-Pscenario=banner_atlas" `
+  "-PminecraftVersion=1.21.11" `
+  "-PscenarioFile=golden/scenarios/banner_atlas/scene.mcfunction" `
+  "-PscenarioManifest=golden/scenarios/banner_atlas/scenario.json"
+```
+
+When a scenario manifest is supplied, its assertions fail immediately with the
+expected and observed metric. Without a manifest, the command prints the full
+semantic snapshot for inspection.
+
 Generate a snapshot from an existing export:
 
 ```powershell
@@ -104,6 +120,10 @@ Client automation reads `threadCount`, `atlasMode`, `coordinateMode`,
 `exportDoubleSided`, and `nonsolidCulling` from the scenario manifest. Golden
 client runs for the same target are protected by a cross-process lock so
 overlapping invocations cannot replace each other's disposable world or output.
+Golden clients also enable bounded runtime probes and dedicated logging. The
+result directory contains `probe.log` together with the other per-module logs;
+banner probes record the baked texture size and whether each atlas sprite was
+kept as geometry or skipped as an already-composited pattern layer.
 
 If NeoForge cannot quick-play a Fabric-created template, create a separate
 NeoForge world and package it without changing the semantic baseline:

@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.voxelbridge.export.ExportControl;
 import com.voxelbridge.export.ExportProgressTracker;
 import com.voxelbridge.export.ExportProgressTracker.ChunkState;
+import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
@@ -182,7 +183,16 @@ public final class FabricSelectionRenderBridge implements SelectionRenderBridge 
             | (toByte(red) << 16)
             | (toByte(green) << 8)
             | toByte(blue);
-        ShapeRenderer.renderShape(poseStack, consumer, Shapes.create(box), 0.0, 0.0, 0.0, color, 1.0f);
+        ShapeRenderer.renderShape(
+            poseStack,
+            consumer,
+            Shapes.create(box),
+            0.0,
+            0.0,
+            0.0,
+            color,
+            ExportRuntimeConfig.getSelectionLineWidth()
+        );
     }
 
     private static int toByte(float value) {
