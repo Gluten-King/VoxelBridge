@@ -147,6 +147,20 @@ public class FabricPlatformRenderHelper implements PlatformRenderHelper {
     }
 
     @Override
+    public void awaitTextureDump() {
+        var fence = com.mojang.blaze3d.systems.RenderSystem.getDevice()
+            .createCommandEncoder().createFence();
+        try {
+            if (!fence.awaitCompletion(5_000_000_000L)) {
+                throw new IllegalStateException("Timed out waiting for GPU texture readback");
+            }
+            com.mojang.blaze3d.systems.RenderSystem.executePendingTasks();
+        } finally {
+            fence.close();
+        }
+    }
+
+    @Override
     public com.mojang.blaze3d.vertex.PoseStack getGuiPose(net.minecraft.client.gui.GuiGraphics gfx) {
         if (gfx == null) {
             return null;

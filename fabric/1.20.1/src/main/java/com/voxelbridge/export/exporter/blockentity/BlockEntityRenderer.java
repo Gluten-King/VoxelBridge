@@ -3,6 +3,7 @@ package com.voxelbridge.export.exporter.blockentity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.MaterialSemantic;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
@@ -10,6 +11,7 @@ import com.voxelbridge.export.exporter.resolve.AtlasLocator;
 import com.voxelbridge.export.exporter.resolve.DefaultAtlasLocator;
 import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
 import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
+import com.voxelbridge.export.exporter.resolve.TextRenderTypeUtil;
 import com.voxelbridge.export.exporter.resolve.TextureResolver;
 import com.voxelbridge.export.exporter.PlaneOffsetTracker;
 import com.voxelbridge.export.exporter.capture.CapturedQuadProcessor;
@@ -316,6 +318,9 @@ public final class BlockEntityRenderer {
             // Generate Material Group Key
             // Format: "blockentity:minecraft:chest"
             String materialGroupKey = MaterialGroupKey.blockEntity(blockEntity);
+            if (isTextRenderType(renderType)) {
+                materialGroupKey = MaterialSemantic.glyph(materialGroupKey);
+            }
 
             CapturedQuadProcessor.process(
                 ctx,
@@ -413,13 +418,7 @@ public final class BlockEntityRenderer {
         }
 
         private boolean isTextRenderType(RenderType renderType) {
-            if (renderType == null) {
-                return false;
-            }
-            String name = renderType.toString().toLowerCase(java.util.Locale.ROOT);
-            return name.contains("text_")
-                || name.contains("font")
-                || name.contains("glyph");
+            return TextRenderTypeUtil.isTextRenderType(renderType);
         }
 
         private ResolvedTexture resolveTextFallbackTexture(RenderType renderType, ResolvedTexture textureRes) {
@@ -440,45 +439,11 @@ public final class BlockEntityRenderer {
         }
 
         private boolean isDefaultOrMissingLike(ResourceLocation loc) {
-            if (loc == null || loc.getPath() == null) {
-                return true;
-            }
-            String p = loc.getPath().toLowerCase(java.util.Locale.ROOT);
-            return p.startsWith("default/")
-                || p.startsWith("textures/default/")
-                || p.contains("missing")
-                || p.endsWith("/white")
-                || p.endsWith("white.png");
+            return TextRenderTypeUtil.isDefaultOrMissingLike(loc);
         }
 
         private ResourceLocation extractFontTextureFromRenderType(RenderType renderType) {
-            if (renderType == null) {
-                return null;
-            }
-            String raw = renderType.toString();
-            if (raw == null || raw.isEmpty()) {
-                return null;
-            }
-            String s = raw.toLowerCase(java.util.Locale.ROOT);
-            java.util.regex.Matcher dyn = java.util.regex.Pattern
-                .compile("([a-z0-9_.-]+:font/[a-z0-9_./-]+)")
-                .matcher(s);
-            if (dyn.find()) {
-                return ResourceLocation.tryParse(dyn.group(1));
-            }
-            java.util.regex.Matcher tex = java.util.regex.Pattern
-                .compile("([a-z0-9_.-]+:textures/[a-z0-9_./-]+\\.png)")
-                .matcher(s);
-            if (tex.find()) {
-                return ResourceLocation.tryParse(tex.group(1));
-            }
-            java.util.regex.Matcher ns = java.util.regex.Pattern
-                .compile("([a-z0-9_.-]+:[a-z0-9_./-]+)")
-                .matcher(s);
-            if (ns.find()) {
-                return ResourceLocation.tryParse(ns.group(1));
-            }
-            return null;
+            return TextRenderTypeUtil.extractFontTexture(renderType);
         }
 
         private void writeUvs(ExportContext ctx,

@@ -10,7 +10,7 @@ plugins {
 ext {
     active_mc = "1.21.11"
     minecraft_version = "1.21.11"
-    minecraft_version_range = "[1.21.11,1.22)"
+    minecraft_version_range = "[1.21.11]"
     neo_version = "21.11.45"
     forgified_fabric_api_version = ""
 }
@@ -171,7 +171,8 @@ tasks.named('processResources') {
     filesMatching('META-INF/neoforge.mods.toml') {
         filter { line -> line
                 .replace('versionRange = "[21.8,)"', 'versionRange = "[21.11,)"')
-                .replace('versionRange = "[1.21.8,1.22)"', 'versionRange = "[1.21.11,1.22)"')
+                .replace('versionRange = "[1.21.8]"', 'versionRange = "[1.21.11]"')
+                .replace('versionRange = "[19.0.147,)"', 'versionRange = "[21.11.153,)"')
         }
     }
 }

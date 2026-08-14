@@ -3,6 +3,7 @@ package com.voxelbridge.export.exporter.blockentity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.MaterialSemantic;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
@@ -317,6 +318,9 @@ public final class BlockEntityRenderer {
             // Generate Material Group Key
             // Format: "blockentity:minecraft:chest"
             String materialGroupKey = MaterialGroupKey.blockEntity(blockEntity);
+            if (isTextRenderType(renderType)) {
+                materialGroupKey = MaterialSemantic.glyph(materialGroupKey);
+            }
 
             CapturedQuadProcessor.process(
                 ctx,

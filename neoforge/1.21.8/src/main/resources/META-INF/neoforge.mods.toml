@@ -33,6 +33,13 @@ side = "BOTH"
 [[dependencies.voxelbridge]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.8,1.22)"
+versionRange = "[1.21.8]"
 ordering = "NONE"
 side = "BOTH"
+
+[[dependencies.voxelbridge]]
+modId = "cloth_config"
+type = "required"
+versionRange = "[19.0.147,)"
+ordering = "NONE"
+side = "CLIENT"

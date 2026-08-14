@@ -66,7 +66,7 @@ dependencies {
     include "de.javagl:jgltf-impl-v1:${jgltfVersion}"
     include "de.javagl:jgltf-impl-v2:${jgltfVersion}"
 
-    def jacksonDatabindVersion = '2.13.4.2'
+def jacksonDatabindVersion = '2.13.5'
     def jacksonCoreVersion = '2.13.4'
     def jacksonAnnotationsVersion = '2.13.4'
     implementation "com.fasterxml.jackson.core:jackson-annotations:${jacksonAnnotationsVersion}"

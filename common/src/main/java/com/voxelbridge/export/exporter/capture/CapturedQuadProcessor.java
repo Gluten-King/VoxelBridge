@@ -1,6 +1,7 @@
 package com.voxelbridge.export.exporter.capture;
 
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.MaterialSemantic;
 import com.voxelbridge.core.ir.RenderLayer;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
@@ -148,6 +149,11 @@ public final class CapturedQuadProcessor {
         uvMapper.writeUvs(ctx, verts, stats, useAtlasUv, u0, u1, v0, v1, spriteKey, textureRes, uv0);
 
         String resolvedMaterialKey = ctx.resolveMaterialKey(spriteKey, materialGroupKey);
+        if (MaterialSemantic.isGlyph(materialGroupKey)) {
+            // Individual-texture mode normally replaces the group key with the
+            // sprite key. Preserve the glyph semantic in every atlas mode.
+            resolvedMaterialKey = MaterialSemantic.glyph(resolvedMaterialKey);
+        }
         ctx.registerSpriteMaterial(spriteKey, resolvedMaterialKey);
         RenderCaptureUtil.ColorModeResult colorResult =
             RenderCaptureUtil.applyColorMode(ctx, colors, EMPTY_UV);

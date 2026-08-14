@@ -5,6 +5,7 @@ import com.voxelbridge.export.texture.EntityTextureManager;
 import com.voxelbridge.core.util.color.ColorUtil;
 import com.voxelbridge.core.util.image.ImageUtil;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
+import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.client.resources.model.Material;
 import net.minecraft.core.Holder;
@@ -281,9 +282,13 @@ final class BannerTextureBaker {
     }
 
     private static ResourceLocation resolveBannerSpriteFromPattern(Holder<BannerPattern> pattern) {
-        BannerPattern bannerPattern = pattern.value();
-        Object material = tryGetBannerMaterial(bannerPattern);
-        return extractMaterialTexture(material);
+        // In 1.20.1 Sheets#getBannerMaterial takes the registry key, not the
+        // BannerPattern value. Passing the value through reflection never
+        // matched the method, so every multilayer pattern resolved to null.
+        return pattern.unwrapKey()
+            .map(Sheets::getBannerMaterial)
+            .map(Material::texture)
+            .orElse(null);
     }
 
     private static String debugPattern(Object pattern) {
@@ -299,36 +304,6 @@ final class BannerTextureBaker {
         }
         return sprite.getPath().endsWith("entity/banner/base")
             || sprite.getPath().endsWith("entity/banner_base");
-    }
-
-    private static ResourceLocation extractMaterialTexture(Object material) {
-        if (material instanceof Material mat) {
-            return mat.texture();
-        }
-        return null;
-    }
-
-    private static Object tryGetBannerMaterial(BannerPattern bannerPattern) {
-        if (bannerPattern == null) {
-            return null;
-        }
-        try {
-            for (java.lang.reflect.Method method : net.minecraft.client.renderer.Sheets.class.getMethods()) {
-                if (method.getParameterCount() != 1) {
-                    continue;
-                }
-                if (!method.getParameterTypes()[0].isInstance(bannerPattern)) {
-                    continue;
-                }
-                String name = method.getName();
-                if (!"getBannerMaterial".equals(name) && !"method_33081".equals(name)) {
-                    continue;
-                }
-                return method.invoke(null, bannerPattern);
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
     }
 
 }

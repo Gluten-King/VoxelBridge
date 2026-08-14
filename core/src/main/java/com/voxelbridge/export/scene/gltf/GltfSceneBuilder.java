@@ -912,15 +912,19 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         pbr.setMetallicFactor(0.0f);
         pbr.setRoughnessFactor(1.0f);
         material.setPbrMetallicRoughness(pbr);
-        // Keep the standard glTF material deliberately minimal. Alpha clipping
-        // and standard emission create unwanted Blender shader nodes; retain
-        // VoxelBridge's lightweight name/extra markers for interested consumers.
-        material.setAlphaMode("OPAQUE");
+        // Keep ordinary glTF materials deliberately minimal. Runtime glyph
+        // pages are the one exception: their alpha channel defines the glyph
+        // shape, so they use standard alpha blending (never alpha clipping).
+        boolean glyphMaterial = MaterialSemantic.isGlyph(matKey);
+        material.setAlphaMode(glyphMaterial ? "BLEND" : "OPAQUE");
         boolean forceDoubleSided = com.voxelbridge.config.ExportRuntimeConfig.isExportDoubleSidedEnabled();
         material.setDoubleSided(forceDoubleSided || doubleSided);
 
         Map<String, Object> extras = new HashMap<>();
         extras.put("voxelbridge:emissive", matKey != null && matKey.contains("_emissive"));
+        if (glyphMaterial) {
+            extras.put("voxelbridge:glyph", true);
+        }
         if (!colorMapIndices.isEmpty()) {
             extras.put("voxelbridge:colormapTextures", colorMapIndices);
             extras.put("voxelbridge:colormapUV", 1);

@@ -2,6 +2,7 @@ package com.voxelbridge.export.exporter.blockentity;
 
 import com.voxelbridge.export.exporter.resolve.ResolvedTexture;
 import com.voxelbridge.export.exporter.resolve.TextureResolver;
+import com.voxelbridge.export.exporter.resolve.TextRenderTypeUtil;
 import com.voxelbridge.platform.client.ClientAccessHolder;
 import com.voxelbridge.platform.render.RenderTypeTextureResolver;
 import com.voxelbridge.util.debug.LogModule;
@@ -105,14 +106,7 @@ public final class BlockEntityTextureResolver implements TextureResolver<BlockEn
     }
 
     private static boolean isTextRenderType(RenderType renderType) {
-        if (renderType == null) {
-            return false;
-        }
-        String name = renderType.toString().toLowerCase(java.util.Locale.ROOT);
-        return name.contains("text_")
-            || name.contains("neoforge_text")
-            || name.contains("font")
-            || name.contains("glyph");
+        return TextRenderTypeUtil.isTextRenderType(renderType);
     }
 
     /**

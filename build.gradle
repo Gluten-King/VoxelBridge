@@ -15,6 +15,15 @@ tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
 }
 
+subprojects {
+    tasks.withType(Jar).configureEach {
+        from(rootProject.file('LICENSE')) {
+            rename { 'LICENSE_VoxelBridge' }
+        }
+        from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+    }
+}
+
 def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
 
 def stableCompileTasks = [

@@ -42,7 +42,12 @@ public final class EntityTextureManager {
             String pngKey = resolveTexturePath(sanitized);
             BufferedImage img = ctx.getTextureAccess().readTexture(pngKey, com.voxelbridge.config.ExportRuntimeConfig.isAnimationEnabled());
             if (img != null) {
+                if (isRuntimeFontPage(sanitized)) {
+                    DynamicTextureUtil.cleanGlyphPixels(img);
+                }
                 repo.put(sanitized, key, img);
+                ctx.getEntityTextures().put(key,
+                    new ExportState.EntityTexture(sanitized, img.getWidth(), img.getHeight()));
             } else {
                 // Preserve mapping so later sprite cache inserts can replace it.
                 repo.register(key, sanitized);
@@ -96,6 +101,21 @@ public final class EntityTextureManager {
             path = path + ".png";
         }
         return namespace + ":" + path;
+    }
+
+    private static boolean isRuntimeFontPage(String resourceKey) {
+        if (resourceKey == null) {
+            return false;
+        }
+        int split = resourceKey.indexOf(':');
+        String path = split >= 0 ? resourceKey.substring(split + 1) : resourceKey;
+        if (path.startsWith("textures/")) {
+            path = path.substring("textures/".length());
+        }
+        if (path.endsWith(".png")) {
+            path = path.substring(0, path.length() - ".png".length());
+        }
+        return path.matches("(?:font/)?(?:default|uniform|alt)/\\d+");
     }
 
     public static TextureHandle registerGenerated(ExportContext ctx, String key, String relativePath, BufferedImage image) {

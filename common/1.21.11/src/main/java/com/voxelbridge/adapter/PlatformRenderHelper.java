@@ -14,6 +14,13 @@ public interface PlatformRenderHelper {
     boolean isOnRenderThread();
     void recordRenderCall(Runnable task);
 
+    /**
+     * Waits until a GPU-backed texture dump has finished writing its output.
+     * Older render backends write synchronously and keep the default no-op.
+     */
+    default void awaitTextureDump() {
+    }
+
     // BlockState helpers
     net.minecraft.world.phys.Vec3 getBlockOffset(net.minecraft.world.level.block.state.BlockState state, net.minecraft.world.level.Level level, net.minecraft.core.BlockPos pos);
     boolean isSolidRender(net.minecraft.world.level.block.state.BlockState state, net.minecraft.world.level.Level level, net.minecraft.core.BlockPos pos);

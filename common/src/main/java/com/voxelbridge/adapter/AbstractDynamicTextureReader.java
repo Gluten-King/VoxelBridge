@@ -133,6 +133,7 @@ public abstract class AbstractDynamicTextureReader {
         try {
             tempDir = Files.createTempDirectory("voxelbridge-fontdump-");
             dumpable.dumpContents(location, tempDir);
+            Adapters.getPlatformRenderHelper().awaitTextureDump();
             try (Stream<Path> stream = Files.walk(tempDir)) {
                 Optional<Path> png = stream
                     .filter(Files::isRegularFile)
@@ -145,7 +146,10 @@ public abstract class AbstractDynamicTextureReader {
                     return Optional.of(NativeImage.read(in));
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            VoxelBridgeLogger.warn(LogModule.DYNAMIC_MAP,
+                "[DynamicTextureReader/" + versionTag + "] Failed to dump runtime texture "
+                    + location + ": " + exception.getMessage());
             return Optional.empty();
         } finally {
             cleanupTempDir(tempDir);

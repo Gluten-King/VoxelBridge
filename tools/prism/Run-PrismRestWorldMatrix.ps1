@@ -161,6 +161,21 @@ function Install-VoxelBridgeConfig {
     Write-Utf8NoBom -Path $configPath -Text ($ConfigText + [Environment]::NewLine)
 }
 
+function Restore-VoxelBridgeConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [AllowNull()][string]$OriginalText,
+        [Parameter(Mandatory = $true)][bool]$OriginallyExisted
+    )
+
+    if ($OriginallyExisted) {
+        Write-Utf8NoBom -Path $Path -Text $OriginalText
+    }
+    elseif (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path
+    }
+}
+
 function Get-WorldSceneFingerprint {
     param(
         [Parameter(Mandatory = $true)][string]$WorldPath,
@@ -461,6 +476,97 @@ function Assert-GltfMaterialQuads {
     return $actual
 }
 
+function Assert-GltfNodeMinimumVertices {
+    param(
+        [Parameter(Mandatory = $true)][string]$Gltf,
+        [Parameter(Mandatory = $true)]$Expected
+    )
+
+    $document = [System.IO.File]::ReadAllText($Gltf, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $actual = [ordered]@{}
+    foreach ($expectation in $Expected.PSObject.Properties) {
+        $nodeName = $expectation.Name
+        $minimum = [int]$expectation.Value
+        $vertexCount = 0
+        foreach ($node in @($document.nodes)) {
+            $actualNodeName = [string]$node.name
+            $isSemanticChild = $actualNodeName.StartsWith("${nodeName}__", [System.StringComparison]::Ordinal)
+            if (($actualNodeName -ne $nodeName -and -not $isSemanticChild) -or
+                $null -eq $node.PSObject.Properties['mesh']) {
+                continue
+            }
+            $mesh = $document.meshes[[int]$node.mesh]
+            foreach ($primitive in @($mesh.primitives)) {
+                if ($null -ne $primitive.attributes.PSObject.Properties['POSITION']) {
+                    $vertexCount += [int]$document.accessors[[int]$primitive.attributes.POSITION].count
+                }
+            }
+        }
+        if ($vertexCount -lt $minimum) {
+            throw "Node $nodeName has $vertexCount vertices in $Gltf; expected at least $minimum"
+        }
+        $actual[$nodeName] = $vertexCount
+    }
+    return $actual
+}
+
+function Assert-GltfGlyphMaterial {
+    param(
+        [Parameter(Mandatory = $true)][string]$Gltf,
+        [Parameter(Mandatory = $true)][string]$BaseNodeName
+    )
+
+    $document = [System.IO.File]::ReadAllText($Gltf, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $glyphName = "${BaseNodeName}__glyph"
+    $materialIndex = -1
+    for ($i = 0; $i -lt @($document.materials).Count; $i++) {
+        if ([string]$document.materials[$i].name -eq $glyphName) {
+            $materialIndex = $i
+            break
+        }
+    }
+    if ($materialIndex -lt 0) {
+        throw "Missing glyph material $glyphName in $Gltf"
+    }
+
+    $material = $document.materials[$materialIndex]
+    if ([string]$material.alphaMode -ne 'BLEND') {
+        throw "Glyph material $glyphName uses alphaMode=$($material.alphaMode) in $Gltf; expected BLEND"
+    }
+    if ($null -eq $material.extras -or $material.extras.'voxelbridge:glyph' -ne $true) {
+        throw "Glyph material $glyphName is missing voxelbridge:glyph=true in $Gltf"
+    }
+
+    $vertexCount = 0
+    $uvCount = 0
+    foreach ($node in @($document.nodes)) {
+        if ([string]$node.name -ne $glyphName -or $null -eq $node.PSObject.Properties['mesh']) {
+            continue
+        }
+        $mesh = $document.meshes[[int]$node.mesh]
+        foreach ($primitive in @($mesh.primitives)) {
+            if ([int]$primitive.material -ne $materialIndex) {
+                continue
+            }
+            if ($null -eq $primitive.attributes.PSObject.Properties['POSITION'] -or
+                $null -eq $primitive.attributes.PSObject.Properties['TEXCOORD_0']) {
+                throw "Glyph primitive $glyphName is missing POSITION or TEXCOORD_0 in $Gltf"
+            }
+            $vertexCount += [int]$document.accessors[[int]$primitive.attributes.POSITION].count
+            $uvCount += [int]$document.accessors[[int]$primitive.attributes.TEXCOORD_0].count
+        }
+    }
+    if ($vertexCount -le 0 -or $uvCount -ne $vertexCount) {
+        throw "Glyph node $glyphName has vertices=$vertexCount UVs=$uvCount in $Gltf"
+    }
+    return [ordered]@{
+        material = $glyphName
+        alphaMode = 'BLEND'
+        vertices = $vertexCount
+        texcoord0 = $uvCount
+    }
+}
+
 if (-not (Test-Path -LiteralPath $Definition)) {
     throw "Definition not found: $Definition"
 }
@@ -531,6 +637,13 @@ foreach ($case in $selectedCases) {
     }
 
     Ensure-Options -InstanceId $case.instance -Ctm ([bool]$case.ctm)
+    $targetConfigPath = Join-Path $instancePath '.minecraft\config\voxelbridge.json'
+    $targetConfigExisted = Test-Path -LiteralPath $targetConfigPath
+    $targetConfigOriginal = if ($targetConfigExisted) {
+        [System.IO.File]::ReadAllText($targetConfigPath, [System.Text.Encoding]::UTF8)
+    } else {
+        $null
+    }
     Install-VoxelBridgeConfig -InstancePath $instancePath -ConfigText $sourceVoxelBridgeConfig
     $installedJar = Install-ProductionJar -Case $case -RunId $runId
     $jarHash = (Get-FileHash -LiteralPath $installedJar -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -585,6 +698,10 @@ foreach ($case in $selectedCases) {
         }
         finally {
             Restore-CfgState -Path $instanceConfig -State $originalConfig
+            Restore-VoxelBridgeConfig `
+                -Path $targetConfigPath `
+                -OriginalText $targetConfigOriginal `
+                -OriginallyExisted $targetConfigExisted
         }
     }
 
@@ -609,6 +726,19 @@ foreach ($case in $selectedCases) {
             -Gltf $collectedGltf `
             -Expected $case.expectedMaterialQuads
     }
+    $nodeVertices = $null
+    if ($null -ne $case.PSObject.Properties['expectedNodeMinimumVertices']) {
+        $nodeVertices = Assert-GltfNodeMinimumVertices `
+            -Gltf $collectedGltf `
+            -Expected $case.expectedNodeMinimumVertices
+    }
+    $glyphMaterial = $null
+    if ($null -ne $case.PSObject.Properties['expectedNodeMinimumVertices'] -and
+        $null -ne $case.expectedNodeMinimumVertices.PSObject.Properties['blockentity:minecraft:sign']) {
+        $glyphMaterial = Assert-GltfGlyphMaterial `
+            -Gltf $collectedGltf `
+            -BaseNodeName 'blockentity:minecraft:sign'
+    }
     $caseRecord = [ordered]@{
         id = $case.id
         instance = $case.instance
@@ -623,6 +753,12 @@ foreach ($case in $selectedCases) {
     }
     if ($null -ne $materialQuads) {
         $caseRecord.materialQuads = $materialQuads
+    }
+    if ($null -ne $nodeVertices) {
+        $caseRecord.nodeVertices = $nodeVertices
+    }
+    if ($null -ne $glyphMaterial) {
+        $caseRecord.glyphMaterial = $glyphMaterial
     }
     $caseResults += $caseRecord
     $blenderItems += [ordered]@{

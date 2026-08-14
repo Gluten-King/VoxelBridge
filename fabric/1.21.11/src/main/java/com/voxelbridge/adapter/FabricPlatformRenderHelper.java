@@ -222,6 +222,20 @@ public class FabricPlatformRenderHelper implements PlatformRenderHelper {
     }
 
     @Override
+    public void awaitTextureDump() {
+        var fence = com.mojang.blaze3d.systems.RenderSystem.getDevice()
+            .createCommandEncoder().createFence();
+        try {
+            if (!fence.awaitCompletion(5_000_000_000L)) {
+                throw new IllegalStateException("Timed out waiting for GPU texture readback");
+            }
+            com.mojang.blaze3d.systems.RenderSystem.executePendingTasks();
+        } finally {
+            fence.close();
+        }
+    }
+
+    @Override
     public net.minecraft.world.phys.Vec3 getBlockOffset(net.minecraft.world.level.block.state.BlockState state,
                                                        net.minecraft.world.level.Level level,
                                                        net.minecraft.core.BlockPos pos) {

@@ -129,14 +129,16 @@ public final class DynamicTextureUtil {
             return null;
         }
         String path = location.getPath();
-        if (path == null || !path.startsWith("textures/default/")) {
+        if (path == null) {
             return null;
         }
-        String p = path.substring("textures/".length());
+        String p = path.startsWith("textures/")
+            ? path.substring("textures/".length())
+            : path;
         if (p.endsWith(".png")) {
             p = p.substring(0, p.length() - ".png".length());
         }
-        if (p.isEmpty()) {
+        if (!p.matches("(?:font/)?(?:default|uniform|alt)/\\d+")) {
             return null;
         }
         return makeResourceLocation(location.getNamespace(), p);

@@ -3,6 +3,7 @@ package com.voxelbridge.export.exporter.entity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
+import com.voxelbridge.core.ir.MaterialSemantic;
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
@@ -344,6 +345,9 @@ public final class EntityRenderer {
             logTextUvOnce(renderType, uvStats);
             uvStats = normalizeMapDecorUvStats(uvStats, renderType);
             String materialGroupKey = MaterialGroupKey.entity(entity);
+            if (isTextRenderType(renderType)) {
+                materialGroupKey = MaterialSemantic.glyph(materialGroupKey);
+            }
             updateBucketKey();
             CapturedQuadProcessor.process(
                 ctx,

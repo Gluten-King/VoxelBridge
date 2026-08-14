@@ -64,9 +64,11 @@ public final class TextRenderTypeUtil {
     public static boolean isDefaultOrMissingLike(ResourceLocation loc) {
         if (loc == null || loc.getPath() == null) return true;
         String p = loc.getPath().toLowerCase(Locale.ROOT);
-        return p.startsWith("default/")
-            || p.startsWith("textures/default/")
-            || p.contains("missing")
+        // Runtime font atlas pages use valid identifiers such as
+        // minecraft:default/0.  "default" describes the font set; it is not a
+        // missing-texture marker and must be allowed through to the dynamic
+        // texture reader.
+        return p.contains("missing")
             || p.endsWith("/white")
             || p.endsWith("white.png");
     }
