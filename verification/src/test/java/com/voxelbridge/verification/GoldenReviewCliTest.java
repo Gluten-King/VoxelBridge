@@ -25,13 +25,19 @@ public final class GoldenReviewCliTest {
         Files.writeString(gltf, "{\"asset\":{\"version\":\"2.0\"}}");
         Files.writeString(run.resolve("actual.snapshot.json"), "{\"value\":1}");
         Files.writeString(run.resolve("result.json"), """
-                {"status":"passed","gltf":"%s","error":"","jarSha256":"unused"}
+                {"status":"passed","gltf":"%s","error":"","jarSha256":"unused",
+                 "durationMillis":9999,"exportDurationMillis":1234,"clientDurationMillis":5678,
+                 "peakHeapUsedBytes":4000,"peakHeapDeltaBytes":1000}
                 """.formatted(gltf.toString().replace("\\", "\\\\")));
 
         record(repo, run, jar, world, scenario, commands);
         Map<String, Object> pending = GoldenJson.readMap(run.resolve("review.json"));
         requireEquals("passed", pending.get("machineStatus"), "new baseline machine status");
         requireEquals("pending", pending.get("reviewStatus"), "new baseline review status");
+        Map<String, Object> metrics = objectMap(
+                GoldenJson.readMap(run.resolve("run-manifest.json")).get("metrics"));
+        requireEquals(1234, metrics.get("exportDurationMillis"), "client startup leaked into export timing");
+        requireEquals(1000, metrics.get("peakHeapDeltaBytes"), "heap delta was not recorded");
 
         GoldenReviewCli.main(new String[]{
                 "approve", "--repo", repo.toString(), "--runs", repo.resolve("build/golden-runs").toString(),
@@ -50,11 +56,26 @@ public final class GoldenReviewCliTest {
         requireEquals("approved", inherited.get("reviewStatus"), "approval was not inherited");
         requireEquals("passed", inherited.get("overallStatus"), "approved run did not pass");
 
+        Files.writeString(run.resolve("actual.snapshot.json"), "{\"value\":2}");
+        record(repo, run, jar, world, scenario, commands);
+        Map<String, Object> changed = GoldenJson.readMap(run.resolve("review.json"));
+        requireEquals("failed", changed.get("machineStatus"), "changed snapshot passed unexpectedly");
+        Path semanticDiff = run.resolve("semantic.diff.json");
+        if (!Files.isRegularFile(semanticDiff)
+                || !String.valueOf(changed.get("machineDetail")).contains("top-level")) {
+            throw new AssertionError("semantic change did not produce a structured diff");
+        }
+
+        Files.writeString(run.resolve("actual.snapshot.json"), "{\"value\":1}");
+
         Files.writeString(jar, "jar-v2");
         record(repo, run, jar, world, scenario, commands);
         Map<String, Object> stale = GoldenJson.readMap(run.resolve("review.json"));
         requireEquals("stale", stale.get("reviewStatus"), "changed jar did not stale approval");
         requireEquals("pending_review", stale.get("overallStatus"), "stale approval passed unexpectedly");
+        if (Files.exists(semanticDiff)) {
+            throw new AssertionError("stale semantic diff was not removed after a matching run");
+        }
 
         GoldenReviewCli.main(new String[]{
                 "reject", "--repo", repo.toString(), "--runs", repo.resolve("build/golden-runs").toString(),
@@ -97,5 +118,10 @@ public final class GoldenReviewCliTest {
         if (!expected.equals(actual)) {
             throw new AssertionError(message + ": expected=" + expected + ", actual=" + actual);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> objectMap(Object value) {
+        return (Map<String, Object>) value;
     }
 }

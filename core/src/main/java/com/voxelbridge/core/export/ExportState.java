@@ -2,7 +2,6 @@ package com.voxelbridge.core.export;
 
 import com.voxelbridge.core.texture.TextureRepository;
 import com.voxelbridge.core.texture.UvPlacement;
-import com.voxelbridge.export.CoordinateMode;
 
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
@@ -39,8 +38,6 @@ public final class ExportState {
     private final Map<String, String> stringPool = new ConcurrentHashMap<>();
 
     private boolean blockEntityExportEnabled = true;
-    private CoordinateMode coordinateMode = CoordinateMode.CENTERED;
-    private boolean vanillaRandomTransformEnabled = true;
     private boolean discoveryMode = false;
 
     public Map<String, TintAtlas> getAtlasBook() {
@@ -169,22 +166,6 @@ public final class ExportState {
 
     public void setBlockEntityExportEnabled(boolean enabled) {
         this.blockEntityExportEnabled = enabled;
-    }
-
-    public CoordinateMode getCoordinateMode() {
-        return coordinateMode;
-    }
-
-    public void setCoordinateMode(CoordinateMode mode) {
-        this.coordinateMode = mode;
-    }
-
-    public boolean isVanillaRandomTransformEnabled() {
-        return vanillaRandomTransformEnabled;
-    }
-
-    public void setVanillaRandomTransformEnabled(boolean enabled) {
-        this.vanillaRandomTransformEnabled = enabled;
     }
 
     public boolean isDiscoveryMode() {

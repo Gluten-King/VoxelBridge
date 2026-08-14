@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "c23476ab582694eaf8a3f48ecbbee508596198d6",
+  "description": "Pre-refactor production baseline for the 1.0.5 maintenance line.",
+  "acceptance": {
+    "exportTimeRegressionPercent": 3,
+    "peakMemoryRegressionPercent": 5,
+    "runs": 3,
+    "aggregation": "median",
+    "startupExcluded": true
+  },
+  "targets": [
+    "fabric-1.20.1",
+    "fabric-1.21.1",
+    "fabric-1.21.4",
+    "fabric-1.21.8",
+    "fabric-1.21.11",
+    "neoforge-1.21.1",
+    "neoforge-1.21.4",
+    "neoforge-1.21.8",
+    "neoforge-1.21.11"
+  ],
+  "artifacts": {
+    "golden/worlds/1.21.8.zip": "c13d24dd57c6e9e5f8615db99e35669860fccd57c1d34b9b10f7f0aae20d11a1",
+    "golden/worlds/1.21.11.zip": "937ecd1731b109f69044636765ad7f8866ec4024ba073943f5f0c1594c34c7a4",
+    "golden/expected/1.21.8/render_features.snapshot.json": "d4372fe82d664e00c72d376c02efaab9f7d4c05fe995a3351a53e37aab8a01b2",
+    "golden/expected/1.21.8/vanilla_smoke.snapshot.json": "45f64eb34e89c4c30e6b2c46b6b2c628f5d9d73196e2367de9061af8d0957144",
+    "golden/expected/1.21.11/banner_atlas.snapshot.json": "426c07825bca586b8ead7d9e2c2101ecfb9a14601a28facfb2cabc4cbb406876",
+    "golden/expected/1.21.11/render_features.snapshot.json": "24d022644e9829b4d6ff3bb3459e87d5330ba1a54d3a128ca0370a35affe5110",
+    "golden/expected/1.21.11/vanilla_smoke.snapshot.json": "f6312685c1c53b6a155092c20e477c3e8ce6c56d25608d4200d8513797fc7a0f"
+  },
+  "coverageNote": "Only repository-resident evidence is hash-bound here. Missing version worlds and performance measurements must be captured before deleting the legacy runtime sources; no values are inferred."
+}

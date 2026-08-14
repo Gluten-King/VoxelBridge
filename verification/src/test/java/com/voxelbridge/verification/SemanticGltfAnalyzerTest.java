@@ -176,7 +176,7 @@ public final class SemanticGltfAnalyzerTest {
         Path manifest = tempDir.resolve("semantic-world-origin/scenario.json");
         Files.writeString(manifest, """
                 {
-                  "schemaVersion": 1,
+                  "schemaVersion": 2,
                   "selection": {"min": [0, 0, 0], "max": [1, 1, 1]},
                   "export": {"coordinateMode": "world_origin"},
                   "assertions": [{

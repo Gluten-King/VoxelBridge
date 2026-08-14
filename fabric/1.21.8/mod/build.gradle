@@ -47,6 +47,12 @@ dependencies {
     minecraft "com.mojang:minecraft:${fabricMinecraftVersion}"
     // Use Mojang official mappings for compatibility with common module
     mappings loom.officialMojangMappings()
+    implementation project(':shared:core')
+    implementation project(':shared:pipeline')
+    implementation project(path: ":runtime:minecraft:mc-${activeFabricMc}", configuration: 'namedElements')
+    include project(':shared:core')
+    include project(':shared:pipeline')
+    include project(":runtime:minecraft:mc-${activeFabricMc}")
     modImplementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
     modImplementation("me.shedaniel.cloth:cloth-config-fabric:${clothConfigVersion}") {
@@ -80,14 +86,15 @@ def jacksonDatabindVersion = '2.13.5'
     include "net.sf.trove4j:trove4j:3.0.3"
 }
 
+def registeredTarget = gradle.ext.voxelBridgeTargetsByProject[project.path]
+if (registeredTarget == null) throw new GradleException("Target is not registered: ${project.path}")
+
 sourceSets {
     main {
-        java.srcDirs = [
-            "${mcProjectDir}/src/main/java",
-            "${rootProject.projectDir}/core/src/main/java",
-            "${rootProject.projectDir}/common/src/main/java"
-        ]
-        resources.srcDirs = [ "${mcProjectDir}/src/main/resources" ]
+        java.srcDirs = registeredTarget.javaSourceRoots
+            .findAll { !it.toString().startsWith('runtime/minecraft/') }
+            .collect { rootProject.file(it.toString()) }
+        resources.srcDirs = registeredTarget.resourceRoots.collect { rootProject.file(it.toString()) }
     }
 }
 

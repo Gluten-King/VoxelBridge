@@ -10,6 +10,9 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipFile
 
 tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
@@ -26,29 +29,18 @@ subprojects {
 
 def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
 
-def stableCompileTasks = [
-    ':fabric:1.20.1:mod:compileJava',
-    ':fabric:1.21.1:mod:compileJava',
-    ':fabric:1.21.4:mod:compileJava',
-    ':fabric:1.21.8:mod:compileJava',
-    ':fabric:1.21.11:mod:compileJava',
-    ':neoforge:1.21.1:mod:compileJava',
-    ':neoforge:1.21.4:mod:compileJava',
-    ':neoforge:1.21.8:mod:compileJava',
-    ':neoforge:1.21.11:mod:compileJava'
-]
-
-def goldenTargets = [
-    'fabric-1.20.1'  : [projectPath: ':fabric:1.20.1:mod',   platform: 'fabric',   minecraft: '1.20.1'],
-    'fabric-1.21.1'  : [projectPath: ':fabric:1.21.1:mod',   platform: 'fabric',   minecraft: '1.21.1'],
-    'fabric-1.21.4'  : [projectPath: ':fabric:1.21.4:mod',   platform: 'fabric',   minecraft: '1.21.4'],
-    'fabric-1.21.8'  : [projectPath: ':fabric:1.21.8:mod',   platform: 'fabric',   minecraft: '1.21.8'],
-    'fabric-1.21.11' : [projectPath: ':fabric:1.21.11:mod',  platform: 'fabric',   minecraft: '1.21.11'],
-    'neoforge-1.21.1': [projectPath: ':neoforge:1.21.1:mod', platform: 'neoforge', minecraft: '1.21.1'],
-    'neoforge-1.21.4': [projectPath: ':neoforge:1.21.4:mod', platform: 'neoforge', minecraft: '1.21.4'],
-    'neoforge-1.21.8': [projectPath: ':neoforge:1.21.8:mod', platform: 'neoforge', minecraft: '1.21.8'],
-    'neoforge-1.21.11': [projectPath: ':neoforge:1.21.11:mod', platform: 'neoforge', minecraft: '1.21.11']
-]
+def targetRegistry = new JsonSlurper().parse(file('gradle/targets.json'))
+def stableCompileTasks = targetRegistry.targets.collect { "${it.projectPath}:compileJava" }
+def stablePackageTasks = targetRegistry.targets.collect {
+    "${it.projectPath}:${it.platform == 'fabric' ? 'remapJar' : 'shadowJar'}"
+}
+def goldenTargets = targetRegistry.targets.collectEntries { target ->
+    [(target.id.toString()): [
+        projectPath: target.projectPath.toString(),
+        platform: target.platform.toString(),
+        minecraft: target.minecraft.toString()
+    ]]
+}
 
 def goldenTargetName = providers.gradleProperty('goldenTarget').orNull
 def goldenTarget = goldenTargetName != null ? goldenTargets[goldenTargetName] : null
@@ -181,6 +173,7 @@ subprojects { subproj ->
                     if (modsDir.isDirectory()) {
                         subproj.delete(subproj.fileTree(modsDir) {
                             include 'VoxelBridge-neoforge-*.jar'
+                            include 'VoxelBridge-golden-harness-*.jar'
                         })
                     }
                 }
@@ -241,10 +234,459 @@ tasks.register('compileStableMatrix') {
     dependsOn stableCompileTasks
 }
 
+tasks.register('assembleStableMatrix') {
+    group = 'build'
+    description = 'Builds one distributable Mod JAR for every supported target.'
+    dependsOn stablePackageTasks
+}
+
+tasks.register('verifyProductionJars') {
+    group = 'verification'
+    description = 'Checks that production JARs contain core/pipeline/exact runtime and exclude test tooling.'
+    dependsOn 'assembleStableMatrix', 'verifyArchitectureBoundaries', 'verifyMigrationRatchet',
+        'verifyNoDuplicateSourceClasses', 'verifyTargetRegistry', 'verifyMainPurity',
+        'verifyAdapterMigrationRatchet'
+    doLast {
+        def readNestedClass = { byte[] jarBytes, String className ->
+            def input = new ZipInputStream(new ByteArrayInputStream(jarBytes))
+            try {
+                def entry
+                while ((entry = input.nextEntry) != null) {
+                    if (entry.name == className) {
+                        return input.bytes
+                    }
+                }
+                return null
+            } finally {
+                input.close()
+            }
+        }
+        def classText = { byte[] bytes ->
+            bytes == null ? null : new String(bytes, StandardCharsets.ISO_8859_1)
+        }
+        targetRegistry.targets.each { target ->
+            def targetProject = project(target.projectPath.toString())
+            def taskName = target.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+            def jarFile = targetProject.tasks.named(taskName).get().archiveFile.get().asFile
+            if (!jarFile.isFile()) {
+                throw new GradleException("Missing production JAR for ${target.id}: ${jarFile}")
+            }
+            new ZipFile(jarFile).withCloseable { zip ->
+                def entries = zip.entries().toList()*.name
+                if (entries.any { it.startsWith('com/voxelbridge/verification/') }) {
+                    throw new GradleException("Verification classes leaked into ${target.id}: ${jarFile}")
+                }
+                if (entries.any { it.contains('GoldenTestController')
+                        || it.contains('voxelbridge_golden_harness') }) {
+                    throw new GradleException("Golden harness content leaked into ${target.id}: ${jarFile}")
+                }
+                if (entries.any { entry ->
+                        def lower = entry.toLowerCase(Locale.ROOT)
+                        lower.contains('biris') || lower.contains('midblock')
+                            || lower.contains('voxelbridge/linker')
+                    }) {
+                    throw new GradleException("Experimental BIRIS/linker content leaked into ${target.id}: ${jarFile}")
+                }
+                if (target.platform == 'fabric') {
+                    def runtimeEntry = zip.entries().toList().find {
+                        it.name.startsWith("META-INF/jars/VoxelBridge-runtime-minecraft-${target.minecraft}-")
+                            && it.name.endsWith('.jar')
+                    }
+                    if (!entries.any { it.startsWith('META-INF/jars/core') && it.endsWith('.jar') }
+                            || !entries.any { it.startsWith('META-INF/jars/pipeline') && it.endsWith('.jar') }
+                            || runtimeEntry == null) {
+                        throw new GradleException(
+                            "${target.id} does not embed core, pipeline, and its exact runtime library")
+                    }
+                    def runtimeBytes = zip.getInputStream(runtimeEntry).withCloseable { it.bytes }
+                    def runtimeClass = readNestedClass(
+                        runtimeBytes, 'com/voxelbridge/export/ExportContext.class')
+                    def goldenController = readNestedClass(
+                        runtimeBytes, 'com/voxelbridge/client/GoldenTestController.class')
+                    def runtimeText = classText(runtimeClass)
+                    if (runtimeText == null
+                            || !runtimeText.contains('net/minecraft/class_310')
+                            || runtimeText.contains('net/minecraft/client/Minecraft')) {
+                        throw new GradleException(
+                            "${target.id} exact runtime is absent or not remapped to Fabric intermediary names")
+                    }
+                    if (goldenController != null) {
+                        throw new GradleException(
+                            "Local golden automation leaked into ${target.id} exact runtime")
+                    }
+                } else {
+                    if (!entries.contains('com/voxelbridge/core/export/ExportState.class')
+                            || !entries.contains('com/voxelbridge/pipeline/session/ExportSession.class')
+                            || !entries.contains('com/voxelbridge/export/ExportContext.class')) {
+                        throw new GradleException(
+                            "${target.id} does not shade core, pipeline, and its exact runtime library")
+                    }
+                    def runtimeClass = zip.getInputStream(
+                        zip.getEntry('com/voxelbridge/export/ExportContext.class'))
+                        .withCloseable { it.bytes }
+                    def runtimeText = classText(runtimeClass)
+                    if (!runtimeText.contains('net/minecraft/client/Minecraft')
+                            || runtimeText.contains('net/minecraft/class_310')) {
+                        throw new GradleException(
+                            "${target.id} exact runtime is not in the NeoForge production namespace")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The golden controller is a separate, local-only mod JAR. Production JARs
+// expose only the disabled-by-default automation extension point.
+gradle.projectsEvaluated {
+    targetRegistry.targets.each { target ->
+        def targetProject = project(target.projectPath.toString())
+        def runtimeProject = project(":runtime:minecraft:mc-${target.minecraft}")
+        if (target.platform == 'fabric') {
+            def harnessTask = runtimeProject.tasks.named('remapGoldenHarnessJar')
+            targetProject.tasks.named('runGoldenProductionClient').configure {
+                dependsOn harnessTask
+                mods.from(harnessTask.flatMap { it.archiveFile })
+            }
+        } else {
+            def harnessTask = runtimeProject.tasks.named('goldenHarnessJar')
+            targetProject.tasks.named('installGoldenProductionMod').configure {
+                dependsOn harnessTask
+                from(harnessTask)
+            }
+        }
+    }
+}
+
+tasks.register('verifyArchitectureBoundaries') {
+    group = 'verification'
+    description = 'Enforces that core and pipeline remain independent of Minecraft and loader APIs.'
+    def guardedRoots = [
+        rootProject.file('core/src/main/java'),
+        rootProject.file('pipeline/src/main/java')
+    ]
+    def runtimeRoots = [rootProject.file('runtime/minecraft')]
+    inputs.files(guardedRoots.collect { fileTree(it) { include '**/*.java' } })
+    inputs.files(runtimeRoots.collect { fileTree(it) { include '**/*.java' } })
+    doLast {
+        def forbidden = [
+            'net.minecraft.',
+            'net.fabricmc.',
+            'net.neoforged.',
+            'net.minecraftforge.'
+        ]
+        def violations = []
+        guardedRoots.each { root ->
+            if (!root.exists()) return
+            fileTree(root).matching { include '**/*.java' }.files.sort().each { source ->
+                source.eachLine('UTF-8') { line, number ->
+                    def trimmed = line.trim()
+                    if (trimmed.startsWith('import ') && forbidden.any { trimmed.contains(it) }) {
+                        violations << "${rootProject.relativePath(source)}:${number}: ${trimmed}"
+                    }
+                }
+            }
+        }
+        def loaderImports = [
+            'net.fabricmc.',
+            'net.neoforged.',
+            'net.minecraftforge.'
+        ]
+        runtimeRoots.each { root ->
+            if (!root.exists()) return
+            fileTree(root).matching { include '**/*.java' }.files.sort().each { source ->
+                source.eachLine('UTF-8') { line, number ->
+                    def trimmed = line.trim()
+                    if (trimmed.startsWith('import ') && loaderImports.any { trimmed.contains(it) }) {
+                        violations << "${rootProject.relativePath(source)}:${number}: ${trimmed}"
+                    }
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Architecture boundary violations:\n' + violations.join('\n'))
+        }
+    }
+}
+
+tasks.register('verifyMigrationRatchet') {
+    group = 'verification'
+    description = 'Prevents restoration of legacy common source overlays.'
+    def gradleFiles = files(
+        fileTree(rootProject.file('fabric')) { include '**/*.gradle'; exclude '**/build/**' },
+        fileTree(rootProject.file('neoforge')) { include '**/*.gradle'; exclude '**/build/**' },
+        rootProject.file('common/build.gradle')
+    )
+    inputs.files(gradleFiles)
+    doLast {
+        if (rootProject.file('common/build.gradle').exists()
+                || rootProject.file('settings.gradle').getText('UTF-8').contains("shared:common")) {
+            throw new GradleException('The removed shared:common Gradle module must not be restored.')
+        }
+        if (!fileTree(rootProject.file('common')) {
+                include 'src/**'
+                include 'build.gradle'
+            }.files.isEmpty()) {
+            throw new GradleException(
+                'The legacy common source tree was migrated to runtime/minecraft and must not be restored.')
+        }
+        if (!fileTree(rootProject.file('common/1.21.11')).files.isEmpty()) {
+            throw new GradleException(
+                'common/1.21.11 was migrated to runtime/minecraft/1.21.11 and must not be restored.')
+        }
+        def maximumMarkers = [
+            syncCommonFor1201: 0,
+            'filtered-common': 0,
+            replacedPlatformSources: 0
+        ]
+        maximumMarkers.each { marker, maximum ->
+            int count = 0
+            gradleFiles.files.findAll { it.isFile() }.each { gradleFile ->
+                if (gradleFile == rootProject.buildFile) return
+                count += gradleFile.getText('UTF-8').readLines().count { it.contains(marker) }
+            }
+            if (count > maximum) {
+                throw new GradleException(
+                    "Legacy source-overlay marker '${marker}' increased from at most ${maximum} to ${count}.")
+            }
+        }
+
+    }
+}
+
+tasks.register('verifyNoDuplicateSourceClasses') {
+    group = 'verification'
+    description = 'Rejects same-FQCN source overlays inside every production target.'
+    doLast {
+        def violations = []
+        targetRegistry.targets.each { target ->
+            def seen = [:].withDefault { [] }
+            target.javaSourceRoots.collect { rootProject.file(it.toString()) }
+                .findAll { it.isDirectory() }.each { sourceRoot ->
+                fileTree(sourceRoot).matching { include '**/*.java' }.files.each { source ->
+                    def relative = sourceRoot.toPath().relativize(source.toPath())
+                        .toString().replace('\\', '/')
+                    seen[relative] << rootProject.relativePath(source)
+                }
+            }
+            seen.findAll { relative, sources -> sources.size() > 1 }.each { relative, sources ->
+                violations << "${target.id}: ${relative}\n  " + sources.join('\n  ')
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Duplicate production source classes:\n' + violations.join('\n'))
+        }
+    }
+}
+
+tasks.register('verifyTargetRegistry') {
+    group = 'verification'
+    description = 'Validates the single source of truth for supported targets and their source composition.'
+    inputs.file(file('gradle/targets.json'))
+    doLast {
+        if (targetRegistry.schemaVersion != 2) {
+            throw new GradleException("Unsupported target registry schema: ${targetRegistry.schemaVersion}")
+        }
+        def ids = new HashSet<String>()
+        def projectPaths = new HashSet<String>()
+        def runtimeRootsByMinecraft = [:]
+        targetRegistry.targets.each { target ->
+            if (!ids.add(target.id.toString())) {
+                throw new GradleException("Duplicate target id: ${target.id}")
+            }
+            if (!projectPaths.add(target.projectPath.toString())) {
+                throw new GradleException("Duplicate target project: ${target.projectPath}")
+            }
+            if (!(target.platform in ['fabric', 'neoforge'])) {
+                throw new GradleException("Unsupported platform for ${target.id}: ${target.platform}")
+            }
+            if (!(target.java in [17, 21])) {
+                throw new GradleException("Unsupported Java level for ${target.id}: ${target.java}")
+            }
+            if (!rootProject.file(target.projectDir.toString()).isDirectory()) {
+                throw new GradleException("Missing project directory for ${target.id}: ${target.projectDir}")
+            }
+            if (!(target.javaSourceRoots instanceof List) || target.javaSourceRoots.isEmpty()) {
+                throw new GradleException("No Java source roots registered for ${target.id}")
+            }
+            def exactRuntimeRoot = "runtime/minecraft/${target.minecraft}/src/main/java"
+            if (!target.javaSourceRoots.any {
+                    it.toString().replace('\\', '/') == exactRuntimeRoot
+                }) {
+                throw new GradleException(
+                    "${target.id} must include its exact runtime extension root: ${exactRuntimeRoot}")
+            }
+            target.javaSourceRoots.each { sourceRoot ->
+                def path = sourceRoot.toString().replace('\\', '/')
+                if (path.contains('/common/') || path.startsWith('common/')) {
+                    throw new GradleException("Legacy common source registered for ${target.id}: ${path}")
+                }
+                if (!rootProject.file(path).isDirectory()) {
+                    throw new GradleException("Missing Java source root for ${target.id}: ${path}")
+                }
+            }
+            def runtimeRoots = target.javaSourceRoots.findAll {
+                it.toString().startsWith('runtime/minecraft/')
+            }*.toString()
+            def previousRuntimeRoots = runtimeRootsByMinecraft.putIfAbsent(
+                target.minecraft.toString(), runtimeRoots)
+            if (previousRuntimeRoots != null && previousRuntimeRoots != runtimeRoots) {
+                throw new GradleException(
+                    "Fabric/NeoForge runtime roots differ for Minecraft ${target.minecraft}: "
+                        + "${previousRuntimeRoots} vs ${runtimeRoots}")
+            }
+        }
+    }
+}
+
+tasks.register('verifyMainPurity') {
+    group = 'verification'
+    description = 'Keeps BIRIS/linker experimental schema and code outside main production sources.'
+    def roots = [file('core'), file('pipeline'), file('runtime'), file('fabric'), file('neoforge')]
+    inputs.files(roots.collect { root -> fileTree(root) {
+        include '**/*.java', '**/*.json', '**/*.toml', '**/*.gradle'
+        exclude '**/build/**', '**/.gradle/**'
+    } })
+    doLast {
+        def forbidden = ['biris', 'midblock', 'voxelbridge:linker']
+        def violations = []
+        roots.each { root ->
+            fileTree(root).matching {
+                include '**/*.java', '**/*.json', '**/*.toml', '**/*.gradle'
+                exclude '**/build/**', '**/.gradle/**'
+            }.files.each { source ->
+                def lower = source.getText('UTF-8').toLowerCase(Locale.ROOT)
+                def match = forbidden.find { lower.contains(it) }
+                if (match != null) violations << "${rootProject.relativePath(source)} contains '${match}'"
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Experimental BIRIS/linker data leaked into main:\n' + violations.join('\n'))
+        }
+    }
+}
+
+tasks.register('verifyFrozenBaseline') {
+    group = 'verification'
+    description = 'Verifies the hash-bound c23476a pre-refactor evidence.'
+    def manifestFile = file('golden/baselines/c23476a.manifest.json')
+    inputs.file(manifestFile)
+    doLast {
+        def manifest = new JsonSlurper().parse(manifestFile)
+        manifest.artifacts.each { relativePath, expectedHash ->
+            def artifact = rootProject.file(relativePath.toString())
+            if (!artifact.isFile()) {
+                throw new GradleException("Frozen baseline artifact is missing: ${relativePath}")
+            }
+            def digest = MessageDigest.getInstance('SHA-256')
+            artifact.withInputStream { input ->
+                byte[] buffer = new byte[64 * 1024]
+                int count
+                while ((count = input.read(buffer)) >= 0) {
+                    if (count > 0) digest.update(buffer, 0, count)
+                }
+            }
+            def actualHash = digest.digest().encodeHex().toString()
+            if (!actualHash.equalsIgnoreCase(expectedHash.toString())) {
+                throw new GradleException(
+                    "Frozen baseline changed: ${relativePath}; expected ${expectedHash}, got ${actualHash}")
+            }
+        }
+    }
+}
+
+tasks.register('verifyExportSessionIsolation') {
+    group = 'verification'
+    description = 'Prevents hot export code from reading mutable preferences or restoring global renderer caches.'
+    def exportRoots = [
+        file('runtime/minecraft/shared/all/src/main/java/com/voxelbridge/export'),
+        file('runtime/minecraft/shared/1.20.1-1.21.8/src/main/java/com/voxelbridge/export'),
+        file('runtime/minecraft/shared/1.21.1-1.21.11/src/main/java/com/voxelbridge/export'),
+        file('runtime/minecraft/1.20.1/src/main/java/com/voxelbridge/export'),
+        file('runtime/minecraft/1.21.1/src/main/java/com/voxelbridge/export'),
+        file('runtime/minecraft/1.21.11/src/main/java/com/voxelbridge/export')
+    ]
+    def textureRuntimeRoots = [
+        file('runtime/minecraft/shared/all/src/main/java/com/voxelbridge/platform/texture'),
+        file('runtime/minecraft/shared/1.20.1-1.21.8/src/main/java/com/voxelbridge/platform/texture'),
+        file('runtime/minecraft/1.20.1/src/main/java/com/voxelbridge/platform/texture'),
+        file('runtime/minecraft/1.21.1/src/main/java/com/voxelbridge/platform/texture'),
+        file('runtime/minecraft/1.21.11/src/main/java/com/voxelbridge/platform/texture')
+    ]
+    inputs.files((exportRoots + textureRuntimeRoots).collect { fileTree(it) { include '**/*.java' } })
+    doLast {
+        def violations = []
+        exportRoots.findAll { it.isDirectory() }.each { root ->
+            fileTree(root).matching { include '**/*.java' }.files.each { source ->
+                def relative = root.toPath().relativize(source.toPath()).toString().replace('\\', '/')
+                def text = source.getText('UTF-8')
+                if (text.contains('ExportRuntimeConfig')
+                        && relative != 'ExportContext.java'
+                        && relative != 'ExportControl.java') {
+                    violations << "${rootProject.relativePath(source)} reads mutable config during export"
+                }
+                if ((relative.endsWith('/EntityRenderer.java')
+                        || relative.endsWith('/BlockEntityRenderer.java')
+                        || relative.endsWith('/CapturedQuadProcessor.java')
+                        || relative.endsWith('/AnimatedTextureHelper.java'))
+                        && (text.contains('ThreadLocal<')
+                            || text.readLines().any { line ->
+                                line.contains('static final') && line.contains('ConcurrentHashMap')
+                            })) {
+                    violations << "${rootProject.relativePath(source)} owns cross-session mutable renderer state"
+                }
+                if ((relative.endsWith('/EntityRenderer.java')
+                        || relative.endsWith('/BlockEntityRenderer.java'))
+                        && text.readLines().any { line ->
+                            line ==~ /\s*private\s+static\s+(volatile\s+)?(AtlasLocator|TextureResolver[^;]*|RenderTypeResolver)\s+[^();]+;.*/
+                        }) {
+                    violations << "${rootProject.relativePath(source)} owns a mutable static renderer resolver"
+                }
+            }
+        }
+        textureRuntimeRoots.findAll { it.isDirectory() }.each { root ->
+            fileTree(root).matching { include '**/*.java' }.files.each { source ->
+                if (source.getText('UTF-8').contains('ExportRuntimeConfig')) {
+                    violations << "${rootProject.relativePath(source)} reads mutable config below the session boundary"
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Export-session isolation violations:\n' + violations.join('\n'))
+        }
+    }
+}
+
+tasks.register('verifyAdapterMigrationRatchet') {
+    group = 'verification'
+    description = 'Prevents new calls through the temporary static Adapters compatibility entrypoint.'
+    def roots = [file('runtime'), file('fabric'), file('neoforge')]
+    inputs.files(roots.collect { fileTree(it) { include '**/*.java'; exclude '**/build/**' } })
+    doLast {
+        int usages = 0
+        roots.findAll { it.isDirectory() }.each { root ->
+            fileTree(root).matching { include '**/*.java'; exclude '**/build/**' }.files.each { source ->
+                usages += (source.getText('UTF-8') =~ /\bAdapters\s*\./).count
+            }
+        }
+        int maximum = 89
+        if (usages > maximum) {
+            throw new GradleException(
+                "Temporary Adapters usage increased from at most ${maximum} to ${usages}. " +
+                'Inject the dependency through ExportContext or a focused runtime component instead.')
+        }
+        logger.lifecycle("Temporary Adapters compatibility usages: ${usages}/${maximum}")
+    }
+}
+
 tasks.register('testFast') {
     group = 'verification'
     description = 'Runs JVM verification tests and compiles the stable platform matrix.'
-    dependsOn 'compileStableMatrix', ':verification:test'
+    dependsOn 'compileStableMatrix', ':verification:test',
+        'verifyArchitectureBoundaries', 'verifyMigrationRatchet', 'verifyNoDuplicateSourceClasses',
+        'verifyTargetRegistry',
+        'verifyMainPurity', 'verifyFrozenBaseline', 'verifyExportSessionIsolation',
+        'verifyAdapterMigrationRatchet'
 }
 
 tasks.register('verifyGolden') {
@@ -518,7 +960,7 @@ tasks.register('snapshotGoldenClient') {
             args 'generate',
                     '--gltf', result.gltf.toString(),
                     '--snapshot', actual.absolutePath,
-                    '--scenario', "${goldenScenario}:${goldenVariantName}",
+                    '--scenario', goldenScenario,
                     '--minecraft', goldenTarget.minecraft,
                     '--scenario-file', goldenScenarioFile.absolutePath,
                     '--scenario-manifest', goldenEffectiveManifestFile.absolutePath
@@ -965,6 +1407,7 @@ gradle.projectsEvaluated {
         def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
         def productionJar = targetProject.tasks.named(jarTaskName).get().archiveFile.get().asFile
         def goldenJvmArgs = [
+                "-Dvoxelbridge.clientAutomationClass=com.voxelbridge.client.GoldenTestController",
                 "-Dvoxelbridge.golden.enabled=true",
                 "-Dvoxelbridge.golden.requireProductionJar=true",
                 "-Dvoxelbridge.golden.expectedJar=${productionJar.absolutePath}",

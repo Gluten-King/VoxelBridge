@@ -1,6 +1,5 @@
 package com.voxelbridge.export.texture;
 
-import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.core.export.ExportState;
 import com.voxelbridge.core.texture.UvRemap;
 import com.voxelbridge.core.util.color.ColorMode;
@@ -13,17 +12,8 @@ public final class UvRemapUtil {
 
     private static final int DEFAULT_TINT = 0xFFFFFF;
 
-    public static boolean isAtlasEnabled() {
-        return ExportRuntimeConfig.getAtlasMode() == ExportRuntimeConfig.AtlasMode.ATLAS;
-    }
-
     public static boolean isAtlasEnabled(ExportOptions options) {
         return options != null && options.atlasMode() == ExportOptions.AtlasMode.ATLAS;
-    }
-
-    public static boolean isColormapMode() {
-        ColorMode mode = ExportRuntimeConfig.getColorMode();
-        return mode != null && mode.usesColormap();
     }
 
     public static boolean isColormapMode(ExportOptions options) {
@@ -32,10 +22,6 @@ public final class UvRemapUtil {
         }
         ColorMode mode = options.colorMode();
         return mode != null && mode.usesColormap();
-    }
-
-    public static boolean shouldRemap(ExportState state, String spriteKey) {
-        return shouldRemap(state, spriteKey, ExportOptions.fromRuntimeConfig());
     }
 
     public static boolean shouldRemap(ExportState state, String spriteKey, ExportOptions options) {
@@ -49,16 +35,8 @@ public final class UvRemapUtil {
             || state.getBlockEntityAtlasPlacements().containsKey(spriteKey);
     }
 
-    public static float[] remapUv(ExportState state, String spriteKey, float u, float v) {
-        return remapUv(state, spriteKey, DEFAULT_TINT, u, v, ExportOptions.fromRuntimeConfig());
-    }
-
     public static float[] remapUv(ExportState state, String spriteKey, float u, float v, ExportOptions options) {
         return remapUv(state, spriteKey, DEFAULT_TINT, u, v, options);
-    }
-
-    public static float[] remapUv(ExportState state, String spriteKey, int tint, float u, float v) {
-        return remapUv(state, spriteKey, tint, u, v, ExportOptions.fromRuntimeConfig());
     }
 
     public static float[] remapUv(ExportState state, String spriteKey, int tint, float u, float v, ExportOptions options) {
@@ -66,13 +44,6 @@ public final class UvRemapUtil {
             return new float[]{u, v};
         }
         return remapUvUsingAtlas(state, spriteKey, tint, u, v, options);
-    }
-
-    public static float[] remapUvFromPixels(ExportState state, String spriteKey,
-                                            float uPx, float vPx, int width, int height) {
-        float u = width > 0 ? uPx / (float) width : 0f;
-        float v = height > 0 ? vPx / (float) height : 0f;
-        return remapUv(state, spriteKey, u, v);
     }
 
     public static float[] remapUvFromPixels(ExportState state, String spriteKey,

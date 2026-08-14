@@ -13,7 +13,7 @@ import java.nio.file.Path;
 
 /**
  * Manages biome color colormap (UDIM-style pages, 4x4 slots).
- * Page size is configurable via ExportRuntimeConfig.
+ * All layout decisions are supplied by the immutable export-session options.
  */
 public final class ColorMapManager {
 
@@ -21,12 +21,12 @@ public final class ColorMapManager {
 
     private ColorMapManager() {}
 
-    public static void initializeReservedSlots(ExportState state) {
+    public static void initializeReservedSlots(ExportState state, int pageSize) {
         int whiteColor = 0xFFFFFFFF;
 
         // Temporarily set nextColorSlot to 0 to force white into slot 0
         state.getNextColorSlot().set(0);
-        ExportState.TexturePlacement whitePlacement = registerColor(state, whiteColor);
+        ExportState.TexturePlacement whitePlacement = registerColor(state, whiteColor, pageSize);
 
         // Verify slot 0 is indeed white
         if (whitePlacement.x() != 0 || whitePlacement.y() != 0) {
@@ -40,7 +40,7 @@ public final class ColorMapManager {
         VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] Reserved slot 0 for white color (4x4)");
     }
 
-    public static ExportState.TexturePlacement registerColor(ExportState state, int argb) {
+    public static ExportState.TexturePlacement registerColor(ExportState state, int argb, int pageSize) {
         // normalize alpha to 255 for mapping
         int norm = argb | 0xFF000000;
         var map = state.getColorMap();
@@ -48,7 +48,6 @@ public final class ColorMapManager {
             ExportState.TexturePlacement existing = map.get(norm);
             if (existing != null) return existing;
 
-            int pageSize = com.voxelbridge.config.ExportRuntimeConfig.getAtlasSize().getSize();
             int slotsPerRow = pageSize / SLOT_SIZE;
             long slotsPerPage = (long) slotsPerRow * slotsPerRow;
 
@@ -83,9 +82,9 @@ public final class ColorMapManager {
      * Skipped in VertexColor mode since colors are baked into COLOR_0 attribute.
      * White color is pre-reserved in slot 0 by initializeReservedSlots().
      */
-    public static void generateColorMaps(ExportState state, Path outDir) throws IOException {
+    public static void generateColorMaps(ExportState state, Path outDir, ExportOptions options) throws IOException {
         // Skip colormap generation when colormap is not used
-        ColorMode mode = com.voxelbridge.config.ExportRuntimeConfig.getColorMode();
+        ColorMode mode = options.colorMode();
         if (mode == null || !mode.usesColormap()) {
             VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] Skipping colormap generation (colormap disabled)");
             return;
@@ -100,7 +99,7 @@ public final class ColorMapManager {
             maxPage = Math.max(maxPage, p.page());
         }
 
-        int pageSize = com.voxelbridge.config.ExportRuntimeConfig.getAtlasSize().getSize();
+        int pageSize = options.atlasSize();
         
         VoxelBridgeLogger.info(LogModule.TEXTURE, "[ColorMap] entries=" + state.getColorMap().size()
                 + " nextSlot=" + state.getNextColorSlot().get()
@@ -148,8 +147,8 @@ public final class ColorMapManager {
      * @param argb The color to register.
      * @return A float array containing [u0, v0, u1, v1] for the color's slot in the colormap.
      */
-    public static float[] remapColorUV(ExportState state, int argb) {
-        ExportState.TexturePlacement placement = registerColor(state, argb);
+    public static float[] remapColorUV(ExportState state, int argb, int pageSize) {
+        ExportState.TexturePlacement placement = registerColor(state, argb, pageSize);
         return new float[] { placement.u0(), placement.v0(), placement.u1(), placement.v1() };
     }
 }

@@ -19,6 +19,8 @@ dependencies {
     // run from the existing Gradle cache in restricted/offline environments.
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.13.4.2'
     testImplementation project(':shared:core')
+    testImplementation project(':shared:pipeline')
+    testRuntimeOnly 'it.unimi.dsi:fastutil:8.5.12'
 }
 
 application {
@@ -53,8 +55,16 @@ tasks.register('quadGeometryKeySelfTest', JavaExec) {
     mainClass = 'com.voxelbridge.verification.QuadGeometryKeyTest'
 }
 
+tasks.register('pipelineContractSelfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs version-neutral pipeline contract and session tests.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.PipelineContractTest'
+}
+
 tasks.test {
-    dependsOn 'goldenSelfTest', 'goldenReviewSelfTest', 'quadGeometryKeySelfTest'
+    dependsOn 'goldenSelfTest', 'goldenReviewSelfTest', 'quadGeometryKeySelfTest', 'pipelineContractSelfTest'
 }
 
 def cliArgs = { String command ->
@@ -126,5 +136,27 @@ tasks.register('inspectGltfSnapshot', JavaExec) {
     mainClass = application.mainClass
     doFirst {
         args = cliArgs('inspect')
+    }
+}
+
+tasks.register('diffGoldenSnapshot', JavaExec) {
+    group = 'verification'
+    description = 'Writes a structured semantic diff between two golden snapshots.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
+    doFirst {
+        def expected = providers.gradleProperty('expected').orNull
+        def actual = providers.gradleProperty('actual').orNull
+        def output = providers.gradleProperty('diffOutput').orNull
+        if (!expected || !actual || !output) {
+            throw new GradleException(
+                    'diffGoldenSnapshot requires -Pexpected, -Pactual, and -PdiffOutput.')
+        }
+        args = [
+                'diff',
+                '--expected', rootProject.file(expected).absolutePath,
+                '--actual', rootProject.file(actual).absolutePath,
+                '--output', rootProject.file(output).absolutePath
+        ]
     }
 }

@@ -50,6 +50,7 @@ public final class GoldenReviewCli {
         Map<String, String> options = parseOptions(args);
         switch (command) {
             case "record" -> record(options);
+            case "diff" -> diff(options);
             case "report" -> report(options);
             case "approve" -> decide(options, "approved");
             case "reject" -> decide(options, "rejected");
@@ -111,6 +112,8 @@ public final class GoldenReviewCli {
 
         String machineStatus;
         String machineDetail;
+        Path semanticDiff = runDir.resolve("semantic.diff.json");
+        Files.deleteIfExists(semanticDiff);
         if (!"passed".equals(clientStatus)) {
             machineStatus = "error";
             machineDetail = String.valueOf(result.getOrDefault("error", "client result is unavailable"));
@@ -119,7 +122,9 @@ public final class GoldenReviewCli {
             machineDetail = "semantic snapshot is missing";
         } else if (Files.isRegularFile(expected) && !jsonEquals(expected, actualPath)) {
             machineStatus = "failed";
-            machineDetail = "semantic snapshot differs from " + repo.relativize(expected);
+            SemanticSnapshotDiff.Result diff = SemanticSnapshotDiff.write(expected, actualPath, semanticDiff);
+            machineDetail = "semantic snapshot differs from " + repo.relativize(expected)
+                    + " (" + diff.detail() + ")";
         } else if (!Files.isRegularFile(expected)) {
             machineStatus = "passed";
             machineDetail = "new baseline requires review";
@@ -168,12 +173,19 @@ public final class GoldenReviewCli {
         manifest.put("repeat", repeat);
         manifest.put("mods", splitCsv(options.get("--mods")));
         manifest.put("paths", pathMap(repo, runDir, jar, world, scenarioManifest,
-                scenarioFile, actualPath, expected, gltf));
+                scenarioFile, actualPath, expected, gltf,
+                Files.isRegularFile(semanticDiff) ? semanticDiff : null));
         manifest.put("hashes", hashes);
         manifest.put("artifactFingerprint", artifactFingerprint);
         manifest.put("environment", environment);
         Map<String, Object> metrics = new LinkedHashMap<>();
-        metrics.put("durationMillis", result.getOrDefault("durationMillis", 0));
+        Object exportDuration = result.getOrDefault(
+                "exportDurationMillis", result.getOrDefault("durationMillis", 0));
+        metrics.put("durationMillis", exportDuration);
+        metrics.put("exportDurationMillis", exportDuration);
+        metrics.put("clientDurationMillis", result.getOrDefault("clientDurationMillis", 0));
+        metrics.put("peakHeapUsedBytes", result.getOrDefault("peakHeapUsedBytes", 0));
+        metrics.put("peakHeapDeltaBytes", result.getOrDefault("peakHeapDeltaBytes", 0));
         manifest.put("metrics", metrics);
         GoldenJson.writeValue(runDir.resolve("run-manifest.json"), manifest);
 
@@ -221,6 +233,15 @@ public final class GoldenReviewCli {
         review.put("expires", null);
         GoldenJson.writeValue(runDir.resolve("review.json"), review);
         System.out.println(caseId + ": " + review.get("overallStatus") + " (" + machineDetail + ")");
+    }
+
+    private static void diff(Map<String, String> options) throws IOException {
+        SemanticSnapshotDiff.Result result = SemanticSnapshotDiff.write(
+                requiredPath(options, "--expected"),
+                requiredPath(options, "--actual"),
+                requiredPath(options, "--output"));
+        System.out.println("Semantic snapshot diff: " + result.path());
+        System.out.println(result.detail());
     }
 
     private static void decide(Map<String, String> options, String verdict) throws Exception {
@@ -471,6 +492,8 @@ public final class GoldenReviewCli {
             rows.append(" ");
             link(rows, item.directory().resolve("actual.snapshot.json").toString(), "snapshot");
             rows.append(" ");
+            link(rows, paths.get("semanticDiff"), "semantic diff");
+            rows.append(" ");
             link(rows, item.directory().resolve("render/current").toString(), "render");
             rows.append("</td><td>").append(html(String.valueOf(review.get("machineDetail"))))
                     .append(" ").append(html(String.valueOf(review.getOrDefault("warnings", List.of()))))
@@ -566,7 +589,7 @@ public final class GoldenReviewCli {
 
     private static Map<String, Object> pathMap(
             Path repo, Path runDir, Path jar, Path world, Path scenarioManifest,
-            Path scenarioFile, Path actual, Path expected, Path gltf) {
+            Path scenarioFile, Path actual, Path expected, Path gltf, Path semanticDiff) {
         Map<String, Object> paths = new LinkedHashMap<>();
         paths.put("runDirectory", runDir.toString());
         paths.put("productionJar", stringPath(jar));
@@ -575,6 +598,7 @@ public final class GoldenReviewCli {
         paths.put("scenarioCommands", stringPath(scenarioFile));
         paths.put("actualSemantic", stringPath(actual));
         paths.put("expectedSemantic", stringPath(expected));
+        paths.put("semanticDiff", stringPath(semanticDiff));
         paths.put("gltf", stringPath(gltf));
         paths.put("repository", repo.toString());
         return paths;
@@ -848,7 +872,7 @@ public final class GoldenReviewCli {
     }
 
     private static void usage() {
-        System.err.println("GoldenReviewCli record|report|approve|reject|waive|verify-release [options]");
+        System.err.println("GoldenReviewCli record|diff|report|approve|reject|waive|verify-release [options]");
     }
 
     private record ReviewItem(

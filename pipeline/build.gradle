@@ -1,0 +1,28 @@
+plugins {
+    id 'java-library'
+}
+
+group = mod_group_id
+version = mod_version
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api project(':shared:core')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+def projectTaskGroup = 'voxelbridge/shared'
+tasks.configureEach { task ->
+    task.group = projectTaskGroup
+}

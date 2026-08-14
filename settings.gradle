@@ -6,55 +6,31 @@ pluginManagement {
     }
 }
 
+import groovy.json.JsonSlurper
+
 plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
 rootProject.name = 'voxelbridge'
 
-include 'shared:core', 'shared:common', 'verification'
+include 'shared:core', 'shared:pipeline', 'verification'
 project(':shared').projectDir = file('shared')
 project(':shared:core').projectDir = file('core')
-project(':shared:common').projectDir = file('common')
+project(':shared:pipeline').projectDir = file('pipeline')
 project(':verification').projectDir = file('verification')
 
-include 'neoforge:1.21.1:mod', 'neoforge:1.21.4:mod', 'neoforge:1.21.8:mod', 'neoforge:1.21.11:mod'
-project(':neoforge:1.21.1:mod').projectDir = file('neoforge/1.21.1/mod')
-project(':neoforge:1.21.4:mod').projectDir = file('neoforge/1.21.4/mod')
-project(':neoforge:1.21.8:mod').projectDir = file('neoforge/1.21.8/mod')
-project(':neoforge:1.21.11:mod').projectDir = file('neoforge/1.21.11/mod')
-
-if (file('fabric/1.21.1/mod').exists()) {
-    include 'fabric:1.21.1:mod'
-    project(':fabric:1.21.1:mod').projectDir = file('fabric/1.21.1/mod')
-
-    // Fabric version sources live under fabric/<version>/src
+def targetRegistry = new JsonSlurper().parse(file('gradle/targets.json'))
+gradle.ext.voxelBridgeTargetRegistry = targetRegistry
+gradle.ext.voxelBridgeTargetsByProject = targetRegistry.targets.collectEntries {
+    [(it.projectPath.toString()): it]
 }
-
-if (file('fabric/1.21.4/mod').exists()) {
-    include 'fabric:1.21.4:mod'
-    project(':fabric:1.21.4:mod').projectDir = file('fabric/1.21.4/mod')
-
-    // Fabric version sources live under fabric/<version>/src
+targetRegistry.targets*.minecraft*.toString().unique().each { minecraftVersion ->
+    def runtimePath = ":runtime:minecraft:mc-${minecraftVersion}"
+    include runtimePath
+    project(runtimePath).projectDir = file("runtime/minecraft/${minecraftVersion}")
 }
-
-if (file('fabric/1.21.8/mod').exists()) {
-    include 'fabric:1.21.8:mod'
-    project(':fabric:1.21.8:mod').projectDir = file('fabric/1.21.8/mod')
-
-    // Fabric version sources live under fabric/<version>/src
-}
-
-if (file('fabric/1.21.11/mod').exists()) {
-    include 'fabric:1.21.11:mod'
-    project(':fabric:1.21.11:mod').projectDir = file('fabric/1.21.11/mod')
-
-    // Fabric version sources live under fabric/<version>/src
-}
-
-if (file('fabric/1.20.1/mod').exists()) {
-    include 'fabric:1.20.1:mod'
-    project(':fabric:1.20.1:mod').projectDir = file('fabric/1.20.1/mod')
-
-    // Fabric version sources live under fabric/<version>/src
+targetRegistry.targets.each { target ->
+    include target.projectPath
+    project(target.projectPath).projectDir = file(target.projectDir)
 }

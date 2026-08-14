@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "voxelbridge_golden_harness",
+  "version": "1",
+  "name": "VoxelBridge Golden Harness",
+  "description": "Local-only automation harness; never bundled in VoxelBridge releases.",
+  "environment": "client",
+  "license": "MIT",
+  "depends": {
+    "fabricloader": "*",
+    "minecraft": "*",
+    "voxelbridge": "*"
+  }
+}

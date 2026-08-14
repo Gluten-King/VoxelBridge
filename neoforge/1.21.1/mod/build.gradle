@@ -18,7 +18,6 @@ ext {
     forgified_fabric_api_version = "0.115.6+2.1.4+1.21.1"
 }
 
-evaluationDependsOn(':shared:common')
 evaluationDependsOn(':shared:core')
 
 def activeMc = (project.findProperty('active_mc') ?: '1.21.1').toString()
@@ -129,23 +128,26 @@ def addRunRuntimeLibs = { String runName ->
 
 ["client", "server", "data", "gameTestServer"].each { runName -> addRunRuntimeLibs(runName) }
 
+def registeredTarget = gradle.ext.voxelBridgeTargetsByProject[project.path]
+if (registeredTarget == null) throw new GradleException("Target is not registered: ${project.path}")
+
 sourceSets {
     main {
-        java.srcDirs = [
-            "${mcProjectDir}/src/main/java",
-            rootProject.file("common/src/main/java"),
-            rootProject.file("core/src/main/java")
-        ]
-        resources.srcDirs = [
-            "${mcProjectDir}/src/main/resources",
-            "${mcProjectDir}/src/generated/resources",
-            rootProject.file("common/src/main/resources"),
-            rootProject.file("core/src/main/resources")
-        ]
+        java.srcDirs = registeredTarget.javaSourceRoots
+            .findAll { !it.toString().startsWith('runtime/minecraft/') }
+            .collect { rootProject.file(it.toString()) }
+        resources.srcDirs = registeredTarget.resourceRoots.collect { rootProject.file(it.toString()) }
     }
 }
 
 dependencies {
+    implementation project(':shared:core')
+    implementation project(':shared:pipeline')
+    implementation project(path: ":runtime:minecraft:mc-${activeMc}", configuration: 'namedElements')
+    shaded project(':shared:core')
+    shaded project(':shared:pipeline')
+    shaded project(path: ":runtime:minecraft:mc-${activeMc}", configuration: 'namedElements')
+
     if (forgifiedFabricApiVersion) {
         // Add Forgified Fabric API when a compatible version is configured.
         implementation "org.sinytra.forgified-fabric-api:forgified-fabric-api:${forgifiedFabricApiVersion}"
@@ -232,10 +234,6 @@ tasks.named('assemble') { dependsOn tasks.shadowJar }
 
 // Disable plain jar to avoid filename clash with shadowJar
 tasks.named('jar') { enabled = false }
-
-tasks.named('clean') {
-    delete rootProject.file('common/build'), rootProject.file('core/build')
-}
 
 def taskGroupRoot = "voxelbridge/neoforge/mod"
 def groupForTask = { Task task ->

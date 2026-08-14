@@ -515,7 +515,7 @@ public final class SemanticGltfAnalyzer {
 
         JsonNode manifest = JSON.readTree(scenarioManifest.toFile());
         int schemaVersion = manifest.path("schemaVersion").asInt(-1);
-        if (schemaVersion != 1) {
+        if (schemaVersion != 1 && schemaVersion != 2) {
             throw new IOException("Unsupported scenario manifest schemaVersion " + schemaVersion
                     + ": " + scenarioManifest);
         }

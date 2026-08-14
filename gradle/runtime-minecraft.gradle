@@ -1,0 +1,93 @@
+apply plugin: 'java-library'
+apply plugin: 'fabric-loom'
+
+def runtimeMinecraft = project.name.replaceFirst('^mc-', '')
+def targetSpec = gradle.ext.voxelBridgeTargetRegistry.targets.find {
+    it.minecraft.toString() == runtimeMinecraft && it.platform.toString() == 'fabric'
+}
+if (targetSpec == null) {
+    throw new GradleException("No registered Fabric target supplies runtime ${runtimeMinecraft}")
+}
+
+def versionProps = new Properties()
+def versionPropsFile = rootProject.file("fabric/${runtimeMinecraft}/versions.properties")
+if (!versionPropsFile.isFile()) {
+    throw new GradleException("Missing runtime dependency lock: ${versionPropsFile}")
+}
+versionPropsFile.withInputStream { versionProps.load(it) }
+
+group = mod_group_id
+version = mod_version
+buildDir = rootProject.file("build/runtime/minecraft/${runtimeMinecraft}")
+
+base {
+    archivesName = "VoxelBridge-runtime-minecraft-${runtimeMinecraft}"
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(targetSpec.java as int)
+    withSourcesJar()
+}
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${versionProps.getProperty('fabric_minecraft_version')}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${versionProps.getProperty('fabric_loader_version')}"
+    api project(':shared:core')
+    api project(':shared:pipeline')
+}
+
+sourceSets {
+    main {
+        java.srcDirs = targetSpec.javaSourceRoots
+            .findAll { it.toString().startsWith('runtime/minecraft/') }
+            .collect { rootProject.file(it.toString()) }
+        resources.srcDirs = []
+    }
+}
+
+tasks.named('jar', Jar) {
+    // The controller is compiled against the exact Minecraft API so the local
+    // harness can reuse it, but it must never enter the runtime library.
+    exclude 'com/voxelbridge/client/GoldenTestController*.class'
+}
+
+tasks.named('sourcesJar', Jar) {
+    exclude 'com/voxelbridge/client/GoldenTestController.java'
+}
+
+def goldenHarnessJar = tasks.register('goldenHarnessJar', Jar) {
+    group = 'voxelbridge/runtime/verification'
+    description = 'Builds the local-only named golden automation harness.'
+    dependsOn tasks.named('classes')
+    archiveBaseName = "VoxelBridge-golden-harness-${runtimeMinecraft}"
+    archiveClassifier = 'named'
+    from(sourceSets.main.output) {
+        include 'com/voxelbridge/client/GoldenTestController*.class'
+    }
+    from(rootProject.file('verification/golden-harness/resources'))
+}
+
+def remapJarTaskType = tasks.named('remapJar').get().class
+tasks.register('remapGoldenHarnessJar', remapJarTaskType) {
+    group = 'voxelbridge/runtime/verification'
+    description = 'Remaps the local-only golden harness for a Fabric production client.'
+    dependsOn goldenHarnessJar
+    inputFile.set(goldenHarnessJar.flatMap { it.archiveFile })
+    archiveBaseName = "VoxelBridge-golden-harness-${runtimeMinecraft}"
+    archiveClassifier = 'fabric'
+    addNestedDependencies.set(false)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.configureEach { task ->
+    task.group = 'voxelbridge/runtime'
+}

@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 2,
+  "targets": [
+    {
+      "id": "fabric-1.20.1", "platform": "fabric", "minecraft": "1.20.1", "java": 17,
+      "projectPath": ":fabric:1.20.1:mod", "projectDir": "fabric/1.20.1/mod",
+      "javaSourceRoots": [
+        "fabric/1.20.1/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/1.20.1/src/main/java"
+      ],
+      "resourceRoots": ["fabric/1.20.1/src/main/resources"]
+    },
+    {
+      "id": "fabric-1.21.1", "platform": "fabric", "minecraft": "1.21.1", "java": 21,
+      "projectPath": ":fabric:1.21.1:mod", "projectDir": "fabric/1.21.1/mod",
+      "javaSourceRoots": [
+        "fabric/1.21.1/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.1/src/main/java"
+      ],
+      "resourceRoots": ["fabric/1.21.1/src/main/resources"]
+    },
+    {
+      "id": "fabric-1.21.4", "platform": "fabric", "minecraft": "1.21.4", "java": 21,
+      "projectPath": ":fabric:1.21.4:mod", "projectDir": "fabric/1.21.4/mod",
+      "javaSourceRoots": [
+        "fabric/1.21.4/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.1/src/main/java",
+        "runtime/minecraft/1.21.4/src/main/java"
+      ],
+      "resourceRoots": ["fabric/1.21.4/src/main/resources"]
+    },
+    {
+      "id": "fabric-1.21.8", "platform": "fabric", "minecraft": "1.21.8", "java": 21,
+      "projectPath": ":fabric:1.21.8:mod", "projectDir": "fabric/1.21.8/mod",
+      "javaSourceRoots": [
+        "fabric/1.21.8/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.1/src/main/java",
+        "runtime/minecraft/1.21.8/src/main/java"
+      ],
+      "resourceRoots": ["fabric/1.21.8/src/main/resources"]
+    },
+    {
+      "id": "fabric-1.21.11", "platform": "fabric", "minecraft": "1.21.11", "java": 21,
+      "projectPath": ":fabric:1.21.11:mod", "projectDir": "fabric/1.21.11/mod",
+      "javaSourceRoots": [
+        "fabric/1.21.11/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.11/src/main/java"
+      ],
+      "resourceRoots": ["fabric/1.21.11/src/main/resources"]
+    },
+    {
+      "id": "neoforge-1.21.1", "platform": "neoforge", "minecraft": "1.21.1", "java": 21,
+      "projectPath": ":neoforge:1.21.1:mod", "projectDir": "neoforge/1.21.1/mod",
+      "javaSourceRoots": [
+        "neoforge/1.21.1/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.1/src/main/java"
+      ],
+      "resourceRoots": [
+        "neoforge/1.21.1/src/main/resources",
+        "neoforge/1.21.1/src/generated/resources",
+        "core/src/main/resources"
+      ]
+    },
+    {
+      "id": "neoforge-1.21.4", "platform": "neoforge", "minecraft": "1.21.4", "java": 21,
+      "projectPath": ":neoforge:1.21.4:mod", "projectDir": "neoforge/1.21.4/mod",
+      "javaSourceRoots": [
+        "neoforge/1.21.4/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.1/src/main/java",
+        "runtime/minecraft/1.21.4/src/main/java"
+      ],
+      "resourceRoots": [
+        "neoforge/1.21.4/src/main/resources",
+        "neoforge/1.21.4/src/generated/resources",
+        "core/src/main/resources"
+      ]
+    },
+    {
+      "id": "neoforge-1.21.8", "platform": "neoforge", "minecraft": "1.21.8", "java": 21,
+      "projectPath": ":neoforge:1.21.8:mod", "projectDir": "neoforge/1.21.8/mod",
+      "javaSourceRoots": [
+        "neoforge/1.21.8/src/main/java",
+        "neoforge/shared/1.21.8-1.21.11/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.20.1-1.21.8/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.1/src/main/java",
+        "runtime/minecraft/1.21.8/src/main/java"
+      ],
+      "resourceRoots": [
+        "neoforge/1.21.8/src/main/resources",
+        "neoforge/1.21.8/src/generated/resources",
+        "core/src/main/resources"
+      ]
+    },
+    {
+      "id": "neoforge-1.21.11", "platform": "neoforge", "minecraft": "1.21.11", "java": 21,
+      "projectPath": ":neoforge:1.21.11:mod", "projectDir": "neoforge/1.21.11/mod",
+      "javaSourceRoots": [
+        "neoforge/1.21.11/src/main/java",
+        "neoforge/shared/1.21.8-1.21.11/src/main/java",
+        "runtime/minecraft/shared/all/src/main/java",
+        "runtime/minecraft/shared/1.21.1-1.21.11/src/main/java",
+        "runtime/minecraft/1.21.11/src/main/java"
+      ],
+      "resourceRoots": [
+        "neoforge/1.21.11/src/main/resources",
+        "neoforge/1.21.8/src/main/resources",
+        "core/src/main/resources"
+      ]
+    }
+  ]
+}

@@ -24,25 +24,6 @@ final class UVRemapper {
 
     private UVRemapper() {}
 
-    /**
-     * Remaps UV coordinates
-     * @param geometryBin geometry.bin path (for reading spriteId)
-     * @param uvrawBin uvraw.bin path
-     * @param finaluvBin output finaluv.bin path
-     * @param spriteIndex sprite index
-     * @param state export state
-     */
-    static void remapUVs(
-        Path geometryBin,
-        Path uvrawBin,
-        Path finaluvBin,
-        SpriteIndex spriteIndex,
-        ExportState state,
-        DoubleConsumer progressCallback
-    ) throws IOException {
-        remapUVs(geometryBin, uvrawBin, finaluvBin, spriteIndex, state, ExportOptions.fromRuntimeConfig(), progressCallback);
-    }
-
     static void remapUVs(
         Path geometryBin,
         Path uvrawBin,

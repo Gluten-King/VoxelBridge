@@ -4,29 +4,17 @@ import com.voxelbridge.core.export.ExportState;
 import com.voxelbridge.core.ir.*;
 import com.voxelbridge.core.util.color.ColorMode;
 import com.voxelbridge.core.scene.SceneWriteRequest;
-import com.voxelbridge.export.texture.ColorMapManager;
 import com.voxelbridge.export.texture.ExportOptions;
-import com.voxelbridge.export.texture.UvMapper;
 import com.voxelbridge.util.debug.LogModule;
 import com.voxelbridge.util.debug.VoxelBridgeLogger;
 import de.javagl.jgltf.impl.v2.*;
-import de.javagl.jgltf.model.io.GltfAsset;
-import de.javagl.jgltf.model.io.GltfAssetWriter;
-import de.javagl.jgltf.model.io.v2.GltfAssetV2;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Streaming geometry processing pipeline (refactored)
@@ -39,6 +27,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
     private final ExportState state;
     private final Path outputDir;
     private final TextureRegistry textureRegistry;
+    private final GltfMaterialWriter materialWriter;
+    private final GltfPrimitiveAssembler primitiveAssembler;
     private final ProgressReporter progressReporter;
     private final ExportOptions options;
     private static final int BYTES_PER_QUAD_GEOMETRY = 140;
@@ -46,55 +36,9 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
 
     // Streaming writer
     private final StreamingGeometryWriter streamingWriter;
+    private final GltfBinarySpool binarySpool;
     private final SpriteIndex spriteIndex;
     private final GeometryIndex geometryIndex;
-
-    // Thread communication
-    private static final QuadBatch POISON_PILL = new QuadBatch(null, null, null, 0, null, null, null, null, null, null);
-    // OPTIMIZATION: Increased queue capacity 4x to reduce sampling thread blocking
-    // Large scenes with many quads benefit from larger producer-consumer buffer
-    // Changed to Object to support both single QuadBatch and BulkQuadBatch
-    private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(4096); // Capacity can be lower since items are now batches
-    private final AtomicBoolean writerStarted = new AtomicBoolean(false);
-    private final AtomicReference<Throwable> writerFailure = new AtomicReference<>();
-    private Thread writerThread;
-
-    // Temporary quad data structure (for queue)
-    private record QuadBatch(
-        String materialGroupKey,
-        String spriteKey,
-        String overlaySpriteKey,
-        int quadFlags,
-        float[] positions,
-        float[] uv0,
-        float[] uv1,
-        float[] normal,
-        float[] colors,
-        String bucketKey
-    ) {}
-
-    // OPTIMIZATION: Bulk batch for efficient transfer from ChunkDeduplicator
-    private record BulkQuadBatch(
-        String bucketKey,
-        String materialGroupKey,
-        // Arrays of arrays/data
-        List<String> spriteKeys,
-        List<String> overlaySpriteKeys,
-        float[] flatPositions,
-        float[] flatUv0s,
-        float[] flatUv1s,
-        float[] flatNormals,
-        float[] flatColors,
-        int[] quadFlags
-    ) {}
-
-    public GltfSceneBuilder(ExportState state, Path outDir) throws IOException {
-        this(state, outDir, ProgressReporter.NOOP, ExportOptions.fromRuntimeConfig());
-    }
-
-    public GltfSceneBuilder(ExportState state, Path outDir, ProgressReporter progressReporter) throws IOException {
-        this(state, outDir, progressReporter, ExportOptions.fromRuntimeConfig());
-    }
 
     public GltfSceneBuilder(ExportState state,
                             Path outDir,
@@ -104,16 +48,21 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         this.outputDir = outDir;
         this.textureRegistry = new TextureRegistry(state);
         this.progressReporter = progressReporter != null ? progressReporter : ProgressReporter.NOOP;
-        this.options = options != null ? options : ExportOptions.fromRuntimeConfig();
+        this.options = Objects.requireNonNull(options, "options");
+        this.materialWriter = new GltfMaterialWriter(state, textureRegistry, this.options);
 
         // Create streaming indices
         this.spriteIndex = new SpriteIndex();
         this.geometryIndex = new GeometryIndex();
+        this.primitiveAssembler = new GltfPrimitiveAssembler(
+            state, this.options, spriteIndex, materialWriter);
 
         // Create streaming writer (Single Temp File)
         Path geometryBin = outDir.resolve("geometry.bin");
         // Pass null for unused UV path (signature kept for compatibility if needed, but we ignore it)
         this.streamingWriter = new StreamingGeometryWriter(geometryBin, null, spriteIndex, geometryIndex);
+        this.binarySpool = new GltfBinarySpool(
+            state, this.options, streamingWriter, this::resolveBucketKey);
 
         VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Initialized streaming geometry pipeline (Paged)");
     }
@@ -135,15 +84,12 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         
         if (materialGroupKey == null || spriteKeys.isEmpty()) return;
         
-        startWriterThread();
-
-        enqueue(new BulkQuadBatch(
-            null, // Bucket key resolved per quad in writer
+        binarySpool.addBatch(
             materialGroupKey,
             spriteKeys, overlaySpriteKeys,
             flatPositions, flatUv0s, flatUv1s, flatNormals, flatColors,
             quadFlags
-        ));
+        );
     }
 
     @Override
@@ -163,27 +109,9 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         int quadFlags = IrFlags.encode(renderLayer, tintMode, doubleSided, emissive);
         String bucketKey = resolveBucketKey(materialKey, spriteKey);
 
-        // Colormap mode: all quads must have TEXCOORD_1; non-tinted points to reserved white slot
-        if (options.colorMode() != null && options.colorMode().usesColormap()) {
-            if (uv1 == null || uv1.length < 8) {
-                float[] lut = ColorMapManager.remapColorUV(state, 0xFFFFFFFF);
-                float u0 = lut[0], v0 = lut[1], u1v = lut[2], v1v = lut[3];
-                uv1 = new float[]{
-                    u0, v0,
-                    u1v, v0,
-                    u1v, v1v,
-                    u0, v1v
-                };
-            }
-        }
-
-        // Start writer thread
-        startWriterThread();
-
-        enqueue(new QuadBatch(
-            materialKey, spriteKey, overlaySpriteKey, quadFlags,
-            positions, uv0, uv1, normal, colors, bucketKey
-        ));
+        binarySpool.addQuad(
+            bucketKey, spriteKey, overlaySpriteKey, quadFlags,
+            positions, uv0, uv1, normal, colors);
     }
 
     public Path write(SceneWriteRequest request) throws IOException {
@@ -194,18 +122,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Stage 1/3: Finalizing sampling...");
             long tFinalizeSampling = VoxelBridgeLogger.now();
 
-            try {
-                enqueue(POISON_PILL);
-                if (writerThread != null) {
-                    writerThread.join();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Export interrupted during writer thread join", e);
-            }
-            throwIfWriterFailed();
-
-            streamingWriter.finalizeWrite();
+            binarySpool.finish();
 
             long totalQuads = spriteIndex.getTotalQuadCount();
             VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Sampling complete. Total quads: %d", totalQuads));
@@ -256,224 +173,6 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         }
     }
 
-    private void startWriterThread() {
-        if (writerStarted.getAndSet(true)) return;
-
-        writerThread = new Thread(() -> {
-            try {
-                while (true) {
-                    Object item = queue.take();
-                    if (item == POISON_PILL) break;
-
-                    if (item instanceof QuadBatch batch) {
-                        // 
-                        streamingWriter.writeQuad(
-                            batch.bucketKey,
-                            batch.spriteKey,
-                            batch.overlaySpriteKey,
-                            batch.quadFlags,
-                            batch.positions,
-                            batch.uv0,
-                            batch.uv1,
-                            batch.normal,
-                            batch.colors
-                        );
-                    } else if (item instanceof BulkQuadBatch bulk) {
-                        // Iterate and write bulk items
-                        int count = bulk.spriteKeys().size();
-                        
-                        // Pre-calculate default UV1 for ColorMap mode if needed
-                        float[] defaultUv1 = null;
-                        if (options.colorMode() != null && options.colorMode().usesColormap()) {
-                            if (bulk.flatUv1s() == null || bulk.flatUv1s().length == 0) {
-                                float[] lut = ColorMapManager.remapColorUV(state, 0xFFFFFFFF);
-                                float u0 = lut[0], v0 = lut[1], u1v = lut[2], v1v = lut[3];
-                                defaultUv1 = new float[]{
-                                    u0, v0,
-                                    u1v, v0,
-                                    u1v, v1v,
-                                    u0, v1v
-                                };
-                            }
-                        }
-
-                        int[] flags = bulk.quadFlags();
-                        for (int i = 0; i < count; i++) {
-                            String spriteKey = bulk.spriteKeys().get(i);
-                            String bucketKey = resolveBucketKey(bulk.materialGroupKey(), spriteKey);
-                            
-                            // Determine UV1 source and offset
-                            float[] currentUv1 = bulk.flatUv1s();
-                            int currentUv1Offset = i * 8;
-                            
-                            if (defaultUv1 != null) {
-                                currentUv1 = defaultUv1;
-                                currentUv1Offset = 0;
-                            } else if (currentUv1 == null) {
-                                // Safe fallback if no UV1 provided and not in ColorMap mode (StreamingWriter handles null/bounds)
-                                currentUv1Offset = 0;
-                            }
-
-                            int quadFlags = (flags != null && i < flags.length) ? flags[i] : 0;
-                            streamingWriter.writeQuadFlat(
-                                bucketKey,
-                                spriteKey,
-                                bulk.overlaySpriteKeys().get(i),
-                                quadFlags,
-                                bulk.flatPositions(), i * 12,
-                                bulk.flatUv0s(), i * 8,
-                                currentUv1, currentUv1Offset,
-                                bulk.flatNormals(), i * 3,
-                                bulk.flatColors(), i * 16
-                            );
-                        }
-                    }
-                }
-            } catch (Throwable e) {
-                writerFailure.compareAndSet(null, e);
-                VoxelBridgeLogger.error(LogModule.GLTF, "[GltfBuilder][ERROR] Writer thread failed: " + e.getMessage());
-                e.printStackTrace();
-            }
-        }, "VoxelBridge-StreamingWriter");
-        writerThread.start();
-    }
-
-    private void enqueue(Object item) {
-        while (true) {
-            Throwable failure = writerFailure.get();
-            if (failure != null) {
-                throw new IllegalStateException("glTF writer thread failed", failure);
-            }
-            try {
-                if (queue.offer(item, 100, TimeUnit.MILLISECONDS)) {
-                    return;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while enqueueing glTF geometry", e);
-            }
-        }
-    }
-
-    private void throwIfWriterFailed() throws IOException {
-        Throwable failure = writerFailure.get();
-        if (failure != null) {
-            throw new IOException("glTF writer thread failed", failure);
-        }
-    }
-
-    /**
-     * Efficiently reads large files using memory mapping.
-     * Splits file into 1GB segments to bypass integer indexing limits and manage memory better.
-     */
-    private static final class SegmentedMappedReader implements AutoCloseable {
-        private static final long SEGMENT_SIZE = (long) 1024 * 1024 * 1024; // 1GB
-        private final List<java.nio.MappedByteBuffer> segments = new ArrayList<>();
-        private final long fileSize;
-
-        public SegmentedMappedReader(FileChannel channel) throws IOException {
-            this.fileSize = channel.size();
-            long position = 0;
-            while (position < fileSize) {
-                long remaining = fileSize - position;
-                long size = Math.min(SEGMENT_SIZE, remaining);
-                segments.add(channel.map(FileChannel.MapMode.READ_ONLY, position, size));
-                position += size;
-            }
-        }
-
-        /**
-         * Reads data from the mapped file into the destination buffer.
-         * Handles cross-segment reads seamlessly.
-         */
-        public void read(long offset, ByteBuffer dst) {
-            int remaining = dst.remaining();
-            long currentOffset = offset;
-            
-            while (remaining > 0) {
-                int segmentIndex = (int) (currentOffset / SEGMENT_SIZE);
-                long offsetInSegment = currentOffset % SEGMENT_SIZE;
-                
-                if (segmentIndex >= segments.size()) {
-                    throw new IndexOutOfBoundsException("Read beyond file size: " + currentOffset);
-                }
-
-                java.nio.MappedByteBuffer segment = segments.get(segmentIndex);
-                // Duplicate to allow thread-safe access (though we use it single-threaded here)
-                // and independent position tracking.
-                ByteBuffer view = segment.duplicate();
-                view.position((int) offsetInSegment);
-                
-                int availableInSegment = (int) (SEGMENT_SIZE - offsetInSegment);
-                // Last segment might be smaller
-                if (segmentIndex == segments.size() - 1) {
-                    availableInSegment = (int) (fileSize % SEGMENT_SIZE);
-                    if (availableInSegment == 0 && fileSize > 0) availableInSegment = (int) SEGMENT_SIZE; // Full last segment
-                    availableInSegment -= offsetInSegment;
-                }
-
-                int toRead = Math.min(remaining, availableInSegment);
-                
-                // Limit view to what we want to read to avoid buffer overflows
-                int originalLimit = view.limit();
-                view.limit(view.position() + toRead);
-                
-                dst.put(view);
-                
-                currentOffset += toRead;
-                remaining -= toRead;
-            }
-        }
-
-        @Override
-        public void close() {
-            for (java.nio.MappedByteBuffer buffer : segments) {
-                clean(buffer);
-            }
-            segments.clear();
-        }
-
-        /**
-         * Reflective cleaner to work around mapped file locking on Windows.
-         * Compatible with Java 8 through 21+.
-         */
-        private static void clean(java.nio.MappedByteBuffer buffer) {
-            if (buffer == null) return;
-            try {
-                // Java 9+ approach (jdk.internal.ref.Cleaner)
-                // Use reflection to avoid compile-time dependency issues
-                Class<?> unsafeClass;
-                try {
-                    unsafeClass = Class.forName("sun.misc.Unsafe");
-                } catch (Exception e) {
-                    // Try jdk.internal.misc.Unsafe for newer JDKs if sun.misc is hidden
-                    return; 
-                }
-                
-                java.lang.reflect.Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
-                theUnsafe.setAccessible(true);
-                Object unsafe = theUnsafe.get(null);
-                
-                java.lang.reflect.Method invokeCleaner = unsafeClass.getMethod("invokeCleaner", java.nio.ByteBuffer.class);
-                invokeCleaner.invoke(unsafe, buffer);
-            } catch (Exception e) {
-                // Fallback for Java 8 or if Unsafe is inaccessible
-                try {
-                    java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
-                    cleanerMethod.setAccessible(true);
-                    Object cleaner = cleanerMethod.invoke(buffer);
-                    if (cleaner != null) {
-                        java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
-                        cleanMethod.setAccessible(true);
-                        cleanMethod.invoke(cleaner);
-                    }
-                } catch (Exception ignored) {
-                    // Best effort
-                }
-            }
-        }
-    }
-
     /**
      * Assembles the final glTF asset by reading binary data and creating accessors/views.
      */
@@ -482,11 +181,8 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         VoxelBridgeLogger.memory("before_gltf_assembly");
 
         try {
-            GlTF gltf = new GlTF();
-            Asset asset = new Asset();
-            asset.setVersion("2.0");
-            asset.setGenerator("VoxelBridge");
-            gltf.setAsset(asset);
+            GlTF gltf = GltfDocumentAssembler.createDocument();
+            GltfAccessorWriter accessorWriter = new GltfAccessorWriter(gltf);
 
         Path binPath = request.outputDir().resolve(request.baseName() + ".bin");
         Path uvBinPath = request.outputDir().resolve(request.baseName() + ".uv.bin");
@@ -498,16 +194,6 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
         // Make texture/image lists thread-safe; material assembly runs in parallel
         List<Texture> textures = Collections.synchronizedList(new ArrayList<>());
             List<Image> images = Collections.synchronizedList(new ArrayList<>());
-            List<Sampler> samplers = new ArrayList<>();
-
-            Sampler sampler = new Sampler();
-            sampler.setMagFilter(9728);
-            sampler.setMinFilter(9728);
-            sampler.setWrapS(10497);
-            sampler.setWrapT(10497);
-            samplers.add(sampler);
-            gltf.setSamplers(samplers);
-
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Registering colormap textures...");
             List<Integer> colorMapIndices = registerColorMapTextures(request.outputDir(), textures, images, 0);
             VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Colormap textures registered: " + colorMapIndices.size());
@@ -521,7 +207,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] geometry.bin size: " + geometryChannel.size() + " bytes");
 
                 // Initialize Memory Mapped Reader
-                try (SegmentedMappedReader mappedReader = new SegmentedMappedReader(geometryChannel)) {
+                try (BinarySpoolReader mappedReader = new BinarySpoolReader(geometryChannel)) {
                     
                     // Process materials sequentially
                     List<String> materialKeys = geometryIndex.getAllMaterialKeys();
@@ -540,10 +226,10 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                             }
 
                             // Assemble primitives for this material
-                            assembleMaterialPrimitive(
+                            primitiveAssembler.assemble(
                                 matKey, matChunk,
                                 mappedReader, // Pass mapped reader instead of channel
-                                gltf, chunk, uvChunk,
+                                accessorWriter, chunk, uvChunk,
                                 materials, meshes, nodes, textures, images, colorMapIndices
                             );
 
@@ -568,18 +254,7 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] All materials processed successfully");
 
                 // Finalize glTF
-                Scene scene = new Scene();
-                List<Integer> nodeIndices = new ArrayList<>();
-                for (int i = 0; i < nodes.size(); i++) nodeIndices.add(i);
-                scene.setNodes(nodeIndices);
-                gltf.addScenes(scene);
-                gltf.setScene(0);
-
-                gltf.setMeshes(meshes);
-                gltf.setMaterials(materials);
-                gltf.setNodes(nodes);
-                gltf.setTextures(textures);
-                gltf.setImages(images);
+                GltfDocumentAssembler.attachScene(gltf, materials, meshes, nodes, textures, images);
 
                 // Close binary chunks to flush headers
                 chunk.close();
@@ -613,11 +288,9 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
                 }
 
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Writing glTF file...");
-                GltfAsset assetModel = new GltfAssetV2(gltf, null);
-                GltfAssetWriter writer = new GltfAssetWriter();
                 Path gltfPath = request.outputDir().resolve(request.baseName() + ".gltf");
                 long tWriteGltf = VoxelBridgeLogger.now();
-                writer.writeJson(assetModel, gltfPath.toFile());
+                GltfDocumentAssembler.write(gltf, gltfPath);
                 VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] glTF file written successfully: " + gltfPath);
                 VoxelBridgeLogger.duration("gltf_write_json", VoxelBridgeLogger.elapsedSince(tWriteGltf));
 
@@ -655,416 +328,6 @@ public final class GltfSceneBuilder implements IrSink, IrBulkQuadSink {
             e.printStackTrace();
             throw new IOException("glTF assembly failed", e);
         }
-    }
-
-    /**
-     * Reads a material chunk and assembles glTF primitives.
-     */
-    private void assembleMaterialPrimitive(
-        String matKey,
-        GeometryIndex.MaterialChunk matChunk,
-        SegmentedMappedReader mappedReader,
-        GlTF gltf,
-        MultiBinaryChunk chunk,
-        MultiBinaryChunk uvChunk,
-        List<Material> materials,
-        List<Mesh> meshes,
-        List<Node> nodes,
-        List<Texture> textures,
-        List<Image> images,
-        List<Integer> colorMapIndices
-    ) throws IOException {
-        if (matChunk == null || matChunk.quadCount() == 0) return;
-
-        // Calculate buffer sizes
-        int totalQuadCount = matChunk.quadCount();
-        int maxVertexCount = totalQuadCount * 4;  // 4 verts per quad
-        int maxIndexCount = totalQuadCount * 6;   // 6 indices per quad
-
-        // OPTIMIZATION: Use primitive arrays instead of Lists to avoid boxing overhead
-        float[] posArray = new float[maxVertexCount * 3];
-        float[] uv0Array = new float[maxVertexCount * 2];
-        float[] uv1Array = new float[maxVertexCount * 2];
-        float[] colorArray = new float[maxVertexCount * 4];
-        int[] indexArray = new int[maxIndexCount];
-        
-        int posIdx = 0;
-        int uv0Idx = 0;
-        int uv1Idx = 0;
-        int colIdx = 0;
-        int idxIdx = 0;
-        
-        boolean doubleSided = false;
-
-        // 64KB Page Buffer (Interleaved Data)
-        // Format: [Hash(4), Sprite(4), Overlay(4), Flags(4), Pos(48), Norm(12), Color(64), UV0(32), UV1(32)] = 204 bytes
-        ByteBuffer pageBuffer = ByteBuffer.allocateDirect(64 * 1024).order(ByteOrder.LITTLE_ENDIAN);
-        
-        int materialHashValue = matKey.hashCode();
-        int skippedMismatches = 0;
-        int currentVertexBase = 0;
-        boolean atlasEnabled = com.voxelbridge.export.texture.UvRemapUtil.isAtlasEnabled(options);
-        boolean isColormapMode = com.voxelbridge.export.texture.UvRemapUtil.isColormapMode(options);
-
-        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Reading material %s (hash: %d) with %d pages",
-            matKey, materialHashValue, matChunk.pages().size()));
-
-        for (GeometryIndex.PageInfo page : matChunk.pages()) {
-            long pageOffset = page.byteOffset();
-            int quadsInPage = page.quadCount();
-            
-            // Seek and read page from MAPPED READER
-            pageBuffer.clear();
-            pageBuffer.limit(quadsInPage * 204);
-            mappedReader.read(pageOffset, pageBuffer);
-            pageBuffer.flip();
-            
-            for (int i = 0; i < quadsInPage; i++) {
-                // Read Interleaved Data
-                int materialHash = pageBuffer.getInt();
-                int spriteId = pageBuffer.getInt();
-                int overlaySpriteId = pageBuffer.getInt();
-                int flags = pageBuffer.getInt();
-                
-                // Validate Hash
-                if (materialHash != materialHashValue) {
-                    // Skip remaining 188 bytes of this quad
-                    pageBuffer.position(pageBuffer.position() + 188);
-                    skippedMismatches++;
-                    continue;
-                }
-                
-                // Read Geometry
-                // Pos (12 floats)
-                for (int j=0; j<12; j++) posArray[posIdx++] = pageBuffer.getFloat();
-                
-                // Normal (3 floats) - Skipped as we don't currently write normals to glTF accessors
-                pageBuffer.position(pageBuffer.position() + 12); 
-                
-                // Color (16 floats)
-                for (int j=0; j<16; j++) colorArray[colIdx++] = pageBuffer.getFloat();
-                
-                // Read UVs (8 floats each)
-                float[] qUv0 = new float[8];
-                float[] qUv1 = new float[8];
-                for (int j=0; j<8; j++) qUv0[j] = pageBuffer.getFloat();
-                for (int j=0; j<8; j++) qUv1[j] = pageBuffer.getFloat();
-                
-                // --- ON-THE-FLY UV REMAP ---
-                if (atlasEnabled) {
-                    String spriteKey = spriteIndex.getKey(spriteId);
-                    String overlayKey = overlaySpriteId >= 0 ? spriteIndex.getKey(overlaySpriteId) : null;
-                    
-                    // Remap UV0
-                    if (com.voxelbridge.export.texture.UvRemapUtil.shouldRemap(state, spriteKey, options)) {
-                        for (int v = 0; v < 4; v++) {
-                            float[] remapped = UvMapper.remapUv(state, spriteKey, qUv0[v * 2], qUv0[v * 2 + 1], options);
-                            qUv0[v * 2] = remapped[0];
-                            qUv0[v * 2 + 1] = remapped[1];
-                        }
-                    }
-                    
-                    // Remap UV1 (Overlay)
-                    if (!isColormapMode && com.voxelbridge.export.texture.UvRemapUtil.shouldRemap(state, overlayKey, options)) {
-                         boolean hasUV1 = false;
-                         for (float f : qUv1) if (f != 0) { hasUV1 = true; break; }
-                         if (hasUV1) {
-                             for (int v = 0; v < 4; v++) {
-                                 float[] remapped = UvMapper.remapUv(state, overlayKey, qUv1[v * 2], qUv1[v * 2 + 1], options);
-                                 qUv1[v * 2] = remapped[0];
-                                 qUv1[v * 2 + 1] = remapped[1];
-                             }
-                         }
-                    }
-                }
-                
-                // Store UVs
-                for (float f : qUv0) uv0Array[uv0Idx++] = f;
-                for (float f : qUv1) uv1Array[uv1Idx++] = f;
-                
-                // Indices
-                indexArray[idxIdx++] = currentVertexBase;
-                indexArray[idxIdx++] = currentVertexBase + 1;
-                indexArray[idxIdx++] = currentVertexBase + 2;
-                indexArray[idxIdx++] = currentVertexBase;
-                indexArray[idxIdx++] = currentVertexBase + 2;
-                indexArray[idxIdx++] = currentVertexBase + 3;
-                
-                currentVertexBase += 4;
-                
-                if (IrFlags.isDoubleSided(flags)) doubleSided = true;
-            }
-        }
-
-        if (skippedMismatches > 0) {
-            VoxelBridgeLogger.warn(LogModule.GLTF, String.format("[GltfBuilder][WARN] Skipped %d quads for material %s due to hash mismatch", skippedMismatches, matKey));
-        }
-
-        // Validate data validity
-        if (posIdx == 0 || idxIdx == 0) {
-            VoxelBridgeLogger.info(LogModule.GLTF, "[GltfBuilder] Skipping material " + matKey + " (no valid geometry)");
-            return;
-        }
-
-        // Handle skipped quads (resize arrays if necessary)
-        if (posIdx < posArray.length) {
-             posArray = Arrays.copyOf(posArray, posIdx);
-             uv0Array = Arrays.copyOf(uv0Array, uv0Idx);
-             uv1Array = Arrays.copyOf(uv1Array, uv1Idx);
-             colorArray = Arrays.copyOf(colorArray, colIdx);
-             indexArray = Arrays.copyOf(indexArray, idxIdx);
-        }
-
-        int finalVertexCount = posArray.length / 3;
-        int finalIndexCount = indexArray.length;
-
-        // Log stats
-        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s: read %d quads from %d pages, got vertices=%d, indices=%d",
-            matKey, (finalVertexCount / 4), matChunk.pages().size(), finalVertexCount, finalIndexCount));
-        VoxelBridgeLogger.info(LogModule.GLTF, String.format("[GltfBuilder] Material %s hash: %d, skipped mismatches: %d",
-            matKey, materialHashValue, skippedMismatches));
-
-        // Calculate bounds
-        float[] posMin = computeMin(posArray, 3);
-        float[] posMax = computeMax(posArray, 3);
-
-        // Validate bounds for NaN
-        boolean hasNaN = false;
-        for (int i = 0; i < posMin.length; i++) {
-            if (Float.isNaN(posMin[i]) || Float.isNaN(posMax[i])) {
-                hasNaN = true;
-                VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] NaN detected in bounds for material %s: min[%d]=%f, max[%d]=%f",
-                    matKey, i, posMin[i], i, posMax[i]));
-            }
-        }
-        if (hasNaN) {
-            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Material %s has NaN in position bounds. First 10 positions: %s",
-                matKey, java.util.Arrays.toString(java.util.Arrays.copyOf(posArray, Math.min(10, posArray.length)))));
-            // Skip this material to avoid corrupting the glTF
-            return;
-        }
-
-        // glTF buffers
-        MultiBinaryChunk.Slice posSlice = chunk.writeFloatArray(posArray, posArray.length);
-        int posView = addView(gltf, posSlice.bufferIndex(), posSlice.byteOffset(), posArray.length * 4, 34962);
-        int posAcc = addAccessor(gltf, posView, finalVertexCount, "VEC3", 5126, posMin, posMax);
-
-        // Check for potential integer overflow
-        if (posSlice.byteOffset() < 0) {
-            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: position byteOffset=%d",
-                matKey, posSlice.byteOffset()));
-        }
-
-        MultiBinaryChunk.Slice uv0Slice = uvChunk.writeFloatArray(uv0Array, uv0Array.length);
-        int uv0View = addView(gltf, uv0Slice.bufferIndex(), uv0Slice.byteOffset(), uv0Array.length * 4, 34962);
-        int uv0Acc = addAccessor(gltf, uv0View, finalVertexCount, "VEC2", 5126, null, null);
-
-        if (uv0Slice.byteOffset() < 0) {
-            VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] Integer overflow detected for material %s: uv0 byteOffset=%d",
-                matKey, uv0Slice.byteOffset()));
-        }
-
-        int uv1Acc = -1;
-        boolean hasUV1 = false;
-        for (float f : uv1Array) {
-            if (f != 0) {
-                hasUV1 = true;
-                break;
-            }
-        }
-        if (hasUV1) {
-            MultiBinaryChunk.Slice uv1Slice = uvChunk.writeFloatArray(uv1Array, uv1Array.length);
-            int uv1View = addView(gltf, uv1Slice.bufferIndex(), uv1Slice.byteOffset(), uv1Array.length * 4, 34962);
-            uv1Acc = addAccessor(gltf, uv1View, finalVertexCount, "VEC2", 5126, null, null);
-        }
-
-        MultiBinaryChunk.Slice colorSlice = chunk.writeFloatArray(colorArray, colorArray.length);
-        int colorView = addView(gltf, colorSlice.bufferIndex(), colorSlice.byteOffset(), colorArray.length * 4, 34962);
-        int colorAcc = addAccessor(gltf, colorView, finalVertexCount, "VEC4", 5126, null, null);
-
-        MultiBinaryChunk.Slice idxSlice = chunk.writeIntArray(indexArray, indexArray.length);
-        int idxView = addView(gltf, idxSlice.bufferIndex(), idxSlice.byteOffset(), indexArray.length * 4, 34963);
-        int idxAcc = addAccessor(gltf, idxView, finalIndexCount, "SCALAR", 5125, null, null);
-
-        // material
-        String sampleSprite = pickPrimarySprite(matKey, matChunk.usedSprites());
-        if (sampleSprite == null || !state.getMaterialPaths().containsKey(sampleSprite)) {
-            if (state.getMaterialPaths().containsKey("voxelbridge:transparent")) {
-                VoxelBridgeLogger.warn(LogModule.TEXTURE, String.format(
-                    "[TextureRegistry][MaterialSprites][WARN] matKey=%s picked invalid sprite=%s, fallback to voxelbridge:transparent",
-                    matKey, sampleSprite));
-                sampleSprite = "voxelbridge:transparent";
-            } else {
-                throw new IOException("No valid texture path for material " + matKey + " (picked=" + sampleSprite + ")");
-            }
-        }
-        VoxelBridgeLogger.info(LogModule.TEXTURE, String.format(
-            "[TextureRegistry][MaterialSprites] matKey=%s sprites=%s picked=%s",
-            matKey, matChunk.usedSprites(), sampleSprite));
-        int textureIndex = textureRegistry.ensureSpriteTexture(sampleSprite, textures, images);
-
-        Material material = new Material();
-        material.setName(matKey);
-        MaterialPbrMetallicRoughness pbr = new MaterialPbrMetallicRoughness();
-        TextureInfo texInfo = new TextureInfo();
-        texInfo.setIndex(textureIndex);
-        pbr.setBaseColorTexture(texInfo);
-        pbr.setMetallicFactor(0.0f);
-        pbr.setRoughnessFactor(1.0f);
-        material.setPbrMetallicRoughness(pbr);
-        // Keep ordinary glTF materials deliberately minimal. Runtime glyph
-        // pages are the one exception: their alpha channel defines the glyph
-        // shape, so they use standard alpha blending (never alpha clipping).
-        boolean glyphMaterial = MaterialSemantic.isGlyph(matKey);
-        material.setAlphaMode(glyphMaterial ? "BLEND" : "OPAQUE");
-        boolean forceDoubleSided = com.voxelbridge.config.ExportRuntimeConfig.isExportDoubleSidedEnabled();
-        material.setDoubleSided(forceDoubleSided || doubleSided);
-
-        Map<String, Object> extras = new HashMap<>();
-        extras.put("voxelbridge:emissive", matKey != null && matKey.contains("_emissive"));
-        if (glyphMaterial) {
-            extras.put("voxelbridge:glyph", true);
-        }
-        if (!colorMapIndices.isEmpty()) {
-            extras.put("voxelbridge:colormapTextures", colorMapIndices);
-            extras.put("voxelbridge:colormapUV", 1);
-        }
-        if (!extras.isEmpty()) material.setExtras(extras);
-        materials.add(material);
-        int matIndex = materials.size() - 1;
-
-        // mesh
-        MeshPrimitive prim = new MeshPrimitive();
-        Map<String, Integer> attrs = new LinkedHashMap<>();
-        attrs.put("POSITION", posAcc);
-        attrs.put("TEXCOORD_0", uv0Acc);
-        if (hasUV1) {
-            attrs.put("TEXCOORD_1", uv1Acc);
-        }
-        attrs.put("COLOR_0", colorAcc);
-        prim.setAttributes(attrs);
-        prim.setIndices(idxAcc);
-        prim.setMaterial(matIndex);
-        prim.setMode(4);
-
-        Mesh mesh = new Mesh();
-        mesh.setName(matKey);
-        mesh.setPrimitives(Collections.singletonList(prim));
-        meshes.add(mesh);
-
-        Node node = new Node();
-        node.setName(matKey);
-        node.setMesh(meshes.size() - 1);
-        nodes.add(node);
-    }
-
-    /**
-     * Pick a stable primary sprite for a material: prefer entity:* sprites, otherwise first sorted.
-     */
-    private String pickPrimarySprite(String matKey, Set<String> usedSprites) {
-        if (usedSprites == null || usedSprites.isEmpty()) {
-            return null;
-        }
-        List<String> withMaterialPath = new ArrayList<>();
-        for (String s : usedSprites) {
-            if (s != null && state.getMaterialPaths().containsKey(s)) {
-                withMaterialPath.add(s);
-            }
-        }
-        List<String> candidates = withMaterialPath.isEmpty()
-            ? new ArrayList<>(usedSprites)
-            : withMaterialPath;
-
-        if (matKey != null && matKey.endsWith("_animated")) {
-            for (String s : candidates) {
-                if (matKey.equals(com.voxelbridge.export.texture.TexturePathResolver.animationBaseName(s))) {
-                    return s;
-                }
-            }
-        }
-        List<String> list = new ArrayList<>(candidates);
-        list.remove("voxelbridge:transparent");
-        if (list.isEmpty()) {
-            list = new ArrayList<>(candidates);
-        }
-        Collections.sort(list);
-        //  item_frame/glow_item_frame ?sprite
-        for (String s : list) {
-            if (s.contains("item_frame")) {
-                return s;
-            }
-        }
-        for (String s : list) {
-            if (s.startsWith("entity:")) {
-                return s;
-            }
-        }
-        return list.get(0);
-    }
-
-    private int addView(GlTF gltf, int bufferIndex, int byteOffset, int byteLength, int target) {
-        BufferView view = new BufferView();
-        view.setBuffer(bufferIndex);
-        view.setByteOffset(byteOffset);
-        view.setByteLength(byteLength);
-        view.setTarget(target);
-
-        // Validate bufferView doesn't exceed buffer bounds
-        List<de.javagl.jgltf.impl.v2.Buffer> buffers = gltf.getBuffers();
-        if (buffers != null && bufferIndex < buffers.size()) {
-            Integer bufferSize = buffers.get(bufferIndex).getByteLength();
-            // buffer.byteLength is only populated when the chunk is closed; skip validation while null
-            if (bufferSize != null) {
-                long viewEnd = (long) byteOffset + (long) byteLength;
-                if (viewEnd > bufferSize) {
-                    VoxelBridgeLogger.error(LogModule.GLTF, String.format("[GltfBuilder][ERROR] BufferView exceeds buffer bounds: buffer[%d] size=%d, view offset=%d, length=%d, end=%d",
-                        bufferIndex, bufferSize, byteOffset, byteLength, viewEnd));
-                }
-            }
-        }
-
-        gltf.addBufferViews(view);
-        return gltf.getBufferViews().size() - 1;
-    }
-
-    private int addAccessor(GlTF gltf, int bufferView, int count, String type, int componentType, float[] min, float[] max) {
-        Accessor accessor = new Accessor();
-        accessor.setBufferView(bufferView);
-        accessor.setComponentType(componentType);
-        accessor.setCount(count);
-        accessor.setType(type);
-        if (min != null) accessor.setMin(toNumberArray(min));
-        if (max != null) accessor.setMax(toNumberArray(max));
-        gltf.addAccessors(accessor);
-        return gltf.getAccessors().size() - 1;
-    }
-
-    private Number[] toNumberArray(float[] arr) {
-        Number[] num = new Number[arr.length];
-        for (int i = 0; i < arr.length; i++) num[i] = arr[i];
-        return num;
-    }
-
-    private float[] computeMin(float[] data, int stride) {
-        float[] min = new float[stride];
-        Arrays.fill(min, Float.MAX_VALUE);
-        for (int i = 0; i < data.length; i += stride) {
-            for (int j = 0; j < stride; j++) {
-                min[j] = Math.min(min[j], data[i + j]);
-            }
-        }
-        return min;
-    }
-
-    private float[] computeMax(float[] data, int stride) {
-        float[] max = new float[stride];
-        Arrays.fill(max, -Float.MAX_VALUE);
-        for (int i = 0; i < data.length; i += stride) {
-            for (int j = 0; j < stride; j++) {
-                max[j] = Math.max(max[j], data[i + j]);
-            }
-        }
-        return max;
     }
 
     private List<Integer> registerColorMapTextures(Path outDir, List<Texture> textures, List<Image> images, int samplerIndex) throws IOException {

@@ -15,8 +15,8 @@ ext {
     forgified_fabric_api_version = ""
 }
 
-evaluationDependsOn(':shared:common')
 evaluationDependsOn(':shared:core')
+evaluationDependsOn(':shared:pipeline')
 
 def activeMc = (project.findProperty('active_mc') ?: '1.21.11').toString()
 def platform = "neoforge"
@@ -105,53 +105,26 @@ def runtimeLibs = [
         "com.fasterxml.jackson.core:jackson-databind:${jacksonDatabindVersion}"
 ]
 
+def registeredTarget = gradle.ext.voxelBridgeTargetsByProject[project.path]
+if (registeredTarget == null) throw new GradleException("Target is not registered: ${project.path}")
+
 sourceSets {
     main {
-        java.srcDirs = [
-                rootProject.file("neoforge/1.21.11/src/main/java"),
-                rootProject.file("neoforge/1.21.8/src/main/java"),
-                rootProject.file("common/1.21.11/src/main/java"),
-                rootProject.file("core/src/main/java")
-        ]
-        resources.srcDirs = [
-                rootProject.file("neoforge/1.21.11/src/main/resources"),
-                rootProject.file("neoforge/1.21.8/src/main/resources"),
-                rootProject.file("common/src/main/resources"),
-                rootProject.file("core/src/main/resources")
-        ]
+        java.srcDirs = registeredTarget.javaSourceRoots
+            .findAll { !it.toString().startsWith('runtime/minecraft/') }
+            .collect { rootProject.file(it.toString()) }
+        resources.srcDirs = registeredTarget.resourceRoots.collect { rootProject.file(it.toString()) }
     }
 }
 
-def replacedPlatformSources = [
-        'com/voxelbridge/adapter/NeoForgeBlockEntityRenderBridge.java',
-        'com/voxelbridge/adapter/NeoForgeDynamicTextureReader.java',
-        'com/voxelbridge/adapter/NeoForgeEntityRenderBridge.java',
-        'com/voxelbridge/adapter/NeoForgePlatformModelHelper.java',
-        'com/voxelbridge/adapter/NeoForgePlatformRenderHelper.java',
-        'com/voxelbridge/adapter/NeoForgePlatformTextureHelper.java',
-        'com/voxelbridge/adapter/NeoForgeRenderAdapter.java',
-        'com/voxelbridge/client/SelectionRendererCompat.java',
-        'com/voxelbridge/client/SelectionRenderTypes.java',
-        'com/voxelbridge/export/exporter/entity/EntityTextureResolverCompat.java',
-        'com/voxelbridge/mixin/CompositeRenderTypeAccessor.java',
-        'com/voxelbridge/mixin/CompositeStateAccessor.java',
-        'com/voxelbridge/mixin/EmptyTextureStateShardAccessor.java',
-        'com/voxelbridge/mixin/SpriteContentsAccessor.java',
-        'com/voxelbridge/mixin/TextureAtlasAccessor.java'
-]
-
-tasks.named('compileJava') {
-    setSource(files(
-            fileTree(rootProject.file("neoforge/1.21.8/src/main/java")) {
-                replacedPlatformSources.each { exclude it }
-            },
-            fileTree(rootProject.file("neoforge/1.21.11/src/main/java")),
-            fileTree(rootProject.file("common/1.21.11/src/main/java")),
-            fileTree(rootProject.file("core/src/main/java"))
-    ))
-}
-
 dependencies {
+    implementation project(':shared:core')
+    implementation project(':shared:pipeline')
+    implementation project(path: ":runtime:minecraft:mc-${activeMc}", configuration: 'namedElements')
+    shaded project(':shared:core')
+    shaded project(':shared:pipeline')
+    shaded project(path: ":runtime:minecraft:mc-${activeMc}", configuration: 'namedElements')
+
     if (forgifiedFabricApiVersion) {
         implementation "org.sinytra.forgified-fabric-api:forgified-fabric-api:${forgifiedFabricApiVersion}"
     }
@@ -206,10 +179,6 @@ tasks.named('shadowJar') {
 
 tasks.named('assemble') { dependsOn tasks.shadowJar }
 tasks.named('jar') { enabled = false }
-
-tasks.named('clean') {
-    delete rootProject.file('common/build'), rootProject.file('core/build')
-}
 
 def taskGroupRoot = "voxelbridge/neoforge/mod"
 def groupForTask = { Task task ->
