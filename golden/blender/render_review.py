@@ -17,6 +17,11 @@ from pathlib import Path
 import bpy
 from mathutils import Vector
 
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+from voxelbridge_material_alpha import connect_base_color_alpha
+
 
 def arguments():
     values = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
@@ -233,6 +238,11 @@ def main():
         case_width = max(8.0, maximum.x - minimum.x + 6.0)
         imported_cases.append((item, root, imported, minimum, maximum))
         offset += case_width
+
+    alpha_stats = connect_base_color_alpha()
+    print(f"VoxelBridge Base Color alpha links: {json.dumps(alpha_stats, sort_keys=True)}")
+    for key, value in alpha_stats.items():
+        scene[f"voxelbridge_alpha_{key}"] = value
 
     for item, root, imported, minimum, maximum in imported_cases:
         for other_item, other_root, _, _, _ in imported_cases:

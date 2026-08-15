@@ -36,24 +36,37 @@ function Write-Utf8NoBom {
 
 function Set-CfgValue {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][System.Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)][string]$Value
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
     )
 
-    $replacement = "$Key=$Value"
-    for ($index = 0; $index -lt $Lines.Count; $index++) {
+    # QSettings keys belong to the section preceding them.  Appending after
+    # Prism's [UI] section creates a perfectly plausible looking duplicate
+    # that Prism does not read as a launch setting.  Remove every stale copy
+    # and insert the canonical value into [General].
+    for ($index = $Lines.Count - 1; $index -ge 0; $index--) {
         if ($Lines[$index].StartsWith($Key + '=', [System.StringComparison]::Ordinal)) {
-            $Lines[$index] = $replacement
-            return
+            $Lines.RemoveAt($index)
         }
     }
-    $Lines.Add($replacement) | Out-Null
+
+    $insertAt = $Lines.Count
+    $generalAt = $Lines.IndexOf('[General]')
+    if ($generalAt -ge 0) {
+        for ($index = $generalAt + 1; $index -lt $Lines.Count; $index++) {
+            if ($Lines[$index].StartsWith('[', [System.StringComparison]::Ordinal)) {
+                $insertAt = $index
+                break
+            }
+        }
+    }
+    $Lines.Insert($insertAt, "$Key=$Value")
 }
 
 function Get-CfgState {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][System.Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][string[]]$Keys
     )
 
@@ -69,6 +82,30 @@ function Get-CfgState {
         $state[$key] = [ordered]@{ exists = $null -ne $entry; value = $entry }
     }
     return $state
+}
+
+function Remove-StaleGoldenJvmArgs {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][string]$InstanceId
+    )
+
+    $stale = $false
+    foreach ($line in $Lines) {
+        if ($line.StartsWith('JvmArgs=', [System.StringComparison]::Ordinal) -and
+            ($line.Contains('-Dvoxelbridge.golden.') -or
+             $line.Contains('-Dvoxelbridge.clientAutomationClass='))) {
+            $stale = $true
+            break
+        }
+    }
+    if (-not $stale) {
+        return
+    }
+
+    Write-Warning "Removing stale VoxelBridge automation JVM arguments from $InstanceId"
+    Set-CfgValue -Lines $Lines -Key 'OverrideJavaArgs' -Value 'false'
+    Set-CfgValue -Lines $Lines -Key 'JvmArgs' -Value ''
 }
 
 function Restore-CfgState {
@@ -88,7 +125,7 @@ function Restore-CfgState {
             }
         }
         if ($State[$key].exists) {
-            $lines.Add("$key=$($State[$key].value)") | Out-Null
+            Set-CfgValue -Lines $lines -Key $key -Value $State[$key].value
         }
     }
     Write-Utf8NoBom -Path $Path -Text (($lines -join [Environment]::NewLine) + [Environment]::NewLine)
@@ -105,7 +142,7 @@ function ConvertTo-QSettingsString {
 
 function Set-Option {
     param(
-        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Lines,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][System.Collections.Generic.List[string]]$Lines,
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][string]$Value
     )
@@ -250,14 +287,17 @@ function Ensure-Options {
     Write-Utf8NoBom -Path $optionsPath -Text (($lines -join [Environment]::NewLine) + [Environment]::NewLine)
 }
 
-function Test-GoldenController {
-    param([Parameter(Mandatory = $true)][string]$Jar)
+function Test-JarEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Jar,
+        [Parameter(Mandatory = $true)][string]$Entry
+    )
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Jar)
     try {
         return $null -ne ($archive.Entries | Where-Object {
-            $_.FullName -eq 'com/voxelbridge/client/GoldenTestController.class'
+            $_.FullName -eq $Entry
         } | Select-Object -First 1)
     }
     finally {
@@ -275,8 +315,8 @@ function Install-ProductionJar {
     if (-not (Test-Path -LiteralPath $builtJar)) {
         throw "Built production JAR does not exist: $builtJar"
     }
-    if (-not (Test-GoldenController -Jar $builtJar)) {
-        throw "Built production JAR does not contain GoldenTestController: $builtJar"
+    if (Test-JarEntry -Jar $builtJar -Entry 'com/voxelbridge/verification/client/GoldenTestController.class') {
+        throw "Built production JAR unexpectedly contains local GoldenTestController: $builtJar"
     }
 
     $instancePath = Join-Path $instancesRoot $Case.instance
@@ -296,6 +336,46 @@ function Install-ProductionJar {
         throw "Production JAR hash mismatch after installing $($Case.id)"
     }
     return $installedJar
+}
+
+function Install-GoldenHarness {
+    param(
+        [Parameter(Mandatory = $true)]$Case,
+        [Parameter(Mandatory = $true)][string]$RunId
+    )
+
+    $fabric = ([string]$Case.target).StartsWith('fabric-', [System.StringComparison]::Ordinal)
+    $classifier = if ($fabric) { 'fabric' } else { 'named' }
+    $harnessDirectory = Join-Path $RepositoryRoot "build\runtime\minecraft\$($Case.minecraft)\libs"
+    $harnessPattern = "VoxelBridge-golden-harness-$($Case.minecraft)-*-$classifier.jar"
+    $candidates = @(Get-ChildItem -LiteralPath $harnessDirectory -Filter $harnessPattern -File)
+    if ($candidates.Count -ne 1) {
+        throw "Expected one local golden harness matching $harnessPattern in $harnessDirectory, found $($candidates.Count)"
+    }
+    $builtHarness = $candidates[0].FullName
+    if (-not (Test-JarEntry -Jar $builtHarness -Entry 'com/voxelbridge/verification/client/GoldenTestController.class')) {
+        throw "Local golden harness does not contain GoldenTestController: $builtHarness"
+    }
+    $metadataEntry = if ($fabric) { 'fabric.mod.json' } else { 'META-INF/neoforge.mods.toml' }
+    if (-not (Test-JarEntry -Jar $builtHarness -Entry $metadataEntry)) {
+        throw "Local golden harness does not contain $metadataEntry`: $builtHarness"
+    }
+
+    $instancePath = Join-Path $instancesRoot $Case.instance
+    $modsPath = Join-Path $instancePath '.minecraft\mods'
+    [System.IO.Directory]::CreateDirectory($modsPath) | Out-Null
+    $backupPath = Join-Path $instancePath ".voxelbridge-jar-backups\$RunId"
+    foreach ($oldJar in Get-ChildItem -LiteralPath $modsPath -Filter 'VoxelBridge-golden-harness-*.jar' -File -ErrorAction SilentlyContinue) {
+        [System.IO.Directory]::CreateDirectory($backupPath) | Out-Null
+        Move-Item -LiteralPath $oldJar.FullName -Destination (Join-Path $backupPath $oldJar.Name)
+    }
+    $installedHarness = Join-Path $modsPath $candidates[0].Name
+    Copy-Item -LiteralPath $builtHarness -Destination $installedHarness
+    if ((Get-FileHash -LiteralPath $builtHarness -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $installedHarness -Algorithm SHA256).Hash) {
+        throw "Golden harness hash mismatch after installing $($Case.id)"
+    }
+    return $installedHarness
 }
 
 function Close-PrismLauncher {
@@ -392,14 +472,28 @@ function Wait-ForResult {
     param(
         [Parameter(Mandatory = $true)][string]$ResultFile,
         [Parameter(Mandatory = $true)][string]$CaseId,
+        [Parameter(Mandatory = $true)][string]$InstanceId,
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$LauncherProcess,
         [Parameter(Mandatory = $true)][int]$Timeout
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($Timeout)
+    $startupDeadline = [DateTime]::UtcNow.AddSeconds(20)
     $nextUpdate = [DateTime]::UtcNow.AddSeconds(15)
+    $sawMinecraft = $false
     while ([DateTime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $ResultFile) {
             return Get-Content -LiteralPath $ResultFile -Raw | ConvertFrom-Json
+        }
+        $escapedInstance = [regex]::Escape((Join-Path $instancesRoot $InstanceId).Replace('\', '/'))
+        $minecraftRunning = $null -ne (Get-CimInstance Win32_Process -Filter "Name='javaw.exe' or Name='java.exe'" |
+            Where-Object { $_.CommandLine -replace '\\', '/' -match $escapedInstance } |
+            Select-Object -First 1)
+        $sawMinecraft = $sawMinecraft -or $minecraftRunning
+        if (-not $minecraftRunning -and
+            ($sawMinecraft -or ([DateTime]::UtcNow -ge $startupDeadline -and $LauncherProcess.HasExited))) {
+            $exitDetail = if ($LauncherProcess.HasExited) { " (launcher exit $($LauncherProcess.ExitCode))" } else { '' }
+            throw "$CaseId Minecraft process exited before producing result.json$exitDetail"
         }
         if ([DateTime]::UtcNow -ge $nextUpdate) {
             Write-Host "Waiting for $CaseId export ..."
@@ -607,7 +701,16 @@ if ($null -eq $scene) {
 
 Close-PrismLauncher
 if (-not $SkipBuild) {
-    $tasks = @($selectedCases | ForEach-Object { $_.buildTask } | Select-Object -Unique)
+    $tasks = @(
+        $selectedCases | ForEach-Object { $_.buildTask }
+        $selectedCases | ForEach-Object {
+            if (([string]$_.target).StartsWith('fabric-', [System.StringComparison]::Ordinal)) {
+                ":runtime:minecraft:mc-$($_.minecraft):remapGoldenHarnessJar"
+            } else {
+                ":runtime:minecraft:mc-$($_.minecraft):goldenHarnessJar"
+            }
+        }
+    ) | Select-Object -Unique
     Write-Host "Building production JARs: $($tasks -join ', ')"
     & (Join-Path $RepositoryRoot 'gradlew.bat') @tasks
     if ($LASTEXITCODE -ne 0) {
@@ -646,17 +749,21 @@ foreach ($case in $selectedCases) {
     }
     Install-VoxelBridgeConfig -InstancePath $instancePath -ConfigText $sourceVoxelBridgeConfig
     $installedJar = Install-ProductionJar -Case $case -RunId $runId
+    $installedHarness = Install-GoldenHarness -Case $case -RunId $runId
     $jarHash = (Get-FileHash -LiteralPath $installedJar -Algorithm SHA256).Hash.ToLowerInvariant()
+    $harnessHash = (Get-FileHash -LiteralPath $installedHarness -Algorithm SHA256).Hash.ToLowerInvariant()
     $resultFile = Join-Path $caseRoot 'result.json'
     $instanceConfig = Join-Path $instancePath 'instance.cfg'
     $configLines = [System.Collections.Generic.List[string]]::new()
     foreach ($line in [System.IO.File]::ReadAllLines($instanceConfig)) {
         $configLines.Add($line)
     }
+    Remove-StaleGoldenJvmArgs -Lines $configLines -InstanceId $case.instance
     $managedKeys = @('OverrideJavaArgs', 'JvmArgs', 'QuitAfterGameStop', 'AutoCloseConsole', 'ShowConsoleOnError')
     $originalConfig = Get-CfgState -Lines $configLines -Keys $managedKeys
 
     $javaArguments = @(
+        '-Dvoxelbridge.clientAutomationClass=com.voxelbridge.verification.client.GoldenTestController',
         '-Dvoxelbridge.golden.enabled=true',
         '-Dvoxelbridge.golden.requireProductionJar=true',
         "-Dvoxelbridge.golden.expectedJar=$($installedJar.Replace('\', '/'))",
@@ -684,12 +791,17 @@ foreach ($case in $selectedCases) {
         Write-Host "Launching $($case.instance) / $worldId"
         $launcherStdout = Join-Path $caseRoot 'prism-stdout.log'
         $launcherStderr = Join-Path $caseRoot 'prism-stderr.log'
-        Start-Process -FilePath $launcherExe `
+        $launcherProcess = Start-Process -FilePath $launcherExe `
             -ArgumentList @('--launch', $case.instance, '--world', $worldId) `
             -RedirectStandardOutput $launcherStdout `
             -RedirectStandardError $launcherStderr `
-            -WindowStyle Hidden | Out-Null
-        $result = Wait-ForResult -ResultFile $resultFile -CaseId $case.id -Timeout $TimeoutSeconds
+            -WindowStyle Hidden -PassThru
+        $result = Wait-ForResult `
+            -ResultFile $resultFile `
+            -CaseId $case.id `
+            -InstanceId $case.instance `
+            -LauncherProcess $launcherProcess `
+            -Timeout $TimeoutSeconds
     }
     finally {
         try {
@@ -702,6 +814,9 @@ foreach ($case in $selectedCases) {
                 -Path $targetConfigPath `
                 -OriginalText $targetConfigOriginal `
                 -OriginallyExisted $targetConfigExisted
+            if (Test-Path -LiteralPath $installedHarness) {
+                [System.IO.File]::Delete($installedHarness)
+            }
         }
     }
 
@@ -748,6 +863,7 @@ foreach ($case in $selectedCases) {
         status = $result.status
         durationMillis = $result.durationMillis
         jarSha256 = $jarHash
+        harnessSha256 = $harnessHash
         gltf = $collectedGltf
         originalGltf = $result.gltf
     }

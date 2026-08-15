@@ -93,7 +93,7 @@
       "memoryMiB": 4096,
       "sourceProfile": "1.21.11Fabric",
       "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
+        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
         { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
@@ -111,7 +111,7 @@
       "memoryMiB": 4096,
       "sourceProfile": "1.21.11Fabric",
       "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
+        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
         { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
@@ -129,7 +129,7 @@
       "memoryMiB": 6144,
       "sourceProfile": "1.21.11Fabric",
       "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
+        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
       ],
@@ -146,7 +146,7 @@
       "memoryMiB": 6144,
       "sourceProfile": "1.21.11Fabric",
       "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.3+1.21.11.jar" },
+        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
         { "role": "sodium", "source": "mods\\sodium-fabric-0.8.7+mc1.21.11.jar.disabled" },

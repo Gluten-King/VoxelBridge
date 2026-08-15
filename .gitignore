@@ -6,6 +6,8 @@ build/
 run/
 *.class
 *.log
+__pycache__/
+*.py[cod]
 *.zip
 !/golden/worlds/*.zip
 *.jar

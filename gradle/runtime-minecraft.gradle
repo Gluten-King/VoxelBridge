@@ -54,11 +54,11 @@ sourceSets {
 tasks.named('jar', Jar) {
     // The controller is compiled against the exact Minecraft API so the local
     // harness can reuse it, but it must never enter the runtime library.
-    exclude 'com/voxelbridge/client/GoldenTestController*.class'
+    exclude 'com/voxelbridge/verification/client/GoldenTestController*.class'
 }
 
 tasks.named('sourcesJar', Jar) {
-    exclude 'com/voxelbridge/client/GoldenTestController.java'
+    exclude 'com/voxelbridge/verification/client/GoldenTestController.java'
 }
 
 def goldenHarnessJar = tasks.register('goldenHarnessJar', Jar) {
@@ -68,7 +68,7 @@ def goldenHarnessJar = tasks.register('goldenHarnessJar', Jar) {
     archiveBaseName = "VoxelBridge-golden-harness-${runtimeMinecraft}"
     archiveClassifier = 'named'
     from(sourceSets.main.output) {
-        include 'com/voxelbridge/client/GoldenTestController*.class'
+        include 'com/voxelbridge/verification/client/GoldenTestController*.class'
     }
     from(rootProject.file('verification/golden-harness/resources'))
 }

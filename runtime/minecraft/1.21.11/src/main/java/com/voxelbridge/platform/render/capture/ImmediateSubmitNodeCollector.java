@@ -75,9 +75,12 @@ public final class ImmediateSubmitNodeCollector implements SubmitNodeCollector {
     }
 
     @Override
+    // Keep the 1.21.11 API order exactly: light, color, background, outline.
+    // All four values are ints, so swapping them still compiles but turns the
+    // full-bright light coordinate (0xF000F0) into a purple glyph tint.
     public void submitText(PoseStack poseStack, float x, float y, FormattedCharSequence text,
-            boolean shadow, Font.DisplayMode displayMode, int color, int backgroundColor,
-            int lightCoords, int outlineColor) {
+            boolean shadow, Font.DisplayMode displayMode, int lightCoords, int color,
+            int backgroundColor, int outlineColor) {
         Minecraft.getInstance().font.drawInBatch(
             text, x, y, color, shadow, poseStack.last().pose(), buffers,
             displayMode, backgroundColor, lightCoords

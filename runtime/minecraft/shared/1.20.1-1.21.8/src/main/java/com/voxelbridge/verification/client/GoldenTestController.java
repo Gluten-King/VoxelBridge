@@ -1,4 +1,4 @@
-package com.voxelbridge.client;
+package com.voxelbridge.verification.client;
 
 import com.voxelbridge.config.ExportRuntimeConfig;
 import com.voxelbridge.core.util.color.ColorMode;
@@ -183,8 +183,6 @@ public final class GoldenTestController {
         ExportRuntimeConfig.setAnimationEnabled(false);
         ExportRuntimeConfig.setFillCaveEnabled(false);
         ExportRuntimeConfig.setPbrDecodeEnabled(false);
-        ExportRuntimeConfig.setLoggingEnabled(Boolean.parseBoolean(
-                System.getProperty("voxelbridge.golden.logging", "true")));
         ExportRuntimeConfig.setExportDoubleSidedEnabled(Boolean.parseBoolean(
                 System.getProperty("voxelbridge.golden.exportDoubleSided", "true")));
         ExportRuntimeConfig.setNonsolidCullingEnabled(Boolean.parseBoolean(

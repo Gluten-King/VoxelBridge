@@ -92,8 +92,8 @@
       }
     },
     {
-      "id": "fabric-1.21.11-restworld",
-      "instance": "vb-fabric-1.21.11-restworld",
+      "id": "fabric-1.21.11-continuity",
+      "instance": "vb-fabric-1.21.11-continuity",
       "target": "fabric-1.21.11",
       "minecraft": "1.21.11",
       "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.5.jar",
@@ -103,18 +103,6 @@
         "minecraft:iron_bars": 68,
         "minecraft:oak_fence": 140
       },
-      "expectedNodeMinimumVertices": {
-        "blockentity:minecraft:sign": 52
-      }
-    },
-    {
-      "id": "fabric-1.21.11-continuity",
-      "instance": "vb-fabric-1.21.11-continuity",
-      "target": "fabric-1.21.11",
-      "minecraft": "1.21.11",
-      "jar": "build/fabric/1.21.11/libs/VoxelBridge-fabric-1.21.11-1.0.5.jar",
-      "buildTask": ":fabric:1.21.11:mod:remapJar",
-      "ctm": true,
       "expectedNodeMinimumVertices": {
         "blockentity:minecraft:sign": 52
       }

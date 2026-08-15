@@ -63,6 +63,11 @@ one independently named Blender file per instance:
 powershell -ExecutionPolicy Bypass -File .\tools\prism\Run-PrismRestWorldMatrix.ps1
 ```
 
+The runner also builds a local-only golden harness Mod for the exact Minecraft
+version. The production JAR is required to exclude the controller; the harness
+is hash-checked, loaded beside it only for automation, and removed from the
+instance after Minecraft exits.
+
 Use `-Cases neoforge-1.21.11-restworld` for a focused run. Outputs are collected under
 `build/prism-restworld-runs/<run-id>/`; the hand-maintained source world is
 opened only through the explicitly named protected automation copy in

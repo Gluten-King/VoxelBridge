@@ -41,5 +41,5 @@ Golden automation is supplied by a separate local harness JAR. If a production
 client starts but no scenario runs, confirm the instance contains exactly one
 `VoxelBridge-golden-harness-<version>` JAR and that the JVM property
 `voxelbridge.clientAutomationClass` names
-`com.voxelbridge.client.GoldenTestController`. The release VoxelBridge JAR must
+`com.voxelbridge.verification.client.GoldenTestController`. The release VoxelBridge JAR must
 not contain that controller.

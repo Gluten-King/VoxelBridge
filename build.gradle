@@ -302,7 +302,7 @@ tasks.register('verifyProductionJars') {
                     def runtimeClass = readNestedClass(
                         runtimeBytes, 'com/voxelbridge/export/ExportContext.class')
                     def goldenController = readNestedClass(
-                        runtimeBytes, 'com/voxelbridge/client/GoldenTestController.class')
+                        runtimeBytes, 'com/voxelbridge/verification/client/GoldenTestController.class')
                     def runtimeText = classText(runtimeClass)
                     if (runtimeText == null
                             || !runtimeText.contains('net/minecraft/class_310')
@@ -1407,7 +1407,7 @@ gradle.projectsEvaluated {
         def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
         def productionJar = targetProject.tasks.named(jarTaskName).get().archiveFile.get().asFile
         def goldenJvmArgs = [
-                "-Dvoxelbridge.clientAutomationClass=com.voxelbridge.client.GoldenTestController",
+                "-Dvoxelbridge.clientAutomationClass=com.voxelbridge.verification.client.GoldenTestController",
                 "-Dvoxelbridge.golden.enabled=true",
                 "-Dvoxelbridge.golden.requireProductionJar=true",
                 "-Dvoxelbridge.golden.expectedJar=${productionJar.absolutePath}",
