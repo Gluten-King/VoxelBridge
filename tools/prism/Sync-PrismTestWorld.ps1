@@ -289,7 +289,6 @@ foreach ($scene in $definitionData.scenes) {
 $levelHash = (Get-FileHash -LiteralPath $sourceLevelDat -Algorithm SHA256).Hash.ToLowerInvariant()
 $copiedTargets = @()
 $skippedTargets = @()
-$timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
 
 foreach ($targetId in $definitionData.world.targets) {
     if ($targetId -eq $definitionData.world.sourceInstance) {
@@ -305,6 +304,7 @@ foreach ($targetId in $definitionData.world.targets) {
     $targetSaves = Join-Path $targetInstance '.minecraft\saves'
     [System.IO.Directory]::CreateDirectory($targetSaves) | Out-Null
     $targetWorld = Join-Path $targetSaves $definitionData.world.folder
+    $replaceExisting = $false
 
     if (Test-Path -LiteralPath $targetWorld) {
         if (-not $Refresh) {
@@ -312,14 +312,7 @@ foreach ($targetId in $definitionData.world.targets) {
             continue
         }
         Assert-WorldClosed -WorldPath $targetWorld
-        $backupRoot = Join-Path $targetInstance '.voxelbridge-world-backups'
-        [System.IO.Directory]::CreateDirectory($backupRoot) | Out-Null
-        $backupPath = Join-Path $backupRoot "$($definitionData.world.folder).$timestamp"
-        if (Test-Path -LiteralPath $backupPath) {
-            throw "Backup target already exists: $backupPath"
-        }
-        Move-Item -LiteralPath $targetWorld -Destination $backupPath
-        Write-Host "Previous copy backed up: $targetId"
+        $replaceExisting = $true
     }
 
     $temporaryWorld = Join-Path $targetSaves "$($definitionData.world.folder).voxelbridge-copy-$([Guid]::NewGuid().ToString('N'))"
@@ -354,6 +347,9 @@ foreach ($targetId in $definitionData.world.targets) {
         $marker + [Environment]::NewLine,
         [System.Text.UTF8Encoding]::new($false)
     )
+    if ($replaceExisting) {
+        Remove-Item -LiteralPath $targetWorld -Recurse -Force
+    }
     Move-Item -LiteralPath $temporaryWorld -Destination $targetWorld
     $copiedTargets += $targetId
 }

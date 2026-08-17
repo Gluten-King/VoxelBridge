@@ -6,11 +6,11 @@
   },
   "instances": [
     {
-      "id": "vb-fabric-1.20.1-restworld",
-      "migrateFrom": ["vb-fabric-1.20.1-base"],
-      "name": "VoxelBridge | Fabric 1.20.1 | RestWorld",
+      "id": "vb-fabric-1.20.1-continuity",
+      "migrateFrom": ["vb-fabric-1.20.1-restworld", "vb-fabric-1.20.1-base"],
+      "name": "VoxelBridge | Fabric 1.20.1 | Continuity",
       "target": "fabric-1.20.1",
-      "variant": "restworld",
+      "variant": "continuity",
       "minecraft": "1.20.1",
       "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.18.4" },
       "javaMajor": 17,
@@ -20,16 +20,16 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.92.11+1.20.1.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-11.1.136-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.0+1.20.1.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.20.1-1.0.3.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.20.1-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
     {
-      "id": "vb-fabric-1.21.1-restworld",
-      "migrateFrom": ["vb-fabric-1.21.1-base"],
-      "name": "VoxelBridge | Fabric 1.21.1 | RestWorld",
+      "id": "vb-fabric-1.21.1-continuity",
+      "migrateFrom": ["vb-fabric-1.21.1-restworld", "vb-fabric-1.21.1-base"],
+      "name": "VoxelBridge | Fabric 1.21.1 | Continuity",
       "target": "fabric-1.21.1",
-      "variant": "restworld",
+      "variant": "continuity",
       "minecraft": "1.21.1",
       "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.18.4" },
       "javaMajor": 21,
@@ -39,16 +39,16 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.116.9+1.21.1.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-15.0.140-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.0+1.21.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.1-1.0.3.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.1-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
     {
-      "id": "vb-fabric-1.21.4-restworld",
-      "migrateFrom": ["vb-fabric-1.21.4-base"],
-      "name": "VoxelBridge | Fabric 1.21.4 | RestWorld",
+      "id": "vb-fabric-1.21.4-continuity",
+      "migrateFrom": ["vb-fabric-1.21.4-restworld", "vb-fabric-1.21.4-base"],
+      "name": "VoxelBridge | Fabric 1.21.4 | Continuity",
       "target": "fabric-1.21.4",
-      "variant": "restworld",
+      "variant": "continuity",
       "minecraft": "1.21.4",
       "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.18.4" },
       "javaMajor": 21,
@@ -63,11 +63,11 @@
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
     {
-      "id": "vb-fabric-1.21.8-restworld",
-      "migrateFrom": ["vb-fabric-1.21.8-base"],
-      "name": "VoxelBridge | Fabric 1.21.8 | RestWorld",
+      "id": "vb-fabric-1.21.8-continuity",
+      "migrateFrom": ["vb-fabric-1.21.8-restworld", "vb-fabric-1.21.8-base"],
+      "name": "VoxelBridge | Fabric 1.21.8 | Continuity",
       "target": "fabric-1.21.8",
-      "variant": "restworld",
+      "variant": "continuity",
       "minecraft": "1.21.8",
       "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.18.4" },
       "javaMajor": 21,
@@ -77,31 +77,13 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.136.1+1.21.8.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-19.0.147-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.6.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.8-1.0.5.jar" }
-      ],
-      "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
-    },
-    {
-      "id": "vb-fabric-1.21.11-restworld",
-      "migrateFrom": ["vb-fabric-1.21.11-base"],
-      "name": "VoxelBridge | Fabric 1.21.11 | RestWorld",
-      "target": "fabric-1.21.11",
-      "variant": "restworld",
-      "minecraft": "1.21.11",
-      "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.19.3" },
-      "javaMajor": 21,
-      "memoryMiB": 4096,
-      "sourceProfile": "1.21.11Fabric",
-      "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
-        { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
-        { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.8-1.0.4.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
     {
       "id": "vb-fabric-1.21.11-continuity",
+      "migrateFrom": ["vb-fabric-1.21.11-restworld", "vb-fabric-1.21.11-base"],
       "name": "VoxelBridge | Fabric 1.21.11 | Continuity",
       "target": "fabric-1.21.11",
       "variant": "continuity",
@@ -114,53 +96,27 @@
         { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
         { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
         { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.4.jar" }
       ],
       "configs": ["config\\voxelbridge.json", "config\\continuity.json"]
     },
     {
-      "id": "vb-fabric-1.21.11-showcase",
-      "name": "VoxelBridge | Fabric 1.21.11 | Showcase",
-      "target": "fabric-1.21.11",
-      "variant": "showcase",
-      "minecraft": "1.21.11",
+      "id": "vb-fabric-26.2-continuity",
+      "name": "VoxelBridge | Fabric 26.2 | Continuity",
+      "target": "fabric-26.2",
+      "variant": "continuity",
+      "minecraft": "26.2",
       "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.19.3" },
-      "javaMajor": 21,
-      "memoryMiB": 6144,
-      "sourceProfile": "1.21.11Fabric",
+      "javaMajor": 25,
+      "memoryMiB": 8192,
+      "sourceProfile": "Fabric 26.2",
       "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
-        { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
+        { "role": "fabric-api", "source": "mods\\fabric-api-0.157.0+26.2.jar" },
+        { "role": "cloth-config", "source": "mods\\cloth-config-26.2.155.jar" },
+        { "role": "continuity", "source": "mods\\continuity-3.0.1+26.2.jar" },
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-26.2-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
-    },
-    {
-      "id": "vb-fabric-1.21.11-sodium-iris-continuity",
-      "name": "VoxelBridge | Fabric 1.21.11 | Sodium + Iris + Continuity",
-      "target": "fabric-1.21.11",
-      "variant": "sodium-iris-continuity",
-      "minecraft": "1.21.11",
-      "loader": { "uid": "net.fabricmc.fabric-loader", "version": "0.19.3" },
-      "javaMajor": 21,
-      "memoryMiB": 6144,
-      "sourceProfile": "1.21.11Fabric",
-      "mods": [
-        { "role": "fabric-api", "source": "mods\\fabric-api-0.141.6+1.21.11.jar" },
-        { "role": "cloth-config", "source": "mods\\cloth-config-21.11.153-fabric.jar" },
-        { "role": "continuity", "source": "mods\\continuity-3.0.1-beta.1+1.21.11.jar" },
-        { "role": "sodium", "source": "mods\\sodium-fabric-0.8.7+mc1.21.11.jar.disabled" },
-        { "role": "iris", "source": "mods\\iris-fabric-1.10.7+mc1.21.11.jar.disabled" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-fabric-1.21.11-1.0.5.jar" }
-      ],
-      "configs": [
-        "config\\voxelbridge.json",
-        "config\\continuity.json",
-        "config\\iris-excluded.json",
-        "config\\iris.properties",
-        "config\\sodium-mixins.properties",
-        "config\\sodium-options.json"
-      ]
     },
     {
       "id": "vb-neoforge-1.21.1-restworld",
@@ -175,28 +131,9 @@
       "sourceProfile": "1.21.1",
       "mods": [
         { "role": "cloth-config", "source": "mods\\cloth-config-15.0.140-neoforge.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.5.jar.disabled" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.5.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
-    },
-    {
-      "id": "vb-neoforge-1.21.1-yuushya",
-      "name": "VoxelBridge | NeoForge 1.21.1 | Yuushya",
-      "target": "neoforge-1.21.1",
-      "variant": "yuushya",
-      "minecraft": "1.21.1",
-      "loader": { "uid": "net.neoforged", "version": "21.1.243" },
-      "javaMajor": 21,
-      "memoryMiB": 6144,
-      "sourceProfile": "1.21.1",
-      "mods": [
-        { "role": "cloth-config", "source": "mods\\cloth-config-15.0.140-neoforge.jar" },
-        { "role": "architectury", "source": "mods\\architectury-13.0.8-neoforge.jar" },
-        { "role": "yuushya", "source": "mods\\yuushya-1.21.0-neoforge-2.2.3.jar" },
-        { "role": "yuushya-modelling", "source": "mods\\yuushya_modelling-neoforge-2.3.0.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.1-1.0.5.jar.disabled" }
-      ],
-      "configs": ["config\\voxelbridge.json", "config\\com.yuushya\\client_config.json"]
     },
     {
       "id": "vb-neoforge-1.21.4-restworld",
@@ -228,7 +165,7 @@
       "sourceProfile": "1.21.8NF",
       "mods": [
         { "role": "cloth-config", "source": "mods\\cloth-config-19.0.147-neoforge.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.8-1.0.5.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.8-1.0.4.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
     },
@@ -244,7 +181,7 @@
       "sourceProfile": "@launcher/voxelbridge-artifacts/neoforge-1.21.11",
       "mods": [
         { "role": "cloth-config", "source": "mods\\cloth-config-neoforge-21.11.153-neoforge.jar" },
-        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.11-1.0.5.jar" }
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.11-1.0.4.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
     }

@@ -8,6 +8,8 @@ param(
     [string[]]$Cases = @(),
     [switch]$SkipBuild,
     [switch]$SkipBlender,
+    [ValidateSet(128, 256, 512, 1024, 2048, 4096, 8192)]
+    [int]$AtlasSize = 8192,
     [int]$TimeoutSeconds = 900
 )
 
@@ -570,6 +572,104 @@ function Assert-GltfMaterialQuads {
     return $actual
 }
 
+function Read-GltfFloatAccessor {
+    param(
+        [Parameter(Mandatory = $true)]$Document,
+        [Parameter(Mandatory = $true)][string]$GltfDirectory,
+        [Parameter(Mandatory = $true)][int]$AccessorIndex
+    )
+
+    $accessor = $Document.accessors[$AccessorIndex]
+    if ([int]$accessor.componentType -ne 5126) { throw "Accessor $AccessorIndex is not FLOAT" }
+    $componentCount = switch ([string]$accessor.type) {
+        'SCALAR' { 1 }
+        'VEC2' { 2 }
+        'VEC3' { 3 }
+        'VEC4' { 4 }
+        default { throw "Unsupported accessor type $($accessor.type)" }
+    }
+    $view = $Document.bufferViews[[int]$accessor.bufferView]
+    $bufferPath = Join-Path $GltfDirectory ([string]$Document.buffers[[int]$view.buffer].uri)
+    $bytes = [System.IO.File]::ReadAllBytes($bufferPath)
+    $viewOffset = if ($null -ne $view.PSObject.Properties['byteOffset']) { [int]$view.byteOffset } else { 0 }
+    $accessorOffset = if ($null -ne $accessor.PSObject.Properties['byteOffset']) { [int]$accessor.byteOffset } else { 0 }
+    $stride = if ($null -ne $view.PSObject.Properties['byteStride']) { [int]$view.byteStride } else { $componentCount * 4 }
+    $values = [System.Collections.Generic.List[float]]::new()
+    $start = $viewOffset + $accessorOffset
+    for ($element = 0; $element -lt [int]$accessor.count; $element++) {
+        for ($component = 0; $component -lt $componentCount; $component++) {
+            $values.Add([System.BitConverter]::ToSingle(
+                $bytes, $start + $element * $stride + $component * 4))
+        }
+    }
+    return ,$values.ToArray()
+}
+
+function Assert-GltfNonWhiteColormapMaterials {
+    param(
+        [Parameter(Mandatory = $true)][string]$Gltf,
+        [Parameter(Mandatory = $true)][string[]]$Expected
+    )
+
+    [void][System.Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+    $document = [System.IO.File]::ReadAllText($Gltf, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $directory = Split-Path -Parent $Gltf
+    $actual = [ordered]@{}
+    foreach ($materialName in $Expected) {
+        $foundTint = $false
+        foreach ($node in @($document.nodes)) {
+            if ([string]$node.name -ne $materialName -or $null -eq $node.PSObject.Properties['mesh']) { continue }
+            foreach ($primitive in @($document.meshes[[int]$node.mesh].primitives)) {
+                $material = $document.materials[[int]$primitive.material]
+                $extras = $material.extras
+                if ($null -eq $extras -or
+                    $null -eq $extras.PSObject.Properties['voxelbridge:colormapTextures'] -or
+                    $null -eq $extras.PSObject.Properties['voxelbridge:colormapUV']) { continue }
+                $attributeName = "TEXCOORD_$([int]$extras.'voxelbridge:colormapUV')"
+                if ($null -eq $primitive.attributes.PSObject.Properties[$attributeName]) { continue }
+                $uvs = Read-GltfFloatAccessor -Document $document -GltfDirectory $directory `
+                    -AccessorIndex ([int]$primitive.attributes.$attributeName)
+                $imageIndices = @($extras.'voxelbridge:colormapTextures')
+                $bitmaps = @{}
+                try {
+                    for ($index = 0; $index + 1 -lt $uvs.Count; $index += 2) {
+                        $u = [double]$uvs[$index]
+                        $v = [double]$uvs[$index + 1]
+                        $tileU = [Math]::Floor($u)
+                        $tileV = [Math]::Floor($v)
+                        $page = [int]($tileV * 10 + $tileU)
+                        if ($page -lt 0 -or $page -ge $imageIndices.Count) { continue }
+                        if (-not $bitmaps.ContainsKey($page)) {
+                            $image = $document.images[[int]$imageIndices[$page]]
+                            $bitmaps[$page] = [System.Drawing.Bitmap]::new(
+                                (Join-Path $directory ([string]$image.uri)))
+                        }
+                        $bitmap = $bitmaps[$page]
+                        $x = [Math]::Min($bitmap.Width - 1, [Math]::Max(0,
+                            [Math]::Floor(($u - $tileU) * $bitmap.Width)))
+                        $y = [Math]::Min($bitmap.Height - 1, [Math]::Max(0,
+                            [Math]::Floor(($v - $tileV) * $bitmap.Height)))
+                        $pixel = $bitmap.GetPixel([int]$x, [int]$y)
+                        if ($pixel.A -gt 0 -and ($pixel.R -ne 255 -or $pixel.G -ne 255 -or $pixel.B -ne 255)) {
+                            $foundTint = $true
+                            break
+                        }
+                    }
+                } finally {
+                    foreach ($bitmap in $bitmaps.Values) { $bitmap.Dispose() }
+                }
+                if ($foundTint) { break }
+            }
+            if ($foundTint) { break }
+        }
+        if (-not $foundTint) {
+            throw "Material $materialName does not sample a non-white colormap pixel in $Gltf"
+        }
+        $actual[$materialName] = $true
+    }
+    return $actual
+}
+
 function Assert-GltfNodeMinimumVertices {
     param(
         [Parameter(Mandatory = $true)][string]$Gltf,
@@ -600,6 +700,65 @@ function Assert-GltfNodeMinimumVertices {
             throw "Node $nodeName has $vertexCount vertices in $Gltf; expected at least $minimum"
         }
         $actual[$nodeName] = $vertexCount
+    }
+    return $actual
+}
+
+function Assert-GltfNodePixelAlignedUvs {
+    param(
+        [Parameter(Mandatory = $true)][string]$Gltf,
+        [Parameter(Mandatory = $true)][string[]]$Expected,
+        [double]$TolerancePixels = 0.01
+    )
+
+    [void][System.Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+    $document = [System.IO.File]::ReadAllText($Gltf, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $directory = Split-Path -Parent $Gltf
+    $actual = [ordered]@{}
+    foreach ($nodeName in $Expected) {
+        $coordinateCount = 0
+        $maxPixelError = 0.0
+        foreach ($node in @($document.nodes)) {
+            $actualNodeName = [string]$node.name
+            $isSemanticChild = $actualNodeName.StartsWith("${nodeName}__", [System.StringComparison]::Ordinal)
+            if (($actualNodeName -ne $nodeName -and -not $isSemanticChild) -or
+                $null -eq $node.PSObject.Properties['mesh']) { continue }
+
+            foreach ($primitive in @($document.meshes[[int]$node.mesh].primitives)) {
+                if ($null -eq $primitive.attributes.PSObject.Properties['TEXCOORD_0'] -or
+                    $null -eq $primitive.PSObject.Properties['material']) { continue }
+                $material = $document.materials[[int]$primitive.material]
+                $baseColor = $material.pbrMetallicRoughness.baseColorTexture
+                if ($null -eq $baseColor -or $null -eq $baseColor.PSObject.Properties['index']) { continue }
+                $texture = $document.textures[[int]$baseColor.index]
+                $image = $document.images[[int]$texture.source]
+                $bitmap = [System.Drawing.Bitmap]::new((Join-Path $directory ([string]$image.uri)))
+                try {
+                    $uvs = Read-GltfFloatAccessor -Document $document -GltfDirectory $directory `
+                        -AccessorIndex ([int]$primitive.attributes.TEXCOORD_0)
+                    for ($index = 0; $index + 1 -lt $uvs.Count; $index += 2) {
+                        $pixelU = [double]$uvs[$index] * $bitmap.Width
+                        $pixelV = [double]$uvs[$index + 1] * $bitmap.Height
+                        $errorU = [Math]::Abs($pixelU - [Math]::Round($pixelU))
+                        $errorV = [Math]::Abs($pixelV - [Math]::Round($pixelV))
+                        $maxPixelError = [Math]::Max($maxPixelError, [Math]::Max($errorU, $errorV))
+                        $coordinateCount += 2
+                    }
+                } finally {
+                    $bitmap.Dispose()
+                }
+            }
+        }
+        if ($coordinateCount -eq 0) {
+            throw "Node $nodeName has no base-color UV coordinates in $Gltf"
+        }
+        if ($maxPixelError -gt $TolerancePixels) {
+            throw "Node $nodeName has atlas UVs $($maxPixelError.ToString('0.0000')) pixels off the pixel grid in $Gltf; tolerance is $TolerancePixels"
+        }
+        $actual[$nodeName] = [ordered]@{
+            coordinateCount = $coordinateCount
+            maxPixelError = $maxPixelError
+        }
     }
     return $actual
 }
@@ -775,6 +934,7 @@ foreach ($case in $selectedCases) {
         '-Dvoxelbridge.golden.settleTicks=100',
         '-Dvoxelbridge.golden.exportThreadCount=16',
         '-Dvoxelbridge.golden.atlasMode=atlas',
+        "-Dvoxelbridge.golden.atlasSize=$AtlasSize",
         '-Dvoxelbridge.golden.coordinateMode=centered',
         '-Dvoxelbridge.golden.autoStop=true',
         "-Dvoxelbridge.golden.timeoutSeconds=$TimeoutSeconds"
@@ -841,11 +1001,23 @@ foreach ($case in $selectedCases) {
             -Gltf $collectedGltf `
             -Expected $case.expectedMaterialQuads
     }
+    $nonWhiteColormapMaterials = $null
+    if ($null -ne $case.PSObject.Properties['expectedNonWhiteColormapMaterials']) {
+        $nonWhiteColormapMaterials = Assert-GltfNonWhiteColormapMaterials `
+            -Gltf $collectedGltf `
+            -Expected @($case.expectedNonWhiteColormapMaterials)
+    }
     $nodeVertices = $null
     if ($null -ne $case.PSObject.Properties['expectedNodeMinimumVertices']) {
         $nodeVertices = Assert-GltfNodeMinimumVertices `
             -Gltf $collectedGltf `
             -Expected $case.expectedNodeMinimumVertices
+    }
+    $pixelAlignedUvNodes = $null
+    if ($null -ne $case.PSObject.Properties['expectedPixelAlignedUvNodes']) {
+        $pixelAlignedUvNodes = Assert-GltfNodePixelAlignedUvs `
+            -Gltf $collectedGltf `
+            -Expected @($case.expectedPixelAlignedUvNodes)
     }
     $glyphMaterial = $null
     if ($null -ne $case.PSObject.Properties['expectedNodeMinimumVertices'] -and
@@ -870,8 +1042,14 @@ foreach ($case in $selectedCases) {
     if ($null -ne $materialQuads) {
         $caseRecord.materialQuads = $materialQuads
     }
+    if ($null -ne $nonWhiteColormapMaterials) {
+        $caseRecord.nonWhiteColormapMaterials = $nonWhiteColormapMaterials
+    }
     if ($null -ne $nodeVertices) {
         $caseRecord.nodeVertices = $nodeVertices
+    }
+    if ($null -ne $pixelAlignedUvNodes) {
+        $caseRecord.pixelAlignedUvNodes = $pixelAlignedUvNodes
     }
     if ($null -ne $glyphMaterial) {
         $caseRecord.glyphMaterial = $glyphMaterial
@@ -906,6 +1084,7 @@ $summary = [ordered]@{
     resourcePacks = @($sourceResourcePacks)
     voxelBridgeConfigSha256 = (Get-FileHash -LiteralPath $sourceConfigPath -Algorithm SHA256).Hash.ToLowerInvariant()
     vanillaRandomTransformEnabled = $true
+    atlasSize = $AtlasSize
     cases = $caseResults
 }
 Write-Utf8NoBom -Path (Join-Path $runRoot 'run.json') -Text (($summary | ConvertTo-Json -Depth 10) + [Environment]::NewLine)

@@ -39,6 +39,7 @@ public final class VoxelBridgeLogger {
 
     private VoxelBridgeLogger() {}
 
+    @SuppressWarnings("deprecation")
     public static synchronized void initialize(Path outDir) throws IOException {
         if (!enabled) {
             return;

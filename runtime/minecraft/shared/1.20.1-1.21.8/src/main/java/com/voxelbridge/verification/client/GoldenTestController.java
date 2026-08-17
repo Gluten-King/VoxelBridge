@@ -169,7 +169,8 @@ public final class GoldenTestController {
                 "atlas".equalsIgnoreCase(atlasMode)
                         ? ExportRuntimeConfig.AtlasMode.ATLAS
                         : ExportRuntimeConfig.AtlasMode.INDIVIDUAL);
-        ExportRuntimeConfig.setAtlasSize(ExportRuntimeConfig.AtlasSize.SIZE_8192);
+        ExportRuntimeConfig.setAtlasSize(ExportRuntimeConfig.AtlasSize.fromSize(Integer.getInteger(
+                "voxelbridge.golden.atlasSize", 8192)));
         ExportRuntimeConfig.setAtlasPadding(0);
         ExportRuntimeConfig.setColorMode(ColorMode.BOTH);
         String coordinateMode = System.getProperty(

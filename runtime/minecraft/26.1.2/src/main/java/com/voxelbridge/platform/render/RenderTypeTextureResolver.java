@@ -1,0 +1,34 @@
+package com.voxelbridge.platform.render;
+
+import com.voxelbridge.export.exporter.resolve.RenderTypeResolver;
+import com.voxelbridge.adapter.Adapters;
+import com.voxelbridge.core.ir.RenderLayer;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.resources.Identifier;
+
+/**
+ * Resolves texture resource locations from RenderType instances.
+ * Delegates to PlatformRenderHelper.
+ */
+public final class RenderTypeTextureResolver implements RenderTypeResolver {
+
+    public static final RenderTypeTextureResolver INSTANCE = new RenderTypeTextureResolver();
+
+    private RenderTypeTextureResolver() {
+    }
+
+    @Override
+    public Identifier resolve(RenderType renderType) {
+        return Adapters.getPlatformRenderHelper().getRenderTypeTexture(renderType);
+    }
+
+    @Override
+    public boolean isDoubleSided(RenderType renderType) {
+        return Adapters.getPlatformRenderHelper().isRenderTypeDoubleSided(renderType);
+    }
+
+    @Override
+    public RenderLayer resolveLayer(RenderType renderType) {
+        return Adapters.getPlatformRenderHelper().getRenderTypeLayer(renderType);
+    }
+}

@@ -62,6 +62,32 @@
       "resourceRoots": ["fabric/1.21.11/src/main/resources"]
     },
     {
+      "id": "fabric-26.1.2", "platform": "fabric", "minecraft": "26.1.2", "java": 25,
+      "projectPath": ":fabric:26.1.2:mod", "projectDir": "fabric/26.1.2/mod",
+      "javaSourceRoots": [
+        "fabric/26.1.2/src/main/java",
+        "runtime/minecraft/shared/26.1.2-26.2/src/main/java",
+        "runtime/minecraft/26.1.2/src/main/java"
+      ],
+      "resourceRoots": [
+        "fabric/26.1.2/src/main/resources",
+        "runtime/minecraft/shared/26.1.2-26.2/src/main/resources"
+      ]
+    },
+    {
+      "id": "fabric-26.2", "platform": "fabric", "minecraft": "26.2", "java": 25,
+      "projectPath": ":fabric:26.2:mod", "projectDir": "fabric/26.2/mod",
+      "javaSourceRoots": [
+        "fabric/26.2/src/main/java",
+        "runtime/minecraft/shared/26.1.2-26.2/src/main/java",
+        "runtime/minecraft/26.2/src/main/java"
+      ],
+      "resourceRoots": [
+        "fabric/26.2/src/main/resources",
+        "runtime/minecraft/shared/26.1.2-26.2/src/main/resources"
+      ]
+    },
+    {
       "id": "neoforge-1.21.1", "platform": "neoforge", "minecraft": "1.21.1", "java": 21,
       "projectPath": ":neoforge:1.21.1:mod", "projectDir": "neoforge/1.21.1/mod",
       "javaSourceRoots": [

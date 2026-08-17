@@ -1,7 +1,9 @@
 apply plugin: 'java-library'
-apply plugin: 'fabric-loom'
-
 def runtimeMinecraft = project.name.replaceFirst('^mc-', '')
+if (runtimeMinecraft.startsWith('26.')) {
+    project.ext.set('fabric.loom.disableObfuscation', 'true')
+}
+apply plugin: 'fabric-loom'
 def targetSpec = gradle.ext.voxelBridgeTargetRegistry.targets.find {
     it.minecraft.toString() == runtimeMinecraft && it.platform.toString() == 'fabric'
 }
@@ -36,8 +38,16 @@ repositories {
 
 dependencies {
     minecraft "com.mojang:minecraft:${versionProps.getProperty('fabric_minecraft_version')}"
-    mappings loom.officialMojangMappings()
-    modImplementation "net.fabricmc:fabric-loader:${versionProps.getProperty('fabric_loader_version')}"
+    // Minecraft 26+ ships named client classes and no longer publishes the
+    // legacy Mojang mapping artifact expected by officialMojangMappings().
+    if (!runtimeMinecraft.startsWith('26.')) {
+        mappings loom.officialMojangMappings()
+    }
+    if (runtimeMinecraft.startsWith('26.')) {
+        implementation "net.fabricmc:fabric-loader:${versionProps.getProperty('fabric_loader_version')}"
+    } else {
+        modImplementation "net.fabricmc:fabric-loader:${versionProps.getProperty('fabric_loader_version')}"
+    }
     api project(':shared:core')
     api project(':shared:pipeline')
 }
@@ -73,15 +83,29 @@ def goldenHarnessJar = tasks.register('goldenHarnessJar', Jar) {
     from(rootProject.file('verification/golden-harness/resources'))
 }
 
-def remapJarTaskType = tasks.named('remapJar').get().class
-tasks.register('remapGoldenHarnessJar', remapJarTaskType) {
-    group = 'voxelbridge/runtime/verification'
-    description = 'Remaps the local-only golden harness for a Fabric production client.'
-    dependsOn goldenHarnessJar
-    inputFile.set(goldenHarnessJar.flatMap { it.archiveFile })
-    archiveBaseName = "VoxelBridge-golden-harness-${runtimeMinecraft}"
-    archiveClassifier = 'fabric'
-    addNestedDependencies.set(false)
+if (runtimeMinecraft.startsWith('26.')) {
+    tasks.register('remapGoldenHarnessJar', Jar) {
+        group = 'voxelbridge/runtime/verification'
+        description = 'Packages the local-only harness for unobfuscated Minecraft.'
+        dependsOn tasks.named('classes')
+        archiveBaseName = "VoxelBridge-golden-harness-${runtimeMinecraft}"
+        archiveClassifier = 'fabric'
+        from(sourceSets.main.output) {
+            include 'com/voxelbridge/verification/client/GoldenTestController*.class'
+        }
+        from(rootProject.file('verification/golden-harness/resources'))
+    }
+} else {
+    def remapJarTaskType = tasks.named('remapJar').get().class
+    tasks.register('remapGoldenHarnessJar', remapJarTaskType) {
+        group = 'voxelbridge/runtime/verification'
+        description = 'Remaps the local-only golden harness for a Fabric production client.'
+        dependsOn goldenHarnessJar
+        inputFile.set(goldenHarnessJar.flatMap { it.archiveFile })
+        archiveBaseName = "VoxelBridge-golden-harness-${runtimeMinecraft}"
+        archiveClassifier = 'fabric'
+        addNestedDependencies.set(false)
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {

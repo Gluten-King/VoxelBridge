@@ -1,0 +1,54 @@
+package com.voxelbridge.export.quad;
+
+import com.voxelbridge.compat.QuadCompat;
+import com.voxelbridge.core.ir.RenderLayer;
+import net.minecraft.client.resources.model.geometry.BakedQuad;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.core.Direction;
+
+/**
+ * QuadData adapter that wraps a BakedQuad without copying.
+ */
+public final class BakedQuadData implements QuadData {
+    private final BakedQuad quad;
+    private final Direction cullDirection;
+
+    public BakedQuadData(BakedQuad quad) {
+        this(quad, QuadCompat.getDirection(quad));
+    }
+
+    public BakedQuadData(BakedQuad quad, Direction cullDirection) {
+        this.quad = quad;
+        this.cullDirection = cullDirection;
+    }
+
+    @Override
+    public TextureAtlasSprite sprite() {
+        return QuadCompat.getSprite(quad);
+    }
+
+    @Override
+    public Direction direction() {
+        return QuadCompat.getDirection(quad);
+    }
+
+    @Override
+    public Direction cullDirection() {
+        return cullDirection;
+    }
+
+    @Override
+    public int[] vertices() {
+        return QuadCompat.getVertices(quad);
+    }
+
+    @Override
+    public int tintIndex() {
+        return QuadCompat.getTintIndex(quad);
+    }
+
+    @Override
+    public RenderLayer renderLayer() {
+        return QuadCompat.getRenderLayer(quad);
+    }
+}

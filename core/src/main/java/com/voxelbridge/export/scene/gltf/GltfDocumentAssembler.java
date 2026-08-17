@@ -53,6 +53,8 @@ final class GltfDocumentAssembler {
         Scene scene = new Scene();
         List<Integer> nodeIndices = new ArrayList<>(nodes.size());
         for (int i = 0; i < nodes.size(); i++) nodeIndices.add(i);
+        nodeIndices.sort(java.util.Comparator.comparingInt(index ->
+            alphaDrawOrder(nodes.get(index), meshes, materials)));
         scene.setNodes(nodeIndices);
         gltf.addScenes(scene);
         gltf.setScene(0);
@@ -61,6 +63,17 @@ final class GltfDocumentAssembler {
         gltf.setNodes(nodes);
         gltf.setTextures(textures);
         gltf.setImages(images);
+    }
+
+    private static int alphaDrawOrder(Node node, List<Mesh> meshes, List<Material> materials) {
+        if (node == null || node.getMesh() == null) return 0;
+        int meshIndex = node.getMesh();
+        if (meshIndex < 0 || meshIndex >= meshes.size()) return 0;
+        Mesh mesh = meshes.get(meshIndex);
+        if (mesh == null || mesh.getPrimitives() == null || mesh.getPrimitives().isEmpty()) return 0;
+        Integer materialIndex = mesh.getPrimitives().get(0).getMaterial();
+        if (materialIndex == null || materialIndex < 0 || materialIndex >= materials.size()) return 0;
+        return GltfMaterialWriter.alphaDrawOrder(materials.get(materialIndex));
     }
 
     static void write(GlTF gltf, Path path) throws IOException {

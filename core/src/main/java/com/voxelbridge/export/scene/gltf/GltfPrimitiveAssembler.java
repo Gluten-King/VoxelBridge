@@ -2,6 +2,7 @@ package com.voxelbridge.export.scene.gltf;
 
 import com.voxelbridge.core.export.ExportState;
 import com.voxelbridge.core.ir.IrFlags;
+import com.voxelbridge.core.ir.RenderLayer;
 import com.voxelbridge.export.texture.ExportOptions;
 import com.voxelbridge.export.texture.TexturePathResolver;
 import com.voxelbridge.export.texture.UvMapper;
@@ -74,6 +75,7 @@ final class GltfPrimitiveAssembler {
         int indexCursor = 0;
         int vertexBase = 0;
         boolean doubleSided = false;
+        RenderLayer strongestLayer = RenderLayer.UNKNOWN;
         int materialHash = materialKey.hashCode();
         int mismatches = 0;
         boolean atlasEnabled = UvRemapUtil.isAtlasEnabled(options);
@@ -127,6 +129,8 @@ final class GltfPrimitiveAssembler {
                 indices[indexCursor++] = vertexBase + 3;
                 vertexBase += 4;
                 doubleSided |= IrFlags.isDoubleSided(flags);
+                strongestLayer = GltfMaterialWriter.strongerLayer(
+                    strongestLayer, IrFlags.decodeRenderLayer(flags));
             }
         }
 
@@ -186,7 +190,8 @@ final class GltfPrimitiveAssembler {
 
         String primarySprite = pickPrimarySprite(materialKey, materialChunk.usedSprites());
         int materialIndex = materialWriter.write(
-            materialKey, primarySprite, doubleSided, colorMapIndices, materials, textures, images);
+            materialKey, primarySprite, doubleSided, strongestLayer,
+            colorMapIndices, materials, textures, images);
 
         MeshPrimitive primitive = new MeshPrimitive();
         Map<String, Integer> attributes = new LinkedHashMap<>();

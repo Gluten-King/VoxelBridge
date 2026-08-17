@@ -1,0 +1,26 @@
+package com.voxelbridge.util;
+
+import com.voxelbridge.pipeline.resource.ResourceIds;
+import net.minecraft.resources.Identifier;
+
+/**
+ * Sanitizes arbitrary sprite/material keys into valid {@link Identifier} strings.
+ */
+public final class ResourceLocationUtil {
+
+    private ResourceLocationUtil() {}
+
+    /**
+        * Sanitizes a potentially malformed key into a safe Identifier-compatible string.
+        * - Keeps the first ':' as namespace separator; replaces additional ':' in the path with '/'.
+        * - Lowercases and strips invalid namespace chars to '_'.
+        * - Replaces spaces with '_' in path.
+        */
+    public static String sanitizeKey(String raw) {
+        return ResourceIds.sanitizeKey(raw);
+    }
+
+    public static Identifier sanitize(String raw) {
+        return Identifier.parse(sanitizeKey(raw));
+    }
+}

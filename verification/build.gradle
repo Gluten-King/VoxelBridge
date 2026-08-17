@@ -65,6 +65,9 @@ tasks.register('pipelineContractSelfTest', JavaExec) {
 
 tasks.test {
     dependsOn 'goldenSelfTest', 'goldenReviewSelfTest', 'quadGeometryKeySelfTest', 'pipelineContractSelfTest'
+    // These verification classes are dependency-free main-method self tests,
+    // so Gradle 9's JUnit discovery intentionally finds no test descriptors.
+    failOnNoDiscoveredTests = false
 }
 
 def cliArgs = { String command ->

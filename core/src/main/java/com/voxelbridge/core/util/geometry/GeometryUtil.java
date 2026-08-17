@@ -97,11 +97,13 @@ public final class GeometryUtil {
             return whiteColor(); // No tint or white tint
         }
 
-        // Extract RGB components (ignore alpha) and convert sRGB -> linear
+        // Extract RGBA and convert sRGB -> linear. Preserve alpha for glTF BLEND materials.
         float r = srgbToLinearComponent((argb >> 16) & 0xFF);
         float g = srgbToLinearComponent((argb >> 8) & 0xFF);
         float b = srgbToLinearComponent(argb & 0xFF);
-        float a = 1.0f; // Always opaque
+        int ai = (argb >> 24) & 0xFF;
+        // A zero alpha byte with non-zero RGB commonly means no alpha channel was written.
+        float a = (ai == 0 && (argb & 0x00FFFFFF) != 0) ? 1.0f : (ai / 255.0f);
 
         // All 4 vertices use the same color
         return new float[]{

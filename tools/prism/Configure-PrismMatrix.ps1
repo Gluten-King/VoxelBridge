@@ -4,6 +4,7 @@ param(
     [string]$ModrinthProfilesRoot = 'D:\ModrinthApp\profiles',
     [string]$Java17Path = 'C:\Users\29901\.gradle\jdks\eclipse_adoptium-17-amd64-windows.2\bin\javaw.exe',
     [string]$Java21Path = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.9.10-hotspot\bin\javaw.exe',
+    [string]$Java25Path = 'C:\Users\29901\.gradle\jdks\eclipse_adoptium-25-amd64-windows.2\bin\javaw.exe',
     [string]$MatrixPath = ''
 )
 
@@ -96,6 +97,7 @@ foreach ($definition in $matrix.instances) {
     $javaPath = switch ([int]$definition.javaMajor) {
         17 { $Java17Path }
         21 { $Java21Path }
+        25 { $Java25Path }
         default { throw "Unsupported Java major for $($definition.id): $($definition.javaMajor)" }
     }
     if (-not (Test-Path -LiteralPath $javaPath -PathType Leaf)) {
