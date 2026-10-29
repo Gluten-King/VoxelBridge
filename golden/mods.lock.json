@@ -51,22 +51,77 @@
       "target": "neoforge-1.21.1",
       "artifacts": [
         {
+          "id": "architectury",
+          "source": "https://modrinth.com/mod/architectury-api",
+          "version": "13.0.11",
+          "fileName": "architectury-13.0.11-neoforge.jar",
+          "pathProperty": "modArchitecturyJar",
+          "sha256": "9cc92f2c09533fc5482c60f993bd891c655a0e32b637037cdcb7c2b23adedeeb",
+          "dependencies": []
+        },
+        {
           "id": "yuushya",
           "source": "https://www.curseforge.com/minecraft/mc-mods/yuushya-townscape",
           "version": "2.2.3",
           "fileName": "yuushya-1.21.0-neoforge-2.2.3.jar",
           "pathProperty": "modYuushyaJar",
           "sha256": "193c1469ece0bd281364e817cd099aae1e0929c2bbd34f835358a2e5b194125f",
-          "dependencies": []
+          "dependencies": ["architectury"]
         },
         {
           "id": "yuushya-modelling",
           "source": "https://www.curseforge.com/minecraft/mc-mods/yuushya-modelling",
-          "version": "2.3.0",
-          "fileName": "yuushya_modelling-neoforge-2.3.0.jar",
+          "version": "2.4.1",
+          "fileName": "yuushya_modelling-1.21.1-2.4.1.jar",
           "pathProperty": "modYuushyaModellingJar",
-          "sha256": "65aa881ba835bb933b4aaeda9ab823bbe2384185696a3eef57981035ef362109",
+          "sha256": "eede4bd24a1b20aeb007c03761903aed8061b9b826dc68349a8ca146c9944ae5",
           "dependencies": ["yuushya"]
+        }
+      ]
+    },
+    "neoforge-1.21.1-create": {
+      "target": "neoforge-1.21.1",
+      "artifacts": [
+        {
+          "id": "create",
+          "source": "https://modrinth.com/mod/create/version/6.0.10%2Bmc1.21.1",
+          "version": "6.0.10+mc1.21.1",
+          "fileName": "create-1.21.1-6.0.10.jar",
+          "pathProperty": "modCreateJar",
+          "sha256": "ef87fe5709f1ba1f5b8bb20a2925b5afb4669e178fd6d8bf10c167759eefe37a",
+          "dependencies": ["embedded-flywheel", "embedded-ponder", "embedded-registrate"]
+        }
+      ]
+    },
+    "neoforge-1.21.1-create-addons": {
+      "target": "neoforge-1.21.1",
+      "artifacts": [
+        {
+          "id": "create",
+          "source": "https://modrinth.com/mod/create/version/6.0.10%2Bmc1.21.1",
+          "version": "6.0.10+mc1.21.1",
+          "fileName": "create-1.21.1-6.0.10.jar",
+          "pathProperty": "modCreateJar",
+          "sha256": "ef87fe5709f1ba1f5b8bb20a2925b5afb4669e178fd6d8bf10c167759eefe37a",
+          "dependencies": ["embedded-flywheel", "embedded-ponder", "embedded-registrate"]
+        },
+        {
+          "id": "copycats",
+          "source": "https://modrinth.com/mod/copycats",
+          "version": "3.0.7+mc.1.21.1-neoforge",
+          "fileName": "copycats-3.0.7+mc.1.21.1-neoforge.jar",
+          "pathProperty": "modCopycatsJar",
+          "sha256": "a124858cab7c3c4fa5d0929c66446b962739ea36ac2ed74304e5b65053257eab",
+          "dependencies": ["create"]
+        },
+        {
+          "id": "createdeco",
+          "source": "https://modrinth.com/mod/create-deco",
+          "version": "2.1.3",
+          "fileName": "createdeco-2.1.3.jar",
+          "pathProperty": "modCreateDecoJar",
+          "sha256": "edacf1ad0bd6b9f1667d711650dc0cde604356d91caca7ca1ec428c2f9400c6e",
+          "dependencies": ["create"]
         }
       ]
     }

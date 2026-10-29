@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "id": "create_kinetics",
+  "targets": ["neoforge-1.21.1"],
+  "settleTicks": 80,
+  "selection": {
+    "min": [0, 60, 0],
+    "max": [15, 72, 15]
+  },
+  "export": {
+    "threadCount": 1,
+    "atlasMode": "individual",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "variants": [{"id": "default"}],
+  "requiredProbes": ["export-start", "export-complete"],
+  "forbiddenProbes": ["resource-fallback-failed"],
+  "cameras": [
+    {"id": "overview", "azimuth": 45, "elevation": 32, "margin": 1.2}
+  ],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["create_baked_model", "create_flywheel_fallback", "create_partial_model"],
+  "assertions": [
+    {
+      "id": "create_block_entity_geometry",
+      "type": "material",
+      "materialRegex": "^blockentity:create/",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1
+    }
+  ]
+}

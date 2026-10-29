@@ -1,5 +1,6 @@
 package com.voxelbridge.verification;
 
+import com.voxelbridge.core.util.color.ColorUtil;
 import com.voxelbridge.pipeline.ExportPipeline;
 import com.voxelbridge.pipeline.contract.BlockPos3i;
 import com.voxelbridge.pipeline.contract.BlockSample;
@@ -45,6 +46,22 @@ public final class PipelineContractTest {
     private PipelineContractTest() {}
 
     public static void main(String[] args) {
+        float[] neutrallyShaded = {
+            0.4f, 0.4f, 0.4f, 1f,
+            0.5f, 0.501f, 0.5f, 0.75f,
+            0.4f, 0.2f, 0.1f, 1f,
+            0f, 0f, 0f, 1f
+        };
+        ColorUtil.removeNeutralVertexShading(neutrallyShaded);
+        require(neutrallyShaded[0] == 1f && neutrallyShaded[1] == 1f && neutrallyShaded[2] == 1f,
+            "Neutral renderer shading must be promoted to white");
+        require(neutrallyShaded[7] == 0.75f,
+            "Neutral renderer shading removal must preserve alpha");
+        require(neutrallyShaded[8] == 0.4f && neutrallyShaded[9] == 0.2f && neutrallyShaded[10] == 0.1f,
+            "Chromatic renderer tint must be preserved");
+        require(neutrallyShaded[12] == 0f && neutrallyShaded[13] == 0f && neutrallyShaded[14] == 0f,
+            "True black renderer color must be preserved");
+
         require(ResourceId.parse("stone").toString().equals("minecraft:stone"),
             "Default namespace parsing failed");
         require(ResourceId.parse("example:block/tile").compareTo(ResourceId.parse("minecraft:stone")) < 0,

@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.core.ir.MaterialSemantic;
+import com.voxelbridge.core.export.ExportRenderScope;
 import com.voxelbridge.core.util.geometry.GeometryUtil;
 import com.voxelbridge.export.ExportContext;
 import com.voxelbridge.export.exporter.MaterialGroupKey;
@@ -142,7 +143,9 @@ public final class BlockEntityRenderer {
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] Calling renderer.render()...");
             // Export-only camera spoof: keep BER distance checks at zero.
             Vec3 camera = Vec3.atCenterOf(blockEntity.getBlockPos());
-            Adapters.getBlockEntityRender().render(renderer, blockEntity, 0.0f, poseStack, captureBuffer, 0xF000F0, OverlayTexture.NO_OVERLAY, camera);
+            try (ExportRenderScope ignored = ExportRenderScope.open()) {
+                Adapters.getBlockEntityRender().render(renderer, blockEntity, 0.0f, poseStack, captureBuffer, 0xF000F0, OverlayTexture.NO_OVERLAY, camera);
+            }
 
             com.voxelbridge.util.debug.VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[BlockEntityRenderer][renderDirect] renderer.render() returned, flushing buffer...");
             captureBuffer.flush();

@@ -273,7 +273,9 @@ public final class BlockEntityTextureManager {
 
         // Normal
         if (ctx.getCachedSpriteImage(normalKey(spriteKey)) == null) {
-            BufferedImage atlasImg = ctx.readTexture(atlasNormalKey);
+            BufferedImage atlasImg = ctx.hasResource(atlasNormalKey)
+                ? ctx.readTexture(atlasNormalKey)
+                : null;
             BufferedImage cropped = crop(atlasImg, u0, u1, v0, v1);
             cropped = com.voxelbridge.export.texture.PbrTextureHelper.sanitizeMissingNo(
                 cropped, DEFAULT_NORMAL, normalKey(spriteKey));
@@ -289,7 +291,9 @@ public final class BlockEntityTextureManager {
         }
         // Specular
         if (ctx.getCachedSpriteImage(specKey(spriteKey)) == null) {
-            BufferedImage atlasImg = ctx.readTexture(atlasSpecKey);
+            BufferedImage atlasImg = ctx.hasResource(atlasSpecKey)
+                ? ctx.readTexture(atlasSpecKey)
+                : null;
             BufferedImage cropped = crop(atlasImg, u0, u1, v0, v1);
             cropped = com.voxelbridge.export.texture.PbrTextureHelper.sanitizeMissingNo(
                 cropped, DEFAULT_SPEC, specKey(spriteKey));
@@ -319,7 +323,9 @@ public final class BlockEntityTextureManager {
 
         if (needNormal) {
             String sibNormalKey = ctx.appendTextureSuffix(pngBase, "_n");
-            BufferedImage img = ctx.readTexture(sibNormalKey);
+            BufferedImage img = ctx.hasResource(sibNormalKey)
+                ? ctx.readTexture(sibNormalKey)
+                : null;
             img = com.voxelbridge.export.texture.PbrTextureHelper.sanitizeMissingNo(
                 img, DEFAULT_NORMAL, normalKey(spriteKey));
             if (img != null) {
@@ -333,7 +339,9 @@ public final class BlockEntityTextureManager {
 
         if (needSpec) {
             String sibSpecKey = ctx.appendTextureSuffix(pngBase, "_s");
-            BufferedImage img = ctx.readTexture(sibSpecKey);
+            BufferedImage img = ctx.hasResource(sibSpecKey)
+                ? ctx.readTexture(sibSpecKey)
+                : null;
             img = com.voxelbridge.export.texture.PbrTextureHelper.sanitizeMissingNo(
                 img, DEFAULT_SPEC, specKey(spriteKey));
             if (img != null) {

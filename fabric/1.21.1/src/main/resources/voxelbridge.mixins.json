@@ -10,7 +10,8 @@
         "TextureAtlasHolderAccessor",
         "MapRendererAccessor",
         "MapInstanceAccessor",
-        "MapInstanceInvoker"
+        "MapInstanceInvoker",
+        "compat.flywheel.FlywheelVisualizationManagerMixin"
     ],
     "injectors": {
         "defaultRequire": 1

@@ -63,6 +63,34 @@ public final class ColorUtil {
         return out;
     }
 
+    /**
+     * Removes neutral per-vertex shading from captured renderer colors while preserving alpha and
+     * genuinely chromatic tint. CPU fallbacks for instanced block-entity renderers (notably
+     * Flywheel) bake ambient/directional light into the vertex RGB channel. glTF applies lighting
+     * again, so retaining that neutral multiplier makes nominally white textures appear gray.
+     *
+     * <p>Only non-black achromatic values are promoted to white. Colored values and true black
+     * remain untouched; callers must also exclude glyph/text geometry where gray is meaningful.</p>
+     */
+    public static void removeNeutralVertexShading(float[] colors) {
+        if (colors == null) {
+            return;
+        }
+        final float channelTolerance = 1.5f / 255f;
+        for (int base = 0; base + 2 < colors.length; base += 4) {
+            float r = colors[base];
+            float g = colors[base + 1];
+            float b = colors[base + 2];
+            float min = Math.min(r, Math.min(g, b));
+            float max = Math.max(r, Math.max(g, b));
+            if (max >= 0.1f && max < 1f - channelTolerance && max - min <= channelTolerance) {
+                colors[base] = 1f;
+                colors[base + 1] = 1f;
+                colors[base + 2] = 1f;
+            }
+        }
+    }
+
     private static float srgbToLinearComponent(int c) {
         float v = c / 255.0f;
         if (v <= 0.04045f) {

@@ -86,7 +86,7 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
             return BlockEntityExportResult.NOT_HANDLED;
         }
         if (!(state.getBlock() instanceof SignBlock signBlock)) {
-            System.err.println("[VB-Sign] not SignBlock: " + state.getBlock().getClass().getName());
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] not SignBlock: " + state.getBlock().getClass().getName());
             return BlockEntityExportResult.NOT_HANDLED;
         }
 
@@ -102,7 +102,7 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
         SignText front = sign.getFrontText();
         SignText back = sign.getBackText();
         String front0 = front != null ? front.getMessage(0, false).getString() : "";
-        System.err.println("[VB-Sign] enter pos=" + pos.toShortString()
+        VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] enter pos=" + pos.toShortString()
             + " wood=" + woodName + " front0='" + front0 + "'"
             + " hasText=" + (hasAnyText(front) || hasAnyText(back)));
         if (!hasAnyText(front) && !hasAnyText(back)) {
@@ -133,14 +133,12 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
                 layout = BakeLayout.blockCached(namespace, woodPath);
             }
         } catch (Throwable t) {
-            System.err.println("[VB-Sign] bake threw: " + t);
-            t.printStackTrace(System.err);
-            VoxelBridgeLogger.warn(LogModule.BLOCKENTITY, "[Sign] bake failed: " + t.getMessage());
+            VoxelBridgeLogger.warn(LogModule.BLOCKENTITY, "[Sign] bake failed: " + t);
             return BlockEntityExportResult.NOT_HANDLED;
         }
 
         if (layout == null) {
-            System.err.println("[VB-Sign] bake returned null layout wood=" + woodName);
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] bake returned null layout wood=" + woodName);
             VoxelBridgeLogger.warn(LogModule.BLOCKENTITY,
                 "[Sign] no layout for wood=" + woodName + " front0=" + front0);
             return BlockEntityExportResult.NOT_HANDLED;
@@ -155,7 +153,7 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
         // Material name follows the baked sprite so glTF/DCC tools show a distinct signed mesh.
         ctx.registerSpriteMaterial(generatedSpriteKey, generatedSpriteKey);
 
-        System.err.println("[VB-Sign] baked ok key=" + generatedSpriteKey + " layout=" + layout.kind
+        VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] baked ok key=" + generatedSpriteKey + " layout=" + layout.kind
             + " override@" + pos.toShortString());
         VoxelBridgeLogger.info(LogModule.BLOCKENTITY,
             "[Sign] Baked text into " + generatedSpriteKey + " (layout=" + layout.kind
@@ -248,7 +246,7 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
         }
         BakeLayout layout;
         if (base != null) {
-            System.err.println("[VB-Sign] loaded block tex key=" + loadedKey
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] loaded block tex key=" + loadedKey
                 + " size=" + base.getWidth() + "x" + base.getHeight());
             layout = BakeLayout.forBlockSheet(namespace, woodPath, base.getWidth(), base.getHeight());
         } else {
@@ -268,12 +266,12 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
                 }
             }
             if (base == null) {
-                System.err.println("[VB-Sign] could not load any base texture for wood=" + woodPath);
+                VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] could not load any base texture for wood=" + woodPath);
                 VoxelBridgeLogger.warn(LogModule.BLOCKENTITY,
                     "Could not load sign base texture (block or entity) for wood=" + woodPath);
                 return null;
             }
-            System.err.println("[VB-Sign] loaded entity tex key=" + loadedKey
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] loaded entity tex key=" + loadedKey
                 + " size=" + base.getWidth() + "x" + base.getHeight());
             layout = BakeLayout.forEntitySheet(namespace, woodPath);
         }
@@ -297,7 +295,7 @@ public final class SignBlockEntityHandler implements BlockEntityHandler {
             int by = Math.round(layout.backV0 * SCALE);
             int bw = Math.round((layout.backU1 - layout.backU0) * SCALE);
             int bh = Math.round((layout.backV1 - layout.backV0) * SCALE);
-            System.err.println("[VB-Sign] face px front=[" + fx + "," + fy + " " + fw + "x" + fh
+            VoxelBridgeLogger.debug(LogModule.BLOCKENTITY, "[SignBlockEntityHandler] face px front=[" + fx + "," + fy + " " + fw + "x" + fh
                 + "] back=[" + bx + "," + by + " " + bw + "x" + bh + "] bake=" + w + "x" + h);
 
             drawSignFace(g, front, fx, fy, fw, fh);

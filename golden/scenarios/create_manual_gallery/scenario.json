@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "id": "create_manual_gallery",
+  "targets": ["neoforge-1.21.1"],
+  "settleTicks": 160,
+  "selection": {"min": [0, 60, 0], "max": [63, 75, 63]},
+  "export": {
+    "threadCount": 1,
+    "atlasMode": "individual",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "variants": [{"id": "default"}],
+  "requiredProbes": ["export-start", "export-complete"],
+  "forbiddenProbes": ["resource-fallback-failed"],
+  "cameras": [{"id": "overview", "azimuth": 35, "elevation": 48, "margin": 1.1}],
+  "performanceBudget": {"timeoutSeconds": 600, "warningRegressionPercent": 20},
+  "features": [
+    "create_kinetics", "create_processing", "create_logistics", "create_fluids",
+    "create_contraptions", "create_trains", "create_displays", "create_addons"
+  ],
+  "assertions": [
+    {
+      "id": "create_static_geometry",
+      "type": "material",
+      "materialRegex": "^create:",
+      "minMaterials": 20,
+      "minPrimitives": 20,
+      "minTriangles": 100
+    },
+    {
+      "id": "create_dynamic_geometry",
+      "type": "material",
+      "materialRegex": "^blockentity:create/",
+      "minMaterials": 8,
+      "minPrimitives": 8,
+      "minTriangles": 100
+    },
+    {
+      "id": "addon_geometry",
+      "type": "material",
+      "materialRegex": "^(?:createdeco:|create:block/copycat_|blockentity:create/block/copycat_)",
+      "minMaterials": 3,
+      "minPrimitives": 3,
+      "minTriangles": 20
+    }
+  ]
+}

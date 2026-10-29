@@ -57,16 +57,21 @@ Minecraft 1.21.11 now has a real shared exact-version source root at
 `runtime/minecraft/1.21.11`; Fabric and NeoForge consume that same adapter.
 The old `common/1.21.11` fork has been removed.
 
-Minecraft 26.1.2 and 26.2 use a separate Java 25 Fabric runtime family under
-`runtime/minecraft/shared/26.1.2-26.2`, with exact roots for renderer changes
-between the two releases. These releases ship named classes, so their runtime
-and production JARs deliberately skip the legacy mapping/remap stage.
+Minecraft 26.1.2, 26.2, and 26.3 use a separate Java 25 runtime family under
+`runtime/minecraft/shared/26.1.2-26.3`, with `shared/26.2-26.3` for code that
+changed in 26.2 and has stayed stable since, and exact roots only for renderer
+changes (26.3 moved the render pipeline API to `com.mojang.renderpearl` and
+switched input to SDL key codes). Fabric mirrors the same split under
+`fabric/shared/26.1.2-26.3` and `fabric/shared/26.2-26.3`. These releases ship
+named classes, so their runtime and production JARs deliberately skip the legacy
+mapping/remap stage.
 
 The legacy `common` source tree has been removed. Byte-identical runtime code is
 owned by explicit compatibility roots (`shared/all`, `shared/1.20.1-1.21.8`,
-`shared/1.21.1-1.21.11`, and `shared/26.1.2-26.2`). Classes whose
-Minecraft API differs remain in the 1.20.1, 1.21.1, 1.21.11, 26.1.2, or 26.2
-exact adapter root; 1.21.4/1.21.8 reuse the 1.21.1
+`shared/1.21.1-1.21.11`, `shared/26.1.2-26.3`, and `shared/26.2-26.3`), and the
+local golden automation controller lives once in `shared/golden`, which every
+target registers. Classes whose Minecraft API differs remain in the 1.20.1,
+1.21.1, 1.21.11, 26.1.2, 26.2, or 26.3 exact adapter root; 1.21.4/1.21.8 reuse the 1.21.1
 implementation only while it remains source-compatible. No target copies,
 filters, or overrides common sources at build time.
 

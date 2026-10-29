@@ -156,8 +156,16 @@ public final class BlockExporter {
         Object model = com.voxelbridge.adapter.Adapters.getRender().getBlockModel(state);
         if (model == null) return;
 
+        // Mod handlers return assembled null-side geometry (e.g. Yuushya ShowBlock). Vanilla never
+        // face-culls null-side quads and transformed sub-models need not touch the block boundary,
+        // so handled geometry bypasses solid-neighbour culling.
+        var modHandler = Adapters.getModHandler();
+        List<BakedQuad> handledQuads = modHandler.shouldHandle(be)
+            ? modHandler.handle(ctx, level, state, be, pos, model)
+            : null;
+
         // Occlusion culling for opaque blocks
-        boolean isTransparent = !BlockStateCompat.isSolidRender(state, level, pos);
+        boolean isTransparent = handledQuads != null || !BlockStateCompat.isSolidRender(state, level, pos);
         byte[] faceOcclusionCache = null;
         if (!isTransparent) {
             faceOcclusionCache = faceVisibility.buildSolidFaceOcclusionCache(pos);
@@ -165,13 +173,9 @@ public final class BlockExporter {
         }
 
         // Get quads via Adapter (handles ModelData and Fabric API internally)
-        var modHandler = Adapters.getModHandler();
-        List<BakedQuad> handledQuads = modHandler.shouldHandle(be)
-            ? modHandler.handle(ctx, level, state, be, pos, model)
-            : null;
         List<QuadData> quads;
         if (handledQuads != null) {
-            quads = QuadDataUtil.wrapBakedQuads(handledQuads);
+            quads = QuadDataUtil.wrapBakedQuads(handledQuads, null);
         } else {
             long seed = state.is(Blocks.LILY_PAD)
                 ? GeometryUtil.computeBushSeed(pos.getX(), pos.getY(), pos.getZ())

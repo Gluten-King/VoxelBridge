@@ -184,6 +184,22 @@
         { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-1.21.11-1.0.4.jar" }
       ],
       "configs": ["config\\voxelbridge.json"]
+    },
+    {
+      "id": "vb-neoforge-26.2-restworld",
+      "name": "VoxelBridge | NeoForge 26.2 | RestWorld",
+      "target": "neoforge-26.2",
+      "variant": "restworld",
+      "minecraft": "26.2",
+      "loader": { "uid": "net.neoforged", "version": "26.2.0.59" },
+      "javaMajor": 25,
+      "memoryMiB": 8192,
+      "sourceProfile": "@launcher/voxelbridge-artifacts/neoforge-26.2",
+      "mods": [
+        { "role": "cloth-config", "source": "mods\\cloth-config-26.2.155.jar" },
+        { "role": "voxelbridge", "source": "mods\\VoxelBridge-neoforge-26.2-1.0.5.jar" }
+      ],
+      "configs": ["config\\voxelbridge.json"]
     }
   ]
 }

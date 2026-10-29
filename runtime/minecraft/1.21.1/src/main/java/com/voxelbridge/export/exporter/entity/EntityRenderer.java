@@ -2,6 +2,7 @@ package com.voxelbridge.export.exporter.entity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.voxelbridge.adapter.Adapters;
+import com.voxelbridge.core.export.ExportRenderScope;
 import com.voxelbridge.core.ir.IrSink;
 import com.voxelbridge.core.ir.MaterialSemantic;
 import com.voxelbridge.export.ExportContext;
@@ -157,7 +158,7 @@ public final class EntityRenderer {
             Exception[] renderException = new Exception[1];
 
             Runnable renderCall = () -> {
-                try {
+                try (ExportRenderScope ignored = ExportRenderScope.open()) {
                     Object renderState = Adapters.getEntityRender().createRenderState(renderer, entity, yaw, partial);
                     net.minecraft.world.phys.Vec3 renderOffset =
                         Adapters.getEntityRender().getRenderOffset(renderer, entity, partial, renderState);

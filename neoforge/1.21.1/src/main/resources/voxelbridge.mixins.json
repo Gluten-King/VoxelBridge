@@ -12,6 +12,7 @@
     "MapInstanceInvoker",
     "MapRendererAccessor",
     "SpriteContentsAccessor",
-    "TextureAtlasAccessor"
+    "TextureAtlasAccessor",
+    "compat.flywheel.FlywheelVisualizationManagerMixin"
   ]
 }

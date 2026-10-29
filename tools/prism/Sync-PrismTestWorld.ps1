@@ -287,6 +287,7 @@ foreach ($scene in $definitionData.scenes) {
 }
 
 $levelHash = (Get-FileHash -LiteralPath $sourceLevelDat -Algorithm SHA256).Hash.ToLowerInvariant()
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $copiedTargets = @()
 $skippedTargets = @()
 

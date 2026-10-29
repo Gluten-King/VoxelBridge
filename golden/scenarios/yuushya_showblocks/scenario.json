@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "id": "yuushya_showblocks",
+  "targets": ["neoforge-1.21.1"],
+  "settleTicks": 80,
+  "selection": {
+    "min": [-78, 28, -38],
+    "max": [-64, 40, -24]
+  },
+  "export": {
+    "threadCount": 1,
+    "atlasMode": "individual",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "variants": [{"id": "default"}],
+  "requiredProbes": ["export-start", "export-complete"],
+  "forbiddenProbes": ["resource-fallback-failed"],
+  "cameras": [
+    {"id": "overview", "azimuth": 45, "elevation": 32, "margin": 1.2}
+  ],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["yuushya_showblock_block_entity", "yuushya_assembled_model"],
+  "assertions": [
+    {
+      "id": "yuushya_geometry",
+      "type": "material",
+      "materialRegex": "^yuushya:",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 12
+    }
+  ]
+}

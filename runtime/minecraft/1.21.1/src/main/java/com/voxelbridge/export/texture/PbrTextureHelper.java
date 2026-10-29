@@ -98,6 +98,12 @@ public final class PbrTextureHelper {
 
         ResourceId base = new ResourceId(spriteName.getNamespace(), spriteName.getPath());
         for (ResourceId candidate : PbrResourceCandidates.candidates(base, suffix)) {
+            // PBR companions are optional.  Going through TextureManager for a
+            // missing candidate produces missingno warnings and may register a
+            // placeholder dynamic texture, so probe the resource pack first.
+            if (!ctx.session().runtime().textures().hasResource(candidate)) {
+                continue;
+            }
             ResourceLocation loc = ResourceLocation.fromNamespaceAndPath(candidate.namespace(), candidate.path());
             BufferedImage result = ctx.session().runtime().textures().readTexture(candidate, false);
             if (result != null) {

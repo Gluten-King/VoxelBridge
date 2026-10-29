@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "id": "create_addons",
+  "targets": ["neoforge-1.21.1"],
+  "settleTicks": 80,
+  "selection": {"min": [0, 60, 0], "max": [15, 72, 15]},
+  "export": {
+    "threadCount": 1,
+    "atlasMode": "individual",
+    "coordinateMode": "centered",
+    "exportDoubleSided": true,
+    "nonsolidCulling": true
+  },
+  "variants": [{"id": "default"}],
+  "requiredProbes": ["export-start", "export-complete"],
+  "forbiddenProbes": ["resource-fallback-failed"],
+  "cameras": [{"id": "overview", "azimuth": 45, "elevation": 32, "margin": 1.2}],
+  "performanceBudget": {"timeoutSeconds": 300, "warningRegressionPercent": 20},
+  "features": ["copycats_model_data", "copycats_flywheel", "create_deco_models"],
+  "assertions": [
+    {
+      "id": "copycats_geometry",
+      "type": "material",
+      "materialRegex": "^(blockentity:create/block|create:block)/copycat_",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1
+    },
+    {
+      "id": "copycats_flywheel_geometry",
+      "type": "material",
+      "materialRegex": "^blockentity:create/block/copycat_base",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 1
+    },
+    {
+      "id": "create_deco_geometry",
+      "type": "material",
+      "materialRegex": "^createdeco:",
+      "minMaterials": 1,
+      "minPrimitives": 1,
+      "minTriangles": 12
+    }
+  ]
+}

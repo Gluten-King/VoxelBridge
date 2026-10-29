@@ -15,7 +15,8 @@
       "vb-neoforge-1.21.1-restworld",
       "vb-neoforge-1.21.4-restworld",
       "vb-neoforge-1.21.8-restworld",
-      "vb-neoforge-1.21.11-restworld"
+      "vb-neoforge-1.21.11-restworld",
+      "vb-neoforge-26.2-restworld"
     ]
   },
   "scenes": [
@@ -181,6 +182,30 @@
       },
       "expectedNodeMinimumVertices": {
         "blockentity:minecraft:sign": 52
+      }
+    },
+    {
+      "id": "neoforge-26.2-restworld",
+      "instance": "vb-neoforge-26.2-restworld",
+      "target": "neoforge-26.2",
+      "minecraft": "26.2",
+      "jar": "build/neoforge/26.2/libs/VoxelBridge-neoforge-26.2-1.0.5.jar",
+      "buildTask": ":neoforge:26.2:mod:shadowJar",
+      "ctm": false,
+      "expectedMaterialQuads": {
+        "minecraft:glass": 215,
+        "minecraft:iron_bars": 68,
+        "minecraft:oak_fence": 140
+      },
+      "expectedPixelAlignedUvNodes": [
+        "entity:minecraft:painting"
+      ],
+      "expectedNodeMinimumVertices": {
+        "blockentity:generated/sign_6b4bebf3": 40,
+        "blockentity:minecraft:decorated_pot": 80,
+        "entity:minecraft:glow_item_frame": 440,
+        "entity:minecraft:item_frame": 440,
+        "entity:minecraft:painting": 168
       }
     }
   ]

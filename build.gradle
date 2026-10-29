@@ -1,6 +1,6 @@
 plugins {
     id 'base'
-    // 26.1.2/26.2 support currently lives on Loom's 1.17 snapshot line.
+    // 26.1.2/26.2/26.3 support currently lives on Loom's 1.17 snapshot line.
     id 'fabric-loom' version '1.17-SNAPSHOT' apply false
 }
 
@@ -14,6 +14,35 @@ import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipFile
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+
+abstract class VoxelBridgeExecOperations {
+    @Inject
+    abstract ExecOperations getExecOperations()
+}
+
+def voxelBridgeExec = objects.newInstance(VoxelBridgeExecOperations).execOperations
+
+// Golden/verification CLIs run from root-project tasks. Resolving
+// project(':verification').sourceSets.main.runtimeClasspath from here fails under
+// org.gradle.parallel ("resolution ... without an exclusive lock") while another
+// project is executing, so the root owns a resolvable view of :verification instead.
+configurations {
+    goldenToolClasspath {
+        canBeConsumed = false
+        canBeResolved = true
+        attributes {
+            attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage, Usage.JAVA_RUNTIME))
+        }
+    }
+}
+repositories {
+    mavenCentral()
+}
+dependencies {
+    goldenToolClasspath project(':verification')
+}
 
 tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
@@ -166,7 +195,7 @@ subprojects { subproj ->
         if (subproj.path.startsWith(':neoforge:')) {
             def minecraft = subproj.path.split(':')[2]
             def productionGameDir = rootProject.file("run/golden/neoforge/${minecraft}")
-            def installTask = subproj.tasks.register('installGoldenProductionMod', Sync) {
+            def installTask = subproj.tasks.register('installGoldenProductionMod', Copy) {
                 group = "voxelbridge/neoforge/mod/${minecraft}/verification"
                 description = 'Installs only the shaded production JAR into the isolated golden client.'
                 dependsOn subproj.tasks.named('shadowJar')
@@ -682,9 +711,9 @@ tasks.register('verifyAdapterMigrationRatchet') {
                 usages += (source.getText('UTF-8') =~ /\bAdapters\s*\./).count
             }
         }
-        // The 26.1.2/26.2 runtimes necessarily mirror 68 existing adapter call sites
-        // while the versioned API bridge is isolated from the older runtime family.
-        int maximum = 157
+        // The 26.x runtime family mirrors the older adapter call sites in its own shared roots
+        // (shared/26.1.2-26.3, shared/26.2-26.3) while the versioned API bridge stays isolated.
+        int maximum = 151
         if (usages > maximum) {
             throw new GradleException(
                 "Temporary Adapters usage increased from at most ${maximum} to ${usages}. " +
@@ -907,8 +936,8 @@ tasks.register('recordGoldenWorldMetadata') {
         }
         def archiveName = providers.gradleProperty('goldenWorldArchive')
                 .orElse("${goldenTarget.minecraft}.zip").get()
-        javaexec {
-            classpath = project(':verification').sourceSets.main.runtimeClasspath
+        voxelBridgeExec.javaexec {
+            classpath = configurations.goldenToolClasspath
             mainClass = 'com.voxelbridge.verification.GoldenWorldCli'
             args 'record',
                     '--zip', rootProject.file("golden/worlds/${archiveName}").absolutePath,
@@ -928,7 +957,7 @@ tasks.register('validateGoldenWorlds', JavaExec) {
     group = 'verification'
     description = 'Validates committed world archive hashes and NBT DataVersion values.'
     dependsOn ':verification:classes'
-    classpath = project(':verification').sourceSets.main.runtimeClasspath
+    classpath = configurations.goldenToolClasspath
     mainClass = 'com.voxelbridge.verification.GoldenWorldCli'
     args 'validate',
             '--worlds', rootProject.file('golden/worlds').absolutePath,
@@ -969,8 +998,8 @@ tasks.register('snapshotGoldenClient') {
         def result = new JsonSlurper().parse(goldenResultFile)
         def actual = new File(goldenRunRoot, 'actual.snapshot.json')
 
-        javaexec {
-            classpath = project(':verification').sourceSets.main.runtimeClasspath
+        voxelBridgeExec.javaexec {
+            classpath = configurations.goldenToolClasspath
             mainClass = 'com.voxelbridge.verification.GoldenCli'
             args 'generate',
                     '--gltf', result.gltf.toString(),
@@ -993,15 +1022,15 @@ tasks.register('recordGoldenRun') {
         def jarTask = project(goldenTarget.projectPath).tasks.named(jarTaskName).get()
         def productionJar = jarTask.archiveFile.get().asFile
         def gitOutput = new ByteArrayOutputStream()
-        exec {
+        voxelBridgeExec.exec {
             commandLine 'git', 'rev-parse', 'HEAD'
             standardOutput = gitOutput
             errorOutput = new ByteArrayOutputStream()
             ignoreExitValue = true
         }
         def result = new JsonSlurper().parse(goldenResultFile)
-        javaexec {
-            classpath = project(':verification').sourceSets.main.runtimeClasspath
+        voxelBridgeExec.javaexec {
+            classpath = configurations.goldenToolClasspath
             mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
             args 'record',
                     '--repo', rootProject.projectDir.absolutePath,
@@ -1067,8 +1096,8 @@ tasks.register('reportGoldenRuns') {
     description = 'Builds a read-only HTML summary and Blender input manifest for all local golden runs.'
     dependsOn ':verification:classes'
     doLast {
-        javaexec {
-            classpath = project(':verification').sourceSets.main.runtimeClasspath
+        voxelBridgeExec.javaexec {
+            classpath = configurations.goldenToolClasspath
             mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
             args 'report',
                     '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
@@ -1093,7 +1122,7 @@ tasks.register('renderGoldenReview') {
         if (!blenderFile.isFile()) {
             throw new GradleException("Configured Blender executable does not exist: ${blenderFile}")
         }
-        exec {
+        voxelBridgeExec.exec {
             commandLine blenderFile.absolutePath,
                     '--background',
                     '--python', rootProject.file('golden/blender/render_review.py').absolutePath,
@@ -1157,8 +1186,8 @@ def registerReviewDecision = { String taskName, String command ->
                 }
                 cliArgs += ['--issue', issue, '--expires', expires]
             }
-            javaexec {
-                classpath = project(':verification').sourceSets.main.runtimeClasspath
+            voxelBridgeExec.javaexec {
+                classpath = configurations.goldenToolClasspath
                 mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
                 args cliArgs
             }
@@ -1176,8 +1205,8 @@ tasks.register('verifyGoldenReleaseReview') {
     description = 'Fails unless every recorded test case has a valid approval; core waivers are rejected.'
     dependsOn ':verification:classes'
     doLast {
-        javaexec {
-            classpath = project(':verification').sourceSets.main.runtimeClasspath
+        voxelBridgeExec.javaexec {
+            classpath = configurations.goldenToolClasspath
             mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
             args 'verify-release',
                     '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
@@ -1313,8 +1342,8 @@ tasks.register('verifyGoldenDeterminism') {
     description = 'Checks that critical scenarios have identical semantic hashes across three runs.'
     dependsOn ':verification:classes'
     doLast {
-        javaexec {
-            classpath = project(':verification').sourceSets.main.runtimeClasspath
+        voxelBridgeExec.javaexec {
+            classpath = configurations.goldenToolClasspath
             mainClass = 'com.voxelbridge.verification.GoldenReviewCli'
             args 'verify-determinism',
                     '--runs', layout.buildDirectory.dir('golden-runs').get().asFile.absolutePath,
@@ -1337,8 +1366,12 @@ def modMatrixDefinitions = [
          pack: 'fabric-1.21.11-continuity'],
         [target: 'fabric-1.21.11', scenario: 'render_features', variant: 'atlas',
          pack: 'fabric-1.21.11-render-stack'],
-        [target: 'neoforge-1.21.1', scenario: 'vanilla_smoke', variant: 'default',
-         pack: 'neoforge-1.21.1-yuushya']
+        [target: 'neoforge-1.21.1', scenario: 'yuushya_showblocks', variant: 'default',
+         pack: 'neoforge-1.21.1-yuushya'],
+        [target: 'neoforge-1.21.1', scenario: 'create_kinetics', variant: 'default',
+         pack: 'neoforge-1.21.1-create'],
+        [target: 'neoforge-1.21.1', scenario: 'create_addons', variant: 'default',
+         pack: 'neoforge-1.21.1-create-addons']
 ]
 def modMatrixRuns = []
 def previousModRun = null
@@ -1373,7 +1406,7 @@ modMatrixDefinitions.each { definition ->
 
 tasks.register('prodGoldenModMatrix') {
     group = 'verification'
-    description = 'Runs Continuity, Sodium/Iris/Continuity, and Yuushya representative compatibility packs.'
+    description = 'Runs Continuity, rendering-stack, Yuushya, Create, and Create-addon compatibility packs.'
     dependsOn modMatrixRuns
 }
 

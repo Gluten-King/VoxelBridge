@@ -14,8 +14,8 @@ ext {
     minecraft_version_range = "[1.21.1]"
     parchment_minecraft_version = "1.21.1"
     parchment_mappings_version = "2024.11.17"
-    neo_version = "21.1.216"
-    forgified_fabric_api_version = "0.115.6+2.1.4+1.21.1"
+    neo_version = "21.1.265"
+    forgified_fabric_api_version = "0.116.15+2.3.6+1.21.1"
 }
 
 evaluationDependsOn(':shared:core')
@@ -95,7 +95,9 @@ neoForge {
         }
 
         configureEach {
-            gameDirectory.set(rootProject.layout.projectDirectory.dir("run/${platform}/${activeMc}"))
+            if (name != 'goldenProductionClient') {
+                gameDirectory.set(rootProject.layout.projectDirectory.dir("run/${platform}/${activeMc}"))
+            }
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             logLevel = org.slf4j.event.Level.DEBUG
         }

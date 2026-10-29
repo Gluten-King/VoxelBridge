@@ -18,7 +18,7 @@ side = "CLIENT"
 [[dependencies.voxelbridge_golden_harness]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.1,1.22)"
+versionRange = "[1.21.1,)"
 ordering = "NONE"
 side = "CLIENT"
 
