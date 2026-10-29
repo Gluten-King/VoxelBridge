@@ -32,11 +32,14 @@ def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
 
 def targetRegistry = new JsonSlurper().parse(file('gradle/targets.json'))
 def stableCompileTasks = targetRegistry.targets.collect { "${it.projectPath}:compileJava" }
-def stablePackageTasks = targetRegistry.targets.collect {
-    def packageTask = it.platform == 'fabric'
-        ? (it.minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
+// 26.x ships named classes, so its Fabric targets have no remap stage.
+def productionJarTaskName = { platform, minecraft ->
+    platform.toString() == 'fabric'
+        ? (minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
         : 'shadowJar'
-    "${it.projectPath}:${packageTask}"
+}
+def stablePackageTasks = targetRegistry.targets.collect {
+    "${it.projectPath}:${productionJarTaskName(it.platform, it.minecraft)}"
 }
 def goldenTargets = targetRegistry.targets.collectEntries { target ->
     [(target.id.toString()): [
@@ -270,9 +273,7 @@ tasks.register('verifyProductionJars') {
         }
         targetRegistry.targets.each { target ->
             def targetProject = project(target.projectPath.toString())
-            def taskName = target.platform == 'fabric'
-                ? (target.minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
-                : 'shadowJar'
+            def taskName = productionJarTaskName(target.platform, target.minecraft)
             def jarFile = targetProject.tasks.named(taskName).get().archiveFile.get().asFile
             if (!jarFile.isFile()) {
                 throw new GradleException("Missing production JAR for ${target.id}: ${jarFile}")
@@ -989,7 +990,7 @@ tasks.register('recordGoldenRun') {
     description = 'Writes the hash-bound run manifest and pending/inherited review state.'
     dependsOn 'snapshotGoldenClient', ':verification:classes'
     doLast {
-        def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+        def jarTaskName = productionJarTaskName(goldenTarget.platform, goldenTarget.minecraft)
         def jarTask = project(goldenTarget.projectPath).tasks.named(jarTaskName).get()
         def productionJar = jarTask.archiveFile.get().asFile
         def gitOutput = new ByteArrayOutputStream()
@@ -1419,7 +1420,7 @@ gradle.projectsEvaluated {
                 ? exportConfig.nonsolidCulling
                 : true
         def targetProject = project(goldenTarget.projectPath)
-        def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+        def jarTaskName = productionJarTaskName(goldenTarget.platform, goldenTarget.minecraft)
         def productionJar = targetProject.tasks.named(jarTaskName).get().archiveFile.get().asFile
         def goldenJvmArgs = [
                 "-Dvoxelbridge.clientAutomationClass=com.voxelbridge.verification.client.GoldenTestController",
