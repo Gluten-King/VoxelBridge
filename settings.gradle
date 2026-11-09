@@ -25,12 +25,19 @@ gradle.ext.voxelBridgeTargetRegistry = targetRegistry
 gradle.ext.voxelBridgeTargetsByProject = targetRegistry.targets.collectEntries {
     [(it.projectPath.toString()): it]
 }
-targetRegistry.targets*.minecraft*.toString().unique().each { minecraftVersion ->
+def targetOnly = providers.gradleProperty('target_only').orNull
+def includedTargets = targetOnly == null
+    ? targetRegistry.targets
+    : targetRegistry.targets.findAll { it.id.toString() == targetOnly }
+if (includedTargets.isEmpty()) {
+    throw new GradleException("Unknown target_only=${targetOnly}")
+}
+includedTargets*.minecraft*.toString().unique().each { minecraftVersion ->
     def runtimePath = ":runtime:minecraft:mc-${minecraftVersion}"
     include runtimePath
     project(runtimePath).projectDir = file("runtime/minecraft/${minecraftVersion}")
 }
-targetRegistry.targets.each { target ->
+includedTargets.each { target ->
     include target.projectPath
     project(target.projectPath).projectDir = file(target.projectDir)
 }

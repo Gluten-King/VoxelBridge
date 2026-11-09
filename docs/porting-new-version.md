@@ -10,8 +10,9 @@
    produce a structured diagnostic; never return fabricated UVs or textures.
 4. Register the target, source roots, Java toolchain, and dependency lock once
    in `gradle/targets.json`, then update the Prism/Golden target manifest.
-5. Run `testFast` and `verifyProductionJars`, adapter contract probes, focused production Golden scenes,
-   and finally the complete release matrix.
+5. Run `testFast` and `verifyProductionJars` with `-Ptarget_only=<target-id>` for the
+   new target, then adapter contract probes, focused production Golden scenes,
+   and finally the complete release matrix without `target_only`.
 
 Changes caused only by renamed classes, renderer submission APIs, vertex
 layouts, or texture access belong in the version adapter. Change pipeline only
