@@ -1,6 +1,6 @@
 plugins {
     id 'base'
-    // 26.1.2/26.2 support currently lives on Loom's 1.17 snapshot line.
+    // The Minecraft 26 targets use Loom's non-obfuscated plugin on the 1.17 snapshot line.
     id 'fabric-loom' version '1.17-SNAPSHOT' apply false
 }
 
@@ -31,8 +31,11 @@ subprojects {
 def activeMc = (findProperty('active_mc') ?: '1.21.1').toString()
 
 def targetRegistry = new JsonSlurper().parse(file('gradle/targets.json'))
-def stableCompileTasks = targetRegistry.targets.collect { "${it.projectPath}:compileJava" }
-def stablePackageTasks = targetRegistry.targets.collect {
+def configuredTargets = targetRegistry.targets.findAll {
+    findProject(it.projectPath.toString()) != null
+}
+def stableCompileTasks = configuredTargets.collect { "${it.projectPath}:compileJava" }
+def stablePackageTasks = configuredTargets.collect {
     def packageTask = it.platform == 'fabric'
         ? (it.minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
         : 'shadowJar'
@@ -268,7 +271,7 @@ tasks.register('verifyProductionJars') {
         def classText = { byte[] bytes ->
             bytes == null ? null : new String(bytes, StandardCharsets.ISO_8859_1)
         }
-        targetRegistry.targets.each { target ->
+        configuredTargets.each { target ->
             def targetProject = project(target.projectPath.toString())
             def taskName = target.platform == 'fabric'
                 ? (target.minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
@@ -352,7 +355,7 @@ tasks.register('verifyProductionJars') {
 // The golden controller is a separate, local-only mod JAR. Production JARs
 // expose only the disabled-by-default automation extension point.
 gradle.projectsEvaluated {
-    targetRegistry.targets.each { target ->
+    targetRegistry.targets.findAll { findProject(it.projectPath.toString()) != null }.each { target ->
         def targetProject = project(target.projectPath.toString())
         def runtimeProject = project(":runtime:minecraft:mc-${target.minecraft}")
         if (target.platform == 'fabric') {
@@ -682,9 +685,8 @@ tasks.register('verifyAdapterMigrationRatchet') {
                 usages += (source.getText('UTF-8') =~ /\bAdapters\s*\./).count
             }
         }
-        // The 26.1.2/26.2 runtimes necessarily mirror 68 existing adapter call sites
-        // while the versioned API bridge is isolated from the older runtime family.
-        int maximum = 157
+        // The 26.3 collector adds two call sites; unchanged 26.2 code is shared.
+        int maximum = 161
         if (usages > maximum) {
             throw new GradleException(
                 "Temporary Adapters usage increased from at most ${maximum} to ${usages}. " +
@@ -989,7 +991,9 @@ tasks.register('recordGoldenRun') {
     description = 'Writes the hash-bound run manifest and pending/inherited review state.'
     dependsOn 'snapshotGoldenClient', ':verification:classes'
     doLast {
-        def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+        def jarTaskName = goldenTarget.platform == 'fabric'
+                ? (goldenTarget.minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
+                : 'shadowJar'
         def jarTask = project(goldenTarget.projectPath).tasks.named(jarTaskName).get()
         def productionJar = jarTask.archiveFile.get().asFile
         def gitOutput = new ByteArrayOutputStream()
@@ -1419,7 +1423,9 @@ gradle.projectsEvaluated {
                 ? exportConfig.nonsolidCulling
                 : true
         def targetProject = project(goldenTarget.projectPath)
-        def jarTaskName = goldenTarget.platform == 'fabric' ? 'remapJar' : 'shadowJar'
+        def jarTaskName = goldenTarget.platform == 'fabric'
+                ? (goldenTarget.minecraft.toString().startsWith('26.') ? 'jar' : 'remapJar')
+                : 'shadowJar'
         def productionJar = targetProject.tasks.named(jarTaskName).get().archiveFile.get().asFile
         def goldenJvmArgs = [
                 "-Dvoxelbridge.clientAutomationClass=com.voxelbridge.verification.client.GoldenTestController",

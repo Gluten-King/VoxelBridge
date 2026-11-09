@@ -1,0 +1,5 @@
+// Container project: disable tasks to keep Gradle view focused on the mod project.
+tasks.configureEach { task ->
+    task.enabled = false
+    task.group = null
+}
